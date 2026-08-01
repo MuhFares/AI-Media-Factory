@@ -1,0 +1,21 @@
+{
+  "name": "@ai-media-factory/web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Web/Node application for AI Media Factory.",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@ai-media-factory/shared": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^20.14.0"
+  }
+}
