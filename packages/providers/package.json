@@ -1,24 +1,29 @@
 {
-  "name": "@ai-media-factory/providers",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Unified multi-provider LLM layer (OpenAI, Anthropic, Gemini, OpenRouter, DeepSeek, Mistral, and future providers). Contracts and architecture only.",
-  "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+    "name": "@ai-media-factory/providers",
+    "version": "0.1.0",
+    "private": true,
+    "description": "Unified multi-provider LLM layer (OpenAI, Anthropic, Gemini, OpenRouter, DeepSeek, Mistral, and future providers). Contracts and architecture only.",
+    "type": "module",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "default": "./dist/index.js"
+        }
+    },
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "lint": "tsc -p tsconfig.json --noEmit",
+        "test": "node --test",
+        "test:smoke": "tsx test/smoke.ts"
+    },
+    "devDependencies": {
+        "@types/node": "^20.19.43",
+        "tsx": "^4.23.7",
+        "typescript": "^5.5.0"
+    },
+    "dependencies": {
+        "dotenv": "^17.4.2"
     }
-  },
-  "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test"
-  },
-  "devDependencies": {
-    "@types/node": "^20.19.43",
-    "typescript": "^5.5.0"
-  }
 }

@@ -8,6 +8,15 @@
  * of the catalog, not part of the provider contract surface.
  */
 
+import { config as loadEnv } from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname, resolve } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const rootDir = resolve(__dirname, '../../../');
+loadEnv({ path: resolve(__dirname, '../../../.env') });
+
 /** Per-1M-token pricing for a concrete model. */
 export interface ModelPricing {
   /** USD per 1M input (prompt) tokens. */
@@ -44,53 +53,129 @@ export interface ProviderConfig {
   apiKey: string;
   /** Base URL for the OpenRouter API. */
   baseUrl: string;
-  /** Per-request timeout in milliseconds. */
+  /** Request timeout in milliseconds. */
   timeoutMs: number;
-  /** Maximum retry attempts for transient failures. */
+  /** Maximum number of retry attempts */
   maxRetries: number;
-  /** Default model when a caller does not specify one. */
+  /** Default model to use when none specified */
   defaultModel: string;
-  /** Fallback model when the primary is unavailable. */
+  /** Fallback model when the primary is unavailable */
   fallbackModel: string;
-  /** Emit structured logs for requests/responses. */
+  /** Enable request/response logging */
   enableLogging: boolean;
-  /** Ceiling for output tokens per request. */
+  /** Maximum tokens per request */
   maxTokensPerRequest: number;
-  /** Default sampling temperature. */
+  /** Default temperature */
   defaultTemperature: number;
   /** Optional attribution headers required by OpenRouter. */
   referer?: string;
   title?: string;
 }
 
-/**
- * The concrete model catalog exposed through OpenRouter.
- * Extend this map to register additional models; routing consumes it via
- * the ModelRegistry.
- */
 export const MODEL_CATALOG: Record<string, ModelConfig> = {
-  // ---- Free tier ----
-  'meta-llama/llama-3.1-8b-instruct:free': {
-    id: 'meta-llama/llama-3.1-8b-instruct:free',
-    name: 'Llama 3.1 8B Instruct (Free)',
+  // ---- Free tier models (current as of 2025-08-05 from OpenRouter API) ----
+  'google/gemma-4-26b-a4b-it:free': {
+    id: 'google/gemma-4-26b-a4b-it:free',
+    name: 'Gemma 4 26B (Free)',
+    contextLength: 8192,
+    maxOutputTokens: 4096,
+    pricing: { prompt: 0, completion: 0 },
+    capabilities: { streaming: true, structuredOutput: true, functionCalling: true, vision: false },
+    tier: 'free',
+  },
+  'google/gemma-4-31b-it:free': {
+    id: 'google/gemma-4-31b-it:free',
+    name: 'Gemma 4 31B (Free)',
+    contextLength: 8192,
+    maxOutputTokens: 4096,
+    pricing: { prompt: 0, completion: 0 },
+    capabilities: { streaming: true, structuredOutput: true, functionCalling: true, vision: false },
+    tier: 'free',
+  },
+  'openai/gpt-oss-20b:free': {
+    id: 'openai/gpt-oss-20b:free',
+    name: 'GPT-OSS 20B (Free)',
     contextLength: 131072,
     maxOutputTokens: 4096,
     pricing: { prompt: 0, completion: 0 },
     capabilities: { streaming: true, structuredOutput: true, functionCalling: true, vision: false },
     tier: 'free',
   },
-  'mistralai/mistral-7b-instruct:free': {
-    id: 'mistralai/mistral-7b-instruct:free',
-    name: 'Mistral 7B Instruct (Free)',
+  'nvidia/nemotron-3-nano-30b-a3b:free': {
+    id: 'nvidia/nemotron-3-nano-30b-a3b:free',
+    name: 'Nemotron 3 Nano 30B (Free)',
     contextLength: 32768,
     maxOutputTokens: 4096,
     pricing: { prompt: 0, completion: 0 },
     capabilities: { streaming: true, structuredOutput: true, functionCalling: true, vision: false },
     tier: 'free',
   },
-  'google/gemma-2-9b-it:free': {
-    id: 'google/gemma-2-9b-it:free',
-    name: 'Gemma 2 9B IT (Free)',
+  'nvidia/nemotron-3-ultra-550b-a55b:free': {
+    id: 'nvidia/nemotron-3-ultra-550b-a55b:free',
+    name: 'Nemotron 3 Ultra 550B (Free)',
+    contextLength: 131072,
+    maxOutputTokens: 4096,
+    pricing: { prompt: 0, completion: 0 },
+    capabilities: { streaming: true, structuredOutput: true, functionCalling: true, vision: false },
+    tier: 'free',
+  },
+  'nvidia/nemotron-3-super-120b-a12b:free': {
+    id: 'nvidia/nemotron-3-super-120b-a12b:free',
+    name: 'Nemotron 3 Super 120B (Free)',
+    contextLength: 131072,
+    maxOutputTokens: 4096,
+    pricing: { prompt: 0, completion: 0 },
+    capabilities: { streaming: true, structuredOutput: true, functionCalling: true, vision: false },
+    tier: 'free',
+  },
+  'nvidia/nemotron-3-nano-12b-v2-vl:free': {
+    id: 'nvidia/nemotron-3-nano-12b-v2-vl:free',
+    name: 'Nemotron 3 Nano 12B VL (Free)',
+    contextLength: 32768,
+    maxOutputTokens: 4096,
+    pricing: { prompt: 0, completion: 0 },
+    capabilities: { streaming: true, structuredOutput: true, functionCalling: true, vision: true },
+    tier: 'free',
+  },
+  'nvidia/nemotron-3-nano-9b-v2:free': {
+    id: 'nvidia/nemotron-3-nano-9b-v2:free',
+    name: 'Nemotron 3 Nano 9B (Free)',
+    contextLength: 32768,
+    maxOutputTokens: 4096,
+    pricing: { prompt: 0, completion: 0 },
+    capabilities: { streaming: true, structuredOutput: true, functionCalling: true, vision: false },
+    tier: 'free',
+  },
+  'cohere/north-mini-code:free': {
+    id: 'cohere/north-mini-code:free',
+    name: 'Cohere North Mini Code (Free)',
+    contextLength: 4096,
+    maxOutputTokens: 4096,
+    pricing: { prompt: 0, completion: 0 },
+    capabilities: { streaming: true, structuredOutput: true, functionCalling: true, vision: false },
+    tier: 'free',
+  },
+  'inclusionai/ling-3.0-flash:free': {
+    id: 'inclusionai/ling-3.0-flash:free',
+    name: 'Ling 3.0 Flash (Free)',
+    contextLength: 8192,
+    maxOutputTokens: 4096,
+    pricing: { prompt: 0, completion: 0 },
+    capabilities: { streaming: true, structuredOutput: true, functionCalling: true, vision: false },
+    tier: 'free',
+  },
+  'poolside/laguna-s-2.1:free': {
+    id: 'poolside/laguna-s-2.1:free',
+    name: 'Poolside Laguna S 2.1 (Free)',
+    contextLength: 8192,
+    maxOutputTokens: 4096,
+    pricing: { prompt: 0, completion: 0 },
+    capabilities: { streaming: true, structuredOutput: true, functionCalling: true, vision: false },
+    tier: 'free',
+  },
+  'poolside/laguna-xs-2.1:free': {
+    id: 'poolside/laguna-xs-2.1:free',
+    name: 'Poolside Laguna XS 2.1 (Free)',
     contextLength: 8192,
     maxOutputTokens: 4096,
     pricing: { prompt: 0, completion: 0 },
@@ -98,7 +183,7 @@ export const MODEL_CATALOG: Record<string, ModelConfig> = {
     tier: 'free',
   },
 
-  // ---- Cheap tier ----
+  // ---- Cheap models ----
   'meta-llama/llama-3.1-8b-instruct': {
     id: 'meta-llama/llama-3.1-8b-instruct',
     name: 'Llama 3.1 8B Instruct',
@@ -127,7 +212,7 @@ export const MODEL_CATALOG: Record<string, ModelConfig> = {
     tier: 'cheap',
   },
 
-  // ---- Standard tier ----
+  // Standard models
   'meta-llama/llama-3.1-70b-instruct': {
     id: 'meta-llama/llama-3.1-70b-instruct',
     name: 'Llama 3.1 70B Instruct',
@@ -155,26 +240,7 @@ export const MODEL_CATALOG: Record<string, ModelConfig> = {
     capabilities: { streaming: true, structuredOutput: true, functionCalling: true, vision: true },
     tier: 'standard',
   },
-  'openai/gpt-4o-mini': {
-    id: 'openai/gpt-4o-mini',
-    name: 'GPT-4o Mini',
-    contextLength: 128000,
-    maxOutputTokens: 16384,
-    pricing: { prompt: 0.15, completion: 0.60 },
-    capabilities: { streaming: true, structuredOutput: true, functionCalling: true, vision: true },
-    tier: 'standard',
-  },
-  'anthropic/claude-3-haiku': {
-    id: 'anthropic/claude-3-haiku',
-    name: 'Claude 3 Haiku',
-    contextLength: 200000,
-    maxOutputTokens: 4096,
-    pricing: { prompt: 0.25, completion: 1.25 },
-    capabilities: { streaming: true, structuredOutput: true, functionCalling: true, vision: true },
-    tier: 'standard',
-  },
-
-  // ---- Premium tier ----
+  // Premium models
   'openai/gpt-4o': {
     id: 'openai/gpt-4o',
     name: 'GPT-4o',
@@ -184,14 +250,14 @@ export const MODEL_CATALOG: Record<string, ModelConfig> = {
     capabilities: { streaming: true, structuredOutput: true, functionCalling: true, vision: true },
     tier: 'premium',
   },
-  'mistralai/mistral-large': {
-    id: 'mistralai/mistral-large',
-    name: 'Mistral Large',
-    contextLength: 131072,
-    maxOutputTokens: 4096,
-    pricing: { prompt: 2.00, completion: 6.00 },
-    capabilities: { streaming: true, structuredOutput: true, functionCalling: true, vision: false },
-    tier: 'premium',
+  'openai/gpt-4o-mini': {
+    id: 'openai/gpt-4o-mini',
+    name: 'GPT-4o Mini',
+    contextLength: 128000,
+    maxOutputTokens: 16384,
+    pricing: { prompt: 0.15, completion: 0.60 },
+    capabilities: { streaming: true, structuredOutput: true, functionCalling: true, vision: true },
+    tier: 'standard',
   },
   'anthropic/claude-3.5-sonnet': {
     id: 'anthropic/claude-3.5-sonnet',
@@ -202,17 +268,21 @@ export const MODEL_CATALOG: Record<string, ModelConfig> = {
     capabilities: { streaming: true, structuredOutput: true, functionCalling: true, vision: true },
     tier: 'premium',
   },
+  'anthropic/claude-3-haiku': {
+    id: 'anthropic/claude-3-haiku',
+    name: 'Claude 3 Haiku',
+    contextLength: 200000,
+    maxOutputTokens: 4096,
+    pricing: { prompt: 0.25, completion: 1.25 },
+    capabilities: { streaming: true, structuredOutput: true, functionCalling: true, vision: true },
+    tier: 'standard',
+  },
 };
 
-/** Read an environment variable through the Node process, if present. */
 function readEnv(name: string): string | undefined {
   return process.env[name];
 }
 
-/**
- * Load provider configuration from the environment.
- * Throws if the required API key is absent.
- */
 export function loadProviderConfig(): ProviderConfig {
   const apiKey = readEnv('OPENROUTER_API_KEY');
   if (!apiKey) {
@@ -224,8 +294,8 @@ export function loadProviderConfig(): ProviderConfig {
     baseUrl: readEnv('OPENROUTER_BASE_URL') ?? 'https://openrouter.ai/api/v1',
     timeoutMs: Number.parseInt(readEnv('OPENROUTER_TIMEOUT_MS') ?? '60000', 10),
     maxRetries: Number.parseInt(readEnv('OPENROUTER_MAX_RETRIES') ?? '3', 10),
-    defaultModel: readEnv('OPENROUTER_DEFAULT_MODEL') ?? 'meta-llama/llama-3.1-8b-instruct:free',
-    fallbackModel: readEnv('OPENROUTER_FALLBACK_MODEL') ?? 'mistralai/mistral-7b-instruct:free',
+    defaultModel: readEnv('OPENROUTER_DEFAULT_MODEL') ?? 'google/gemma-4-31b-it:free',
+    fallbackModel: readEnv('OPENROUTER_FALLBACK_MODEL') ?? 'openai/gpt-oss-20b:free',
     enableLogging: readEnv('OPENROUTER_ENABLE_LOGGING') === 'true',
     maxTokensPerRequest: Number.parseInt(readEnv('OPENROUTER_MAX_TOKENS') ?? '4096', 10),
     defaultTemperature: Number.parseFloat(readEnv('OPENROUTER_DEFAULT_TEMPERATURE') ?? '0.7'),
@@ -233,3 +303,5 @@ export function loadProviderConfig(): ProviderConfig {
     title: readEnv('OPENROUTER_TITLE') ?? 'AI Media Factory',
   };
 }
+
+export const providerConfig = loadProviderConfig();
