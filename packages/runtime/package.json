@@ -18,12 +18,14 @@
     "test": "node --test"
   },
   "dependencies": {
-    "@ai-media-factory/providers": "*",
+    "@ai-media-factory/context-engine": "*",
+    "@ai-media-factory/evaluation-framework": "*",
     "@ai-media-factory/memory-engine": "*",
     "@ai-media-factory/prompt-compiler": "*",
-    "@ai-media-factory/context-engine": "*",
+    "@ai-media-factory/providers": "*",
     "@ai-media-factory/tool-framework": "*",
-    "@ai-media-factory/evaluation-framework": "*"
+    "@types/uuid": "^10.0.0",
+    "uuid": "^14.0.1"
   },
   "devDependencies": {
     "typescript": "^5.5.0"

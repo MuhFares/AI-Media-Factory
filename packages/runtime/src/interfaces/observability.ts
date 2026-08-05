@@ -3,7 +3,7 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { AgentId, Json, Uuid } from "./common";
+import type { AgentId, Json, Uuid } from "./common.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 

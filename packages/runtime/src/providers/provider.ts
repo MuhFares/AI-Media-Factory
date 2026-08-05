@@ -13,8 +13,8 @@
  * provider layer's internals.
  */
 
-import type { ExecutionRequest, ExecutionResponse } from "../interfaces/execution";
-import type { CancellationToken } from "../interfaces/resilience";
+import type { ExecutionRequest, ExecutionResponse } from "../interfaces/execution.js";
+import type { CancellationToken } from "../interfaces/resilience.js";
 import type {
   GenerateRequest,
   GenerateResponse,

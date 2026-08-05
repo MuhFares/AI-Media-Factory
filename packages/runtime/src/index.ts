@@ -14,5 +14,8 @@
  * See ./README.md for the architecture, execution flow, and state machine.
  */
 
-export * from "./interfaces";
-export * from "./providers";
+export * from "./interfaces/index.js";
+export * from "./providers/provider.js";
+export * from "./core/agent.js";
+export * from "./core/runtime.js";
+export * from "./core/executor.js";

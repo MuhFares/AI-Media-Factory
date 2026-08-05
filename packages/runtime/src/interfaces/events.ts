@@ -6,7 +6,7 @@
  * the Agent Contract System. The runtime never invents its own envelope.
  */
 
-import type { AgentId, EventType, Json, Timestamp, Uuid } from "./common";
+import type { AgentId, EventType, Json, Timestamp, Uuid } from "./common.js";
 
 /** The shared event envelope every message on the bus conforms to. */
 export interface RuntimeEvent {

@@ -3,7 +3,7 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { Json } from "./common";
+import type { Json } from "./common.js";
 
 /** Opaque JSON Schema document (draft-07). */
 export type JsonSchema = { readonly [key: string]: Json };

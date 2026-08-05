@@ -11,7 +11,7 @@
  * turn via the MemoryEngine.retrieve() and persists takeaways via save().
  */
 
-import type { MemoryEngine } from "@ai-media-factory/memory-engine";
+import type { MemoryEngine } from "../types/memory-engine.js";
 
 /** Canonical memory contracts, re-exported for the runtime's internal use. */
 export type {
@@ -22,7 +22,7 @@ export type {
   MemoryQuery,
   RetrievalResult,
   WriteResult,
-} from "@ai-media-factory/memory-engine";
+} from "../types/memory-engine.js";
 
 /**
  * The runtime's memory access is the MemoryEngine facade itself — there is no

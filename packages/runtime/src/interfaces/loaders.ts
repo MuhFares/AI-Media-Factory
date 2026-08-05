@@ -6,8 +6,8 @@
  * data for every agent (config.yaml, prompts/*, memory/*, schemas/*).
  */
 
-import type { AgentId, Json } from "./common";
-import type { JsonSchema } from "./validation";
+import type { AgentId, Json } from "./common.js";
+import type { JsonSchema } from "./validation.js";
 
 /** Parsed, typed view of an agent's config.yaml. */
 export interface AgentConfig {
@@ -55,5 +55,5 @@ export interface SchemaLoader {
 
 /** Loads memory needed to start a turn (retrieval is defined in memory.ts). */
 export interface MemoryLoader {
-  loadForTurn(agent: AgentId, query: Json): Promise<import("./memory").LoadedMemory>;
+  loadForTurn(agent: AgentId, query: Json): Promise<import("./memory.js").LoadedMemory>;
 }

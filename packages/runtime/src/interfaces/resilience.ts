@@ -3,12 +3,12 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { Json, Uuid } from "./common";
+import type { Json, Uuid } from "./common.js";
 
 /** Decides whether/how to retry a failed step. Mirrors the Event Bus policy. */
 export interface RetryPolicy {
   /** Should the given attempt be retried? */
-  shouldRetry(error: import("./errors").RuntimeError, attempt: number): boolean;
+  shouldRetry(error: import("./errors.js").RuntimeError, attempt: number): boolean;
   /** Backoff delay (ms) before the next attempt. */
   backoffMs(attempt: number): number;
   readonly maxAttempts: number;

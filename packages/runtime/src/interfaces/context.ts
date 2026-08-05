@@ -3,10 +3,10 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { AgentConfig, AgentSchemas, PromptSet } from "./loaders";
-import type { LoadedMemory } from "./memory";
-import type { RuntimeEvent } from "./events";
-import type { Uuid } from "./common";
+import type { AgentConfig, AgentSchemas, PromptSet } from "./loaders.js";
+import type { LoadedMemory } from "./memory.js";
+import type { RuntimeEvent } from "./events.js";
+import type { Uuid } from "./common.js";
 
 /** Everything an agent turn needs, assembled once and treated as immutable. */
 export interface ExecutionContext {
@@ -30,5 +30,5 @@ export interface ContextBuilder {
     schemas: AgentSchemas;
     memory: LoadedMemory;
     inputEvent: RuntimeEvent;
-  }): ExecutionContext;
+  }): Promise<ExecutionContext>;
 }

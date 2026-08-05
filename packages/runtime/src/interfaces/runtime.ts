@@ -7,9 +7,9 @@
  * the SAME pipeline for all 13 agents. It contains no agent-specific branching.
  */
 
-import type { AgentId, Uuid } from "./common";
-import type { RuntimeEvent } from "./events";
-import type { RuntimeError } from "./errors";
+import type { AgentId, Uuid } from "./common.js";
+import type { RuntimeEvent } from "./events.js";
+import type { RuntimeError } from "./errors.js";
 
 /** The terminal outcome of one agent turn. */
 export type TurnStatus =

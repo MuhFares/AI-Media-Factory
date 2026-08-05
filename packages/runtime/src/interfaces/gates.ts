@@ -6,7 +6,7 @@
  * (e.g. Brand safety holds, CEO one-way doors) — never hardcoded per agent.
  */
 
-import type { AgentId, Json, Uuid } from "./common";
+import type { AgentId, Json, Uuid } from "./common.js";
 
 export interface ApprovalRequest {
   turnId: Uuid;

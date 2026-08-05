@@ -3,9 +3,9 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { ExecutionContext } from "./context";
-import type { Json } from "./common";
-import type { PromptCompiler, PromptContext, FinalPrompt } from "@ai-media-factory/prompt-compiler";
+import type { ExecutionContext } from "./context.js";
+import type { Json } from "./common.js";
+import type { PromptCompiler, PromptContext, FinalPrompt } from "../types/prompt-compiler.js";
 
 /** A uniform, vendor-neutral request to run a model. */
 export interface ExecutionRequest {
@@ -15,7 +15,7 @@ export interface ExecutionRequest {
   temperature: number;
   maxOutputTokens: number;
   /** The output schema the model is asked to conform to. */
-  responseSchema?: import("./validation").JsonSchema;
+  responseSchema?: import("./validation.js").JsonSchema;
 }
 
 /** Token/cost usage returned by a provider. */
@@ -44,7 +44,7 @@ export interface ExecutionResponse {
  */
 export interface LlmExecutor {
   buildRequest(context: ExecutionContext): ExecutionRequest;
-  execute(request: ExecutionRequest, signal: import("./resilience").CancellationToken): Promise<ExecutionResponse>;
+  execute(request: ExecutionRequest, signal: import("./resilience.js").CancellationToken): Promise<ExecutionResponse>;
 }
 
 /**

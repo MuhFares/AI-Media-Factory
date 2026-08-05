@@ -11,14 +11,14 @@
  * See ./README.md for how each interface fits the execution pipeline.
  */
 
-export * from "./runtime";
-export * from "./loaders";
-export * from "./context";
-export * from "./execution";
-export * from "./validation";
-export * from "./memory";
-export * from "./events";
-export * from "./gates";
-export * from "./resilience";
-export * from "./observability";
-export * from "./errors";
+export * from "./runtime.js";
+export * from "./loaders.js";
+export * from "./context.js";
+export * from "./execution.js";
+export * from "./validation.js";
+export * from "./memory.js";
+export * from "./events.js";
+export * from "./gates.js";
+export * from "./resilience.js";
+export * from "./observability.js";
+export * from "./errors.js";
