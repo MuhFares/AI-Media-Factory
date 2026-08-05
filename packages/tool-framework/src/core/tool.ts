@@ -6,22 +6,7 @@
  * The runtime never calls tools directly — it goes through ToolInvoker.
  */
 
-import type { ToolId, AgentId, WorkflowId, StepId, Timestamp, Json, JsonSchema, Duration } from "./common";
-
-export type ToolCategory =
-  | "web_search"
-  | "api_call"
-  | "file_operation"
-  | "code_execution"
-  | "data_processing"
-  | "media_generation"
-  | "media_processing"
-  | "communication"
-  | "database"
-  | "analysis"
-  | "authentication"
-  | "monitoring"
-  | "custom";
+import type { ToolId, AgentId, WorkflowId, StepId, Timestamp, Json, JsonSchema, Duration, ToolCategory } from "./common.js";
 
 export type ToolPermission =
   | "tool:web_search"
@@ -85,7 +70,6 @@ export interface ToolSpec {
   inputSchema: JsonSchema;
   outputSchema: JsonSchema;
   requiredPermissions: string[];
-  category: string;
   timeoutMs: number;
   requiresApproval: boolean;
   retryPolicyOverride?: {
@@ -149,7 +133,6 @@ export interface Tool {
     inputSchema: any;
     outputSchema: any;
     requiredPermissions: string[];
-    category: string;
     timeoutMs: number;
     requiresApproval: boolean;
     retryPolicyOverride?: any;
@@ -244,3 +227,61 @@ export interface ApprovalDecision {
   conditions?: string[];
   decidedAt: string;
 }
+
+export type ToolErrorCode =
+  | "VALIDATION_ERROR"
+  | "PERMISSION_DENIED"
+  | "APPROVAL_REJECTED"
+  | "TIMEOUT"
+  | "SANDBOX_ERROR"
+  | "AUTHENTICATION_ERROR"
+  | "RATE_LIMITED"
+  | "PROVIDER_ERROR"
+  | "SANDBOX_VIOLATION"
+  | "COST_EXCEEDED"
+  | "UNKNOWN";
+
+export interface ToolError {
+  code: ToolErrorCode;
+  message: string;
+  retryable: boolean;
+  details?: any;
+  cause?: ToolError;
+}
+
+export interface ExecutionMetadata {
+  toolId: string;
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+  tokensUsed?: TokenUsage;
+  costUsd: number;
+  retryCount: number;
+  cached: boolean;
+  sandboxInfo: SandboxInfo;
+}
+
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+export interface SandboxInfo {
+  sandboxId: string;
+  level: string;
+  memoryUsedMb?: number;
+  cpuTimeMs?: number;
+}
+
+/** Result of a tool invocation. */
+export interface ToolResult {
+  resultId: string;
+  toolId: string;
+  success: boolean;
+  output: any;
+  error?: ToolError;
+  metadata: ExecutionMetadata;
+}
+
+export type { JsonSchema } from "./common.js";

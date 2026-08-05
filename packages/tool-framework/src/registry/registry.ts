@@ -3,8 +3,19 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { ToolId, ToolCategory } from "../core/common";
-import type { Tool, ToolSpec, ToolHealth } from "../core/tool";
+import type { ToolId, ToolCategory } from "../core/common.js";
+import type { Tool, ToolSpec, ToolHealth } from "../core/tool.js";
+
+export interface ToolMetadata {
+  spec: ToolSpec;
+  registeredAt: string;
+  registeredBy: string;
+  healthStatus: "healthy" | "degraded" | "unhealthy";
+  lastHealthCheck: string;
+  invocationCount: number;
+  successRate: number;
+  avgLatencyMs: number;
+}
 
 export interface ToolRegistry {
   /** Register a new tool. */

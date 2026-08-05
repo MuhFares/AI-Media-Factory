@@ -37,26 +37,6 @@ export interface PermissionContext {
   timeOfDay: string;
 }
 
-export interface PermissionPolicy {
-  granted: string[];
-  denied: string[];
-  conditional: ConditionalPermission[];
-}
-
-export interface ConditionalPermission {
-  permission: string;
-  condition: (context: PermissionContext) => boolean;
-}
-
-export interface PermissionContext {
-  agent: string;
-  toolId: string;
-  workflowId?: string;
-  stepId?: string;
-  brandId?: string;
-  timeOfDay: string;
-}
-
 export interface PermissionEvaluator {
   hasPermission(agent: string, permission: string, context: PermissionContext): boolean;
   getGrantedPermissions(agent: string): string[];

@@ -36,15 +36,3 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
   retryableErrors: ["TIMEOUT", "RATE_LIMITED", "SERVER_ERROR", "NETWORK_ERROR", "TEMPORARY_UNAVAILABLE"],
   nonRetryableErrors: ["VALIDATION_ERROR", "PERMISSION_DENIED", "APPROVAL_REJECTED", "AUTHENTICATION_ERROR", "CONTENT_FILTER", "INVALID_INPUT", "SANDBOX_VIOLATION", "COST_EXCEEDED"],
 };
-
-export interface ToolRetryPolicy {
-  shouldRetry(error: any, attempt: number): boolean;
-  getDelay(attempt: number): number;
-  readonly maxAttempts: number;
-}
-
-export interface ToolRetryPolicy {
-  shouldRetry(error: any, attempt: number): boolean;
-  getDelay(attempt: number): number;
-  readonly maxAttempts: number;
-}
