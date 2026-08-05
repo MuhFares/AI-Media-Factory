@@ -7,7 +7,7 @@
  * Never a silent overwrite.
  */
 
-import type { MemoryRecord } from "../core/record";
+import type { MemoryRecord } from "../core/record.js";
 
 export type ConflictResolution =
   | { kind: "not_conflict"; reason: "different_scope" }

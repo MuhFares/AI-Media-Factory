@@ -6,7 +6,7 @@
  * queryable, just not hot. Committed memory is archived, not deleted.
  */
 
-import type { MemoryType, Timestamp } from "../core/common";
+import type { MemoryType, Timestamp } from "../core/common.js";
 
 export interface ArchiveTarget {
   location: string; // e.g. data/ cold store path

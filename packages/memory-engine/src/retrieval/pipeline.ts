@@ -6,7 +6,7 @@
  * conflict check → rank → confidence gate → budget cap → RetrievalResult.
  */
 
-import type { MemoryQuery, RetrievalResult } from "../core/query";
+import type { MemoryQuery, RetrievalResult } from "../core/query.js";
 
 export interface RetrievalPipeline {
   /** Run the full funnel for a query and return a ranked, gated result set. */

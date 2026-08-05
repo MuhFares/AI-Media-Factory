@@ -3,7 +3,7 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { MemoryQuery, RetrievalResult } from "../core/query";
+import type { MemoryQuery, RetrievalResult } from "../core/query.js";
 
 /** Semantic search over meaning (backed by the VectorIndex). */
 export interface SemanticSearch {

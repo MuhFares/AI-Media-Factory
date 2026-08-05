@@ -4,9 +4,9 @@
  * Owner: Orchestrator. Distilled to durable memory before expiry (~30 days).
  */
 
-import type { MemoryStore } from "./memory-store";
-import type { MemoryRecord } from "../core/record";
-import type { Uuid } from "../core/common";
+import type { MemoryStore } from "./memory-store.js";
+import type { MemoryRecord } from "../core/record.js";
+import type { Uuid } from "../core/common.js";
 
 export interface SessionStore extends MemoryStore {
   /** Append an event/artifact to a run, keyed by workflow_id. */

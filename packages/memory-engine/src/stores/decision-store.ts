@@ -4,9 +4,9 @@
  * Owner: CEO. Delete refused; a decision's Result is filled in later (supersede).
  */
 
-import type { MemoryStore } from "./memory-store";
-import type { MemoryRecord } from "../core/record";
-import type { MemoryId } from "../core/common";
+import type { MemoryStore } from "./memory-store.js";
+import type { MemoryRecord } from "../core/record.js";
+import type { MemoryId } from "../core/common.js";
 
 export interface DecisionStore extends MemoryStore {
   /** Record a one-way-door decision (context, gates, RICE, decision). */

@@ -3,7 +3,7 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { AgentId, Json, MemoryId, MemoryType, Timestamp } from "./common";
+import type { AgentId, Json, MemoryId, MemoryType, Timestamp } from "./common.js";
 
 /** Where a memory came from (source attribution, req #14). Required on every write. */
 export interface Provenance {

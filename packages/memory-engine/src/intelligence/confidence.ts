@@ -6,7 +6,7 @@
  * validation. Gates whether a memory is acted on autonomously vs "verify first".
  */
 
-import type { MemoryRecord } from "../core/record";
+import type { MemoryRecord } from "../core/record.js";
 
 export interface ConfidenceInputs {
   evidenceCount: number;

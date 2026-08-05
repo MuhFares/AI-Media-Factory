@@ -7,7 +7,7 @@
  * only when it changes what an agent will do next time.
  */
 
-import type { MemoryRecord } from "../core/record";
+import type { MemoryRecord } from "../core/record.js";
 
 export interface LessonCandidate {
   claim: string;

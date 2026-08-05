@@ -3,7 +3,7 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { MemoryId } from "../core/common";
+import type { MemoryId } from "../core/common.js";
 
 export type Embedding = number[];
 

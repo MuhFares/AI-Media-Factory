@@ -4,8 +4,8 @@
  * Owner: CEO + all agents. Append/supersede; linked to evidence in the graph.
  */
 
-import type { MemoryStore } from "./memory-store";
-import type { MemoryRecord } from "../core/record";
+import type { MemoryStore } from "./memory-store.js";
+import type { MemoryRecord } from "../core/record.js";
 
 export interface LessonsStore extends MemoryStore {
   /** Persist a validated lesson (claim + evidence + scope + confidence). */

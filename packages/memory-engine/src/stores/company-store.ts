@@ -4,8 +4,8 @@
  * Owner: CEO (curated). Append/supersede only — delete is refused.
  */
 
-import type { MemoryStore } from "./memory-store";
-import type { MemoryRecord } from "../core/record";
+import type { MemoryStore } from "./memory-store.js";
+import type { MemoryRecord } from "../core/record.js";
 
 export interface CompanyStore extends MemoryStore {
   /** Curated documents of the Company Brain (mission, values, KPIs, ...). */

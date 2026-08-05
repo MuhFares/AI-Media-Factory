@@ -7,9 +7,8 @@
  * persistence surface and the durability rules the engine enforces.
  */
 
-import type { Durability, MemoryId, MemoryType, Timestamp } from "../core/common";
-import type { MemoryRecord } from "../core/record";
-import type { Json } from "../core/common";
+import type { Durability, MemoryId, MemoryType, Timestamp, Json } from "../core/common.js";
+import type { MemoryRecord } from "../core/record.js";
 
 export interface MemoryStore {
   readonly type: MemoryType;

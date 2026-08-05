@@ -6,8 +6,8 @@
  * Weights are per-type/per-agent and are recalibrated by the learning loop.
  */
 
-import type { MemoryRecord } from "../core/record";
-import type { RankedRecord } from "../core/query";
+import type { MemoryRecord } from "../core/record.js";
+import type { RankedRecord } from "../core/query.js";
 
 export interface RankSignal {
   relevance: number;

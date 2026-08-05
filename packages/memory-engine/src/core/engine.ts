@@ -7,9 +7,9 @@
  * per-type rules (permanent types refuse delete/overwrite; ephemeral expire).
  */
 
-import type { MemoryId, MemoryType, Timestamp } from "./common";
-import type { MemoryRecord } from "./record";
-import type { MemoryQuery, RetrievalResult, WriteResult } from "./query";
+import type { MemoryId, MemoryType, Timestamp } from "./common.js";
+import type { MemoryRecord } from "./record.js";
+import type { MemoryQuery, RetrievalResult, WriteResult } from "./query.js";
 
 export interface ArchiveReport { archived: number; movedTo: string; }
 export interface CompressionReport { inputRecords: number; outputRecords: number; ratio: number; }

@@ -6,7 +6,7 @@
  * platform) and edges connect memory so retrieval can reason, not just match.
  */
 
-import type { MemoryId } from "../core/common";
+import type { MemoryId } from "../core/common.js";
 
 export type NodeKind =
   | "brand" | "asset" | "topic" | "decision" | "lesson"

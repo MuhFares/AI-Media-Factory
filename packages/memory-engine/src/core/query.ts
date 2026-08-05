@@ -3,8 +3,8 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { AgentId, Json, MemoryId, MemoryType } from "./common";
-import type { MemoryRecord } from "./record";
+import type { AgentId, Json, MemoryId, MemoryType } from "./common.js";
+import type { MemoryRecord } from "./record.js";
 
 export type SearchMode = "semantic" | "vector" | "graph" | "keyword" | "hybrid";
 

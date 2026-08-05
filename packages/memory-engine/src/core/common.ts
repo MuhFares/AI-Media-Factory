@@ -6,6 +6,7 @@
 export type AgentId = string;
 export type MemoryId = string;
 export type Timestamp = string; // ISO-8601 UTC
+export type Uuid = string;
 
 export type Json =
   | null

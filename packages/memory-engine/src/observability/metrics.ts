@@ -7,7 +7,7 @@
  * rate, and the learning-loop signal. Shipped to infra/monitoring + Analytics.
  */
 
-import type { MemoryType } from "../core/common";
+import type { MemoryType } from "../core/common.js";
 
 export interface RetrievalMetric {
   type: MemoryType;

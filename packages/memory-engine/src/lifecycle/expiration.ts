@@ -7,7 +7,7 @@
  * Lessons) NEVER expire — marked/superseded, retained for audit.
  */
 
-import type { Durability, MemoryType, Timestamp } from "../core/common";
+import type { Durability, MemoryType, Timestamp } from "../core/common.js";
 
 export interface RetentionRule {
   type: MemoryType;

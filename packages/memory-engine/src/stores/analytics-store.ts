@@ -4,9 +4,9 @@
  * Owner: Analytics. Raw expires (90-day hot window); aggregates persist.
  */
 
-import type { MemoryStore } from "./memory-store";
-import type { MemoryRecord } from "../core/record";
-import type { Timestamp } from "../core/common";
+import type { MemoryStore } from "./memory-store.js";
+import type { MemoryRecord } from "../core/record.js";
+import type { Timestamp } from "../core/common.js";
 
 export interface AnalyticsStore extends MemoryStore {
   /** Append attributed performance/metric memory. */

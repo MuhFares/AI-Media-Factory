@@ -6,7 +6,7 @@
  * without provenance are rejected by the engine. Makes the corpus auditable.
  */
 
-import type { Provenance } from "../core/record";
+import type { Provenance } from "../core/record.js";
 
 export interface AttributionTracker {
   /** Reject a write that lacks valid provenance. */

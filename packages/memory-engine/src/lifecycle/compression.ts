@@ -6,7 +6,7 @@
  * scored records. Lossy at the raw level, lossless at the lesson level.
  */
 
-import type { MemoryRecord } from "../core/record";
+import type { MemoryRecord } from "../core/record.js";
 
 /** Summarize a set of records into one higher-level record (#8). */
 export interface Summarizer {

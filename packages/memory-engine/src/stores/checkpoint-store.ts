@@ -4,8 +4,8 @@
  * Owner: Orchestrator/runtime. Write-ahead; replay is idempotent.
  */
 
-import type { MemoryStore } from "./memory-store";
-import type { Json, Timestamp, Uuid } from "../core/common";
+import type { MemoryStore } from "./memory-store.js";
+import type { Json, Timestamp, Uuid } from "../core/common.js";
 
 export interface CheckpointRecord {
   turnId: Uuid;

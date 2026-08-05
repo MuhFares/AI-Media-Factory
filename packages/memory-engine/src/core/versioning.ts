@@ -7,8 +7,8 @@
  * is reconstructable and auditable.
  */
 
-import type { MemoryId, Timestamp } from "./common";
-import type { MemoryRecord } from "./record";
+import type { MemoryId, Timestamp } from "./common.js";
+import type { MemoryRecord } from "./record.js";
 
 export interface VersionEntry {
   memory_id: MemoryId;
