@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ai-media-factory/agents/ceo/output.schema.json",
+  "title": "ExecutiveDirective",
+  "description": "Event emitted by the CEO agent to the Orchestrator with strategic decisions.",
+  "type": "object",
+  "required": ["schema_version", "event_id", "workflow_id", "timestamp", "type", "source_agent", "target_agent", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "event_id": { "type": "string", "format": "uuid" },
+    "workflow_id": { "type": "string", "format": "uuid" },
+    "correlation_id": { "type": ["string", "null"] },
+    "brand_id": { "type": ["string", "null"] },
+    "asset_id": { "type": ["string", "null"] },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "type": { "type": "string", "const": "ExecutiveDirective" },
+    "source_agent": { "type": "string", "const": "ceo" },
+    "target_agent": { "type": "string", "const": "orchestrator" },
+    "payload": {
+      "type": "object",
+      "required": ["priorities", "decisions"],
+      "additionalProperties": false,
+      "properties": {
+        "priorities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["initiative", "rice_score"],
+            "properties": {
+              "initiative": { "type": "string" },
+              "rice_score": { "type": "number" },
+              "rationale": { "type": "string" }
+            }
+          }
+        },
+        "decisions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["subject", "action", "door_type"],
+            "properties": {
+              "subject": { "type": "string" },
+              "action": { "type": "string", "enum": ["invest", "hold", "kill", "launch", "hire_agent", "adjust_pricing"] },
+              "door_type": { "type": "string", "enum": ["one_way", "two_way"] },
+              "rationale": { "type": "string" }
+            }
+          }
+        },
+        "budget_allocations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["target", "budget_usd_per_day"],
+            "properties": {
+              "target": { "type": "string" },
+              "budget_usd_per_day": { "type": "number", "minimum": 0 }
+            }
+          }
+        },
+        "weekly_report_ref": { "type": ["string", "null"] }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "cost_usd": { "type": "number" },
+        "model": { "type": "string" },
+        "latency_ms": { "type": "number" }
+      }
+    }
+  }
+}

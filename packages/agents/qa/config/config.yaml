@@ -1,0 +1,58 @@
+# QA Agent — declarative configuration.
+# No secrets here; environment-overridable via configs/environments.
+schema_version: "1.0.0"
+agent:
+  id: qa
+  name: "QA / Quality Gate"
+  layer: gate
+  version: "1.0.0"
+
+model:
+  # Mid-tier reasoning; QA runs objective, checkable inspections at high frequency.
+  primary: "reasoning-tier-medium"
+  fallback: "reasoning-tier-small"
+  temperature: 0.0
+  max_output_tokens: 2048
+  routing_ref: "../../../configs/models/README.md"
+
+tools:
+  # Read-and-verify: QA inspects assets and emits a verdict; it never produces media.
+  allow:
+    - company_brain.read
+    - asset.read
+    - schema.validate
+    - media.probe
+    - captions.read
+  deny:
+    - media.render
+    - publisher.publish
+    - workflow.execute
+
+budgets:
+  # QA runs once per finished asset; the ceiling is per review.
+  max_cost_per_review_usd: 0.25
+  max_reviews_per_day: 5000
+  enforced_by: finance
+
+guardrails:
+  gate_only: true                 # QA reviews and gates; it must not produce or publish
+  require_valid_input: true       # malformed input is a HOLD, not an inspection
+  no_trade_on_quality: true       # a failed objective check is never traded for speed
+  brand_voice_out_of_scope: true  # voice and safety belong to the Brand gate
+  record_defects: true            # every HOLD writes a structured defect record
+
+escalation:
+  to: producing_agent
+  triggers:
+    - schema_validation_failed
+    - render_integrity_failed
+    - rework_loop_not_converging
+  timeout_seconds: 900
+
+memory:
+  long_term_ref: "./memory/long_term.md"
+  short_term_ref: "./memory/short_term.md"
+
+io:
+  input_schema: "./schemas/input.schema.json"
+  output_schema: "./schemas/output.schema.json"

@@ -1,0 +1,62 @@
+# Orchestrator Agent — declarative configuration.
+# No secrets here; environment-overridable via configs/environments.
+schema_version: "1.0.0"
+agent:
+  id: orchestrator
+  name: "Orchestrator / Execution Brain"
+  layer: execution
+  version: "1.0.0"
+
+model:
+  # Mid tier; the Orchestrator makes high-frequency, low-ambiguity routing calls.
+  primary: "reasoning-tier-medium"
+  fallback: "reasoning-tier-small"
+  temperature: 0.0
+  max_output_tokens: 2048
+  routing_ref: "../../../configs/models/README.md"
+
+tools:
+  # Control-plane only: the Orchestrator dispatches and tracks, it never produces media.
+  allow:
+    - company_brain.read
+    - workflow.execute
+    - event.publish
+    - event.subscribe
+    - checkpoint.write
+    - state.query
+  deny:
+    - media.render
+    - publisher.publish
+    - strategy.decide
+
+budgets:
+  # The Orchestrator runs constantly; ceilings are per workflow, not per review.
+  max_cost_per_workflow_usd: 0.50
+  max_retries_per_task: 3
+  max_concurrent_workflows: 25
+  enforced_by: finance
+
+guardrails:
+  execution_only: true            # never decides strategy or priorities
+  never_rewrite_directive: true   # executes the directive as issued
+  idempotent_dispatch: true       # re-dispatch must not duplicate side effects
+  respect_gates: true             # Brand and QA gates cannot be skipped for speed
+  dead_letter_on_exhaustion: true # exhausted tasks go to the dead-letter queue, not silence
+
+escalation:
+  to: ceo
+  triggers:
+    - workflow_stuck_beyond_timeout
+    - task_dead_lettered
+    - directive_invalid_or_inconsistent
+    - gate_hold_unresolvable
+    - infrastructure_failure   # routed onward to human_operator
+  timeout_seconds: 900
+
+memory:
+  long_term_ref: "./memory/long_term.md"
+  short_term_ref: "./memory/short_term.md"
+
+io:
+  input_schema: "./schemas/input.schema.json"
+  output_schema: "./schemas/output.schema.json"

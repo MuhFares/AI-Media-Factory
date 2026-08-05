@@ -1,0 +1,56 @@
+# Writer Agent — declarative configuration.
+# No secrets here; environment-overridable via configs/environments.
+schema_version: "1.0.0"
+agent:
+  id: writer
+  name: "Writer / Script Author"
+  layer: production
+  version: "1.0.0"
+
+model:
+  # Strong language tier; the Writer produces long-form on-voice text.
+  primary: "language-tier-large"
+  fallback: "language-tier-medium"
+  temperature: 0.6
+  max_output_tokens: 8192
+  routing_ref: "../../../configs/models/README.md"
+
+tools:
+  # Write-oriented for text; must not render media or publish.
+  allow:
+    - company_brain.read
+    - brand.voice.read
+    - knowledge.search
+    - draft.write
+  deny:
+    - media.render
+    - publisher.publish
+    - workflow.execute
+
+budgets:
+  # Cost ceiling is per produced script.
+  max_cost_per_script_usd: 0.40
+  max_scripts_per_day: 200
+  enforced_by: finance
+
+guardrails:
+  stay_in_voice: true             # writing must match the brand voice guide
+  cite_material_claims: true      # every material claim traces to a brief source
+  no_fabrication: true            # unverifiable claims are cut, never invented
+  show_dont_tell: true            # demonstrate value; do not merely assert it
+
+escalation:
+  to: brand
+  triggers:
+    - brief_can_only_be_served_off_voice
+    - unverifiable_material_claim
+    - angle_conflicts_with_brand_safety
+  timeout_seconds: 1800
+
+memory:
+  long_term_ref: "./memory/long_term.md"
+  short_term_ref: "./memory/short_term.md"
+
+io:
+  input_schema: "./schemas/input.schema.json"
+  output_schema: "./schemas/output.schema.json"

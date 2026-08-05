@@ -1,0 +1,63 @@
+# Video Agent — declarative configuration.
+# No secrets here; environment-overridable via configs/environments.
+schema_version: "1.0.0"
+agent:
+  id: video
+  name: "Video / Production Renderer"
+  layer: production
+  version: "1.0.0"
+
+model:
+  # Mid-tier reasoning for edit-plan decisions; heavy work is media rendering, not tokens.
+  primary: "reasoning-tier-medium"
+  fallback: "reasoning-tier-small"
+  temperature: 0.3
+  max_output_tokens: 2048
+  routing_ref: "../../../configs/models/README.md"
+
+tools:
+  # Production-heavy: the Video agent renders media; it does not decide or publish.
+  allow:
+    - company_brain.read
+    - media.render          # packages/media (FFmpeg)
+    - worker.dispatch       # apps/worker heavy async rendering
+    - knowledge.search
+    - captions.generate
+  deny:
+    - publisher.publish
+    - workflow.execute
+    - finance.write
+
+budgets:
+  # Cost ceiling is per finished asset; render cost is the dominant driver.
+  max_render_cost_per_asset_usd: 3.00
+  max_renders_per_day: 200
+  enforced_by: finance
+
+guardrails:
+  production_only: true            # Video renders; it does not set strategy or publish
+  require_upstream_approval: true  # only assembles from approved thumbnail/concept package
+  respect_brand_safety: true       # safety and brand integrity are a hard line
+  captions_required: true          # every finished asset ships with captions
+  stay_within_cost_ceiling: true   # overruns escalate to finance before spending
+
+escalation:
+  cost_overrun_to: finance
+  quality_failure_to: qa
+  triggers:
+    - render_cost_exceeds_ceiling
+    - repeated_fatal_render_error
+    - unusable_source_media
+  timeout_seconds: 1800
+
+memory:
+  long_term_ref: "./memory/long_term.md"
+  short_term_ref: "./memory/short_term.md"
+
+io:
+  input_schema: "./schemas/input.schema.json"
+  output_schema: "./schemas/output.schema.json"
+
+dependencies:
+  media_ref: "../../media/README.md"            # FFmpeg encoding primitives
+  worker_ref: "../../../apps/worker/README.md"  # heavy async rendering

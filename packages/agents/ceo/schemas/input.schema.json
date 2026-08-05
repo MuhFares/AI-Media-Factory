@@ -1,0 +1,131 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ai-media-factory/agents/ceo/input.schema.json",
+  "title": "CEOInput",
+  "description": "Events consumed by the CEO agent. The CEO is a fan-in agent: it accepts a review trigger plus the feedback events that make up its review package. Every variant shares the common event envelope; only type, source_agent, and payload differ.",
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/definitions/CEOReviewRequested" },
+    { "$ref": "#/definitions/FinanceReported" },
+    { "$ref": "#/definitions/GrowthProposed" }
+  ],
+  "definitions": {
+    "CEOReviewRequested": {
+      "type": "object",
+      "required": ["schema_version", "event_id", "workflow_id", "timestamp", "type", "source_agent", "target_agent", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "type": "string", "const": "1.0.0" },
+        "event_id": { "type": "string", "format": "uuid" },
+        "workflow_id": { "type": "string", "format": "uuid" },
+        "correlation_id": { "type": ["string", "null"] },
+        "brand_id": { "type": ["string", "null"] },
+        "asset_id": { "type": ["string", "null"] },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "type": { "type": "string", "const": "CEOReviewRequested" },
+        "source_agent": { "type": "string" },
+        "target_agent": { "type": "string", "const": "ceo" },
+        "payload": {
+          "type": "object",
+          "required": ["period", "kpi_snapshot"],
+          "additionalProperties": false,
+          "properties": {
+            "period": {
+              "type": "object",
+              "required": ["start", "end"],
+              "properties": {
+                "start": { "type": "string", "format": "date-time" },
+                "end": { "type": "string", "format": "date-time" }
+              }
+            },
+            "kpi_snapshot": {
+              "type": "object",
+              "required": ["agp_per_day", "generated_at"],
+              "properties": {
+                "agp_per_day": { "type": "number" },
+                "profitable_assets_per_week": { "type": "number" },
+                "revenue_per_asset": { "type": "number" },
+                "cost_per_asset": { "type": "number" },
+                "autonomy_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+                "generated_at": { "type": "string", "format": "date-time" }
+              }
+            },
+            "analytics_summary": { "type": "string" },
+            "finance_summary": { "type": "string" },
+            "risk_flags": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["risk", "severity"],
+                "properties": {
+                  "risk": { "type": "string" },
+                  "severity": { "type": "string", "enum": ["low", "medium", "high", "critical"] }
+                }
+              }
+            }
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "cost_usd": { "type": "number" },
+            "model": { "type": "string" },
+            "latency_ms": { "type": "number" }
+          }
+        }
+      }
+    },
+    "FinanceReported": {
+      "type": "object",
+      "required": ["schema_version", "event_id", "workflow_id", "timestamp", "type", "source_agent", "target_agent", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "type": "string", "const": "1.0.0" },
+        "event_id": { "type": "string", "format": "uuid" },
+        "workflow_id": { "type": "string", "format": "uuid" },
+        "correlation_id": { "type": ["string", "null"] },
+        "brand_id": { "type": ["string", "null"] },
+        "asset_id": { "type": ["string", "null"] },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "type": { "type": "string", "const": "FinanceReported" },
+        "source_agent": { "type": "string", "const": "finance" },
+        "target_agent": { "type": "string", "const": "ceo" },
+        "payload": { "type": "object" },
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "cost_usd": { "type": "number" },
+            "model": { "type": "string" },
+            "latency_ms": { "type": "number" }
+          }
+        }
+      }
+    },
+    "GrowthProposed": {
+      "type": "object",
+      "required": ["schema_version", "event_id", "workflow_id", "timestamp", "type", "source_agent", "target_agent", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "type": "string", "const": "1.0.0" },
+        "event_id": { "type": "string", "format": "uuid" },
+        "workflow_id": { "type": "string", "format": "uuid" },
+        "correlation_id": { "type": ["string", "null"] },
+        "brand_id": { "type": ["string", "null"] },
+        "asset_id": { "type": ["string", "null"] },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "type": { "type": "string", "const": "GrowthProposed" },
+        "source_agent": { "type": "string", "const": "growth" },
+        "target_agent": { "type": "string", "const": "ceo" },
+        "payload": { "type": "object" },
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "cost_usd": { "type": "number" },
+            "model": { "type": "string" },
+            "latency_ms": { "type": "number" }
+          }
+        }
+      }
+    }
+  }
+}

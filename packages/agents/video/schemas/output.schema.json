@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ai-media-factory/agents/video/output.schema.json",
+  "title": "VideoFinished",
+  "description": "Event emitted by the Video agent to the QA gate with a finished, rendered asset.",
+  "type": "object",
+  "required": ["schema_version", "event_id", "workflow_id", "timestamp", "type", "source_agent", "target_agent", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "event_id": { "type": "string", "format": "uuid" },
+    "workflow_id": { "type": "string", "format": "uuid" },
+    "correlation_id": { "type": ["string", "null"] },
+    "brand_id": { "type": ["string", "null"] },
+    "asset_id": { "type": "string" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "type": { "type": "string", "const": "VideoFinished" },
+    "source_agent": { "type": "string", "const": "video" },
+    "target_agent": { "type": "string", "const": "qa" },
+    "payload": {
+      "type": "object",
+      "required": ["asset_id", "video_asset_ref", "duration_seconds", "render_cost_usd", "resolution", "captions_ref"],
+      "additionalProperties": false,
+      "properties": {
+        "asset_id": { "type": "string" },
+        "video_asset_ref": { "type": "string" },
+        "duration_seconds": { "type": "number", "minimum": 0 },
+        "render_cost_usd": { "type": "number", "minimum": 0 },
+        "resolution": { "type": "string", "pattern": "^[0-9]+x[0-9]+$" },
+        "captions_ref": { "type": "string" },
+        "render_profile": { "type": "string" }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "cost_usd": { "type": "number" },
+        "model": { "type": "string" },
+        "latency_ms": { "type": "number" }
+      }
+    }
+  }
+}

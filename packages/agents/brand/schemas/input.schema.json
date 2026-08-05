@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ai-media-factory/agents/brand/input.schema.json",
+  "title": "QAReviewed",
+  "description": "Event consumed by the Brand agent from the QA gate. Brand proceeds only when passed is true.",
+  "type": "object",
+  "required": ["schema_version", "event_id", "workflow_id", "timestamp", "type", "source_agent", "target_agent", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "event_id": { "type": "string", "format": "uuid" },
+    "workflow_id": { "type": "string", "format": "uuid" },
+    "correlation_id": { "type": ["string", "null"] },
+    "brand_id": { "type": ["string", "null"] },
+    "asset_id": { "type": ["string", "null"] },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "type": { "type": "string", "const": "QAReviewed" },
+    "source_agent": { "type": "string", "const": "qa" },
+    "target_agent": { "type": "string", "const": "brand" },
+    "payload": {
+      "type": "object",
+      "required": ["asset_id", "passed", "checks"],
+      "additionalProperties": false,
+      "properties": {
+        "asset_id": { "type": "string" },
+        "passed": { "type": "boolean" },
+        "checks": {
+          "type": "object",
+          "required": ["schema_valid", "render_integrity", "duration_ok", "captions_present"],
+          "additionalProperties": false,
+          "properties": {
+            "schema_valid": { "type": "boolean" },
+            "render_integrity": { "type": "boolean" },
+            "duration_ok": { "type": "boolean" },
+            "captions_present": { "type": "boolean" }
+          }
+        },
+        "defects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["check", "description", "severity"],
+            "additionalProperties": false,
+            "properties": {
+              "check": { "type": "string" },
+              "description": { "type": "string" },
+              "severity": { "type": "string", "enum": ["low", "medium", "high", "critical"] }
+            }
+          }
+        },
+        "severity": { "type": "string", "enum": ["none", "low", "medium", "high", "critical"] }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "cost_usd": { "type": "number" },
+        "model": { "type": "string" },
+        "latency_ms": { "type": "number" }
+      }
+    }
+  }
+}

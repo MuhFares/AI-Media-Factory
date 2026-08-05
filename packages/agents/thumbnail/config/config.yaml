@@ -1,0 +1,60 @@
+# Thumbnail Agent — declarative configuration.
+# No secrets here; environment-overridable via configs/environments.
+schema_version: "1.0.0"
+agent:
+  id: thumbnail
+  name: "Thumbnail / Cover Designer"
+  layer: production
+  version: "1.0.0"
+
+model:
+  # Image-generation tier; the Thumbnail agent designs and renders cover imagery.
+  primary: "image-tier-large"
+  fallback: "image-tier-medium"
+  temperature: 0.7
+  max_output_tokens: 2048
+  routing_ref: "../../../configs/models/README.md"
+
+tools:
+  # Render imagery; must not write copy, edit the script, or publish.
+  allow:
+    - company_brain.read
+    - brand.visual.read
+    - media.render
+    - asset.store
+  deny:
+    - script.edit
+    - seo.metadata.edit
+    - publisher.publish
+    - workflow.execute
+
+budgets:
+  # Cost ceiling is per rendered asset; render cost is tracked and reported.
+  max_render_cost_per_asset_usd: 0.50
+  max_thumbnails_per_day: 400
+  enforced_by: finance
+
+guardrails:
+  honest_imagery: true            # the frame reflects the real content
+  no_click_bait: true             # no fabricated or misleading moments
+  respect_brand_visuals: true     # stay inside brand visual guidelines
+  track_render_cost: true         # report actual render_cost_usd per asset
+
+escalation:
+  to: finance
+  triggers:
+    - render_cost_exceeds_configured_cap
+  brand_escalation:
+    to: brand
+    triggers:
+      - highest_click_concept_misrepresents_content
+      - imagery_conflicts_with_brand_safety
+  timeout_seconds: 1800
+
+memory:
+  long_term_ref: "./memory/long_term.md"
+  short_term_ref: "./memory/short_term.md"
+
+io:
+  input_schema: "./schemas/input.schema.json"
+  output_schema: "./schemas/output.schema.json"

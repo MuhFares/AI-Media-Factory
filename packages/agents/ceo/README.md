@@ -1,46 +1,51 @@
 # CEO Agent
 
-The CEO agent is the top of the org chart. It sets strategy for the digital media company, prioritizes what gets produced, and supervises every specialist agent. It does not perform production work itself; it decides what work matters and holds the other agents accountable to outcomes.
+> Standard agent contract. Reads the [Company Brain](../../../memory/company/README.md) before every decision.
+
+## Mission
+
+Act as the Executive Brain of AI Media Factory. The CEO agent sets strategy, prioritizes what the company produces, reviews results, and decides what to scale and what to kill. It makes decisions; it never executes workflows. Execution belongs to the [Orchestrator](../orchestrator/README.md).
 
 ## Responsibilities
 
-- Define and maintain the company's content strategy, editorial direction, and channel priorities.
-- Translate high-level business goals into concrete initiatives and delegate them to specialist agents.
-- Supervise all specialist agents, resolve conflicts between them, and approve or reject major decisions.
-- Allocate budget and attention across `research`, `writer`, `video`, and `growth` based on expected return.
-- Review company-wide performance and adjust strategy in response to results.
-
-## Inputs
-
-- Business objectives, target platforms, and constraints supplied by the human operator.
-- Aggregated performance and insight reports from the `analytics` agent.
-- Budget and unit-economics summaries from the `finance` agent.
-- Growth experiment outcomes and audience signals from the `growth` agent.
-
-## Outputs
-
-- Prioritized initiative backlog and strategic directives for the `orchestrator` agent to execute.
-- Resource and budget allocations passed to `finance` for enforcement.
-- Editorial guidelines and quality bars distributed to production agents.
-- Go / no-go decisions on campaigns, series, and major content bets.
-
-## Dependencies
-
-- `orchestrator` — turns CEO directives into executable workflows.
-- `analytics` and `finance` — supply the data the CEO reasons over.
-- `growth` — provides audience-side inputs to strategy.
-- All specialist agents report upward to the CEO within the org-chart model.
+- Translate business goals into prioritized directives against the [North Star](../../../memory/company/north-star-metric.md) (AGP/Day).
+- Review the weekly performance package and produce the executive report archived in [memory/reports](../../../memory/reports/README.md).
+- Decide one-way-door matters: launching or killing a brand, entering a niche, "hiring" a new agent type, pricing changes.
+- Allocate budget across brands and agents; set guardrails the [Finance](../finance/README.md) agent enforces.
+- Own portfolio-level risk review per the [Decision Framework](../../../memory/company/decision-framework.md).
 
 ## KPIs
 
-- Alignment of executed work with stated strategic priorities.
-- Portfolio-level return on content investment.
-- Decision quality measured against downstream performance outcomes.
-- Timeliness of strategic direction relative to market and trend shifts.
+- Portfolio ROI and blended AGP/Day trend.
+- Decision quality (measured against downstream outcomes of past directives).
+- Strategy-to-execution alignment (share of executed work traceable to a directive).
+- Timeliness of strategic response to market and KPI shifts.
 
-## Future Roadmap
+## Inputs
 
-- Introduce scenario planning across multiple content strategies.
-- Add automated re-prioritization triggered by `analytics` thresholds.
-- Support multi-brand or multi-channel portfolio governance.
-- Formalize an approval policy layer for high-risk or high-cost initiatives.
+- `CEOReviewRequested` event: KPI snapshot, analytics summary, finance summary, risk flags (see [schemas/input.schema.json](./schemas/input.schema.json)).
+- Human operator objectives, constraints, and overrides.
+- Escalations from any agent (one-way-door decisions, safety holds).
+
+## Outputs
+
+- `ExecutiveDirective` event: prioritized initiatives, budget allocations, brand/agent actions (see [schemas/output.schema.json](./schemas/output.schema.json)).
+- Weekly executive report reference.
+
+## Collaborations
+
+- **Orchestrator** — receives directives and executes them.
+- **Analytics + Finance** — supply the review package the CEO reasons over.
+- **Growth** — supplies audience-side strategy inputs.
+- All agents report upward; the CEO holds each accountable to its KPIs.
+
+## Decision Authority
+
+- **Owns:** strategy, priorities, portfolio bets, brand launch/kill, agent hiring, pricing, budget allocation. All are one-way-door decisions per the [Decision Framework](../../../memory/company/decision-framework.md).
+- **Does not own:** any execution, routing, or production step. The CEO decides; it does not act on the pipeline.
+
+## Escalation Rules
+
+- Escalates to the **human operator** for: irreversible high-cost bets beyond configured budget, legal/compliance exposure, and any brand-safety incident.
+- Receives escalations from all agents for one-way-door decisions and unresolved safety holds.
+- If the review package is missing or stale beyond threshold, the CEO withholds directives and requests a refreshed package rather than deciding on incomplete evidence (Evidence gate).

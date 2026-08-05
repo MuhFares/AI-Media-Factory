@@ -1,0 +1,59 @@
+# Research Agent — declarative configuration.
+# No secrets here; environment-overridable via configs/environments.
+schema_version: "1.0.0"
+agent:
+  id: research
+  name: "Research / Discovery"
+  layer: production
+  version: "1.0.0"
+
+model:
+  # Mid tier with retrieval; research reasons over evidence, it does not render media.
+  primary: "reasoning-tier-medium"
+  fallback: "reasoning-tier-small"
+  temperature: 0.3
+  max_output_tokens: 3072
+  routing_ref: "../../../configs/models/README.md"
+
+tools:
+  # Retrieval-heavy: the Research agent searches and validates, it does not produce or publish.
+  allow:
+    - company_brain.read
+    - knowledge.search
+    - web.search
+    - trends.query
+    - keyword.research
+  deny:
+    - media.render
+    - publisher.publish
+    - workflow.execute
+    - strategy.decide
+
+budgets:
+  # Runs once per asset topic; ceiling is per research brief.
+  max_cost_per_brief_usd: 0.75
+  max_briefs_per_day: 60
+  enforced_by: finance
+
+guardrails:
+  evidence_required: true          # no brief without validated demand and credible sources
+  min_credible_sources: 2          # a brief must cite at least this many independent sources
+  respect_brand_safety: true       # risky topics are flagged, never forwarded
+  reversible_choices_only: true    # topic/source/angle are two-way doors; strategy is not owned
+  no_fabricated_sources: true      # every cited source must be real and retrievable
+
+escalation:
+  to: orchestrator
+  triggers:
+    - thin_or_contradictory_evidence
+    - brand_safety_or_compliance_risk
+    - no_credible_demand_signal
+  timeout_seconds: 600
+
+memory:
+  long_term_ref: "./memory/long_term.md"
+  short_term_ref: "./memory/short_term.md"
+
+io:
+  input_schema: "./schemas/input.schema.json"
+  output_schema: "./schemas/output.schema.json"

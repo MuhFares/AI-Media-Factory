@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ai-media-factory/agents/finance/output.schema.json",
+  "title": "FinanceReported",
+  "description": "Event emitted by the Finance agent to the CEO agent with unit economics, the margin verdict, AGP contribution, and budget status.",
+  "type": "object",
+  "required": ["schema_version", "event_id", "workflow_id", "timestamp", "type", "source_agent", "target_agent", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "event_id": { "type": "string", "format": "uuid" },
+    "workflow_id": { "type": "string", "format": "uuid" },
+    "correlation_id": { "type": ["string", "null"] },
+    "brand_id": { "type": "string" },
+    "asset_id": { "type": "string" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "type": { "type": "string", "const": "FinanceReported" },
+    "source_agent": { "type": "string", "const": "finance" },
+    "target_agent": { "type": "string", "const": "ceo" },
+    "payload": {
+      "type": "object",
+      "required": ["asset_id", "brand_id", "revenue", "cost_breakdown", "gross_margin", "agp_contribution", "budget_status"],
+      "additionalProperties": false,
+      "properties": {
+        "asset_id": { "type": "string" },
+        "brand_id": { "type": "string" },
+        "revenue": { "type": "number", "minimum": 0 },
+        "cost_breakdown": {
+          "type": "object",
+          "required": ["model", "render", "storage", "distribution"],
+          "additionalProperties": false,
+          "properties": {
+            "model": { "type": "number", "minimum": 0 },
+            "render": { "type": "number", "minimum": 0 },
+            "storage": { "type": "number", "minimum": 0 },
+            "distribution": { "type": "number", "minimum": 0 }
+          }
+        },
+        "gross_margin": { "type": "number" },
+        "agp_contribution": { "type": "number" },
+        "budget_status": { "type": "string", "enum": ["within", "at_risk", "over"] },
+        "margin_gate": { "type": "string", "enum": ["pass", "fail", "withheld"] },
+        "routing_recommendation": { "type": ["string", "null"] }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "cost_usd": { "type": "number" },
+        "model": { "type": "string" },
+        "latency_ms": { "type": "number" }
+      }
+    }
+  }
+}

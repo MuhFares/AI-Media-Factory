@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ai-media-factory/agents/qa/input.schema.json",
+  "title": "VideoFinished",
+  "description": "Event consumed by the QA agent to trigger a quality-gate review of a finished asset.",
+  "type": "object",
+  "required": ["schema_version", "event_id", "workflow_id", "timestamp", "type", "source_agent", "target_agent", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "event_id": { "type": "string", "format": "uuid" },
+    "workflow_id": { "type": "string", "format": "uuid" },
+    "correlation_id": { "type": ["string", "null"] },
+    "brand_id": { "type": ["string", "null"] },
+    "asset_id": { "type": ["string", "null"] },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "type": { "type": "string", "const": "VideoFinished" },
+    "source_agent": { "type": "string", "const": "video" },
+    "target_agent": { "type": "string", "const": "qa" },
+    "payload": {
+      "type": "object",
+      "required": ["asset_id", "video_asset_ref", "duration_seconds", "captions_ref"],
+      "additionalProperties": false,
+      "properties": {
+        "asset_id": { "type": "string" },
+        "video_asset_ref": { "type": "string" },
+        "duration_seconds": { "type": "number", "minimum": 0 },
+        "captions_ref": { "type": ["string", "null"] }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "cost_usd": { "type": "number" },
+        "model": { "type": "string" },
+        "latency_ms": { "type": "number" }
+      }
+    }
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ai-media-factory/agents/brand/output.schema.json",
+  "title": "PublishApproved",
+  "description": "Event emitted by the Brand agent to the Publisher, carrying both QA and Brand approvals. Only emitted when the asset is on-voice, brand-safe, and compliant.",
+  "type": "object",
+  "required": ["schema_version", "event_id", "workflow_id", "timestamp", "type", "source_agent", "target_agent", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "event_id": { "type": "string", "format": "uuid" },
+    "workflow_id": { "type": "string", "format": "uuid" },
+    "correlation_id": { "type": ["string", "null"] },
+    "brand_id": { "type": ["string", "null"] },
+    "asset_id": { "type": ["string", "null"] },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "type": { "type": "string", "const": "PublishApproved" },
+    "source_agent": { "type": "string", "const": "brand" },
+    "target_agent": { "type": "string", "const": "publisher" },
+    "payload": {
+      "type": "object",
+      "required": ["asset_id", "platforms", "approvals", "brand_safety"],
+      "additionalProperties": false,
+      "properties": {
+        "asset_id": { "type": "string" },
+        "platforms": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["youtube", "tiktok", "instagram", "blog", "email"] },
+          "minItems": 1
+        },
+        "approvals": {
+          "type": "object",
+          "required": ["brand", "qa"],
+          "additionalProperties": false,
+          "properties": {
+            "brand": { "type": "boolean", "const": true },
+            "qa": { "type": "boolean", "const": true }
+          }
+        },
+        "brand_safety": {
+          "type": "object",
+          "required": ["safe", "checks"],
+          "additionalProperties": false,
+          "properties": {
+            "safe": { "type": "boolean", "const": true },
+            "checks": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "voice_conformance_score": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "cost_usd": { "type": "number" },
+        "model": { "type": "string" },
+        "latency_ms": { "type": "number" }
+      }
+    }
+  }
+}

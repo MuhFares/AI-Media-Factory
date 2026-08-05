@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ai-media-factory/agents/video/input.schema.json",
+  "title": "ThumbnailFinished",
+  "description": "Event consumed by the Video agent to trigger a render cycle.",
+  "type": "object",
+  "required": ["schema_version", "event_id", "workflow_id", "timestamp", "type", "source_agent", "target_agent", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "event_id": { "type": "string", "format": "uuid" },
+    "workflow_id": { "type": "string", "format": "uuid" },
+    "correlation_id": { "type": ["string", "null"] },
+    "brand_id": { "type": ["string", "null"] },
+    "asset_id": { "type": ["string", "null"] },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "type": { "type": "string", "const": "ThumbnailFinished" },
+    "source_agent": { "type": "string" },
+    "target_agent": { "type": "string", "const": "video" },
+    "payload": {
+      "type": "object",
+      "required": ["thumbnail_asset_ref", "concept"],
+      "additionalProperties": false,
+      "properties": {
+        "thumbnail_asset_ref": { "type": "string" },
+        "variants": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["variant_id", "asset_ref"],
+            "properties": {
+              "variant_id": { "type": "string" },
+              "asset_ref": { "type": "string" },
+              "label": { "type": "string" }
+            }
+          }
+        },
+        "concept": {
+          "type": "object",
+          "required": ["summary"],
+          "additionalProperties": false,
+          "properties": {
+            "summary": { "type": "string" },
+            "target_duration_seconds": { "type": "number", "minimum": 0 },
+            "pacing": { "type": "string", "enum": ["slow", "moderate", "upbeat"] },
+            "script_ref": { "type": "string" },
+            "audio_ref": { "type": "string" },
+            "source_visuals_ref": { "type": "string" }
+          }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "cost_usd": { "type": "number" },
+        "model": { "type": "string" },
+        "latency_ms": { "type": "number" }
+      }
+    }
+  }
+}

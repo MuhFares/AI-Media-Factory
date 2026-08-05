@@ -1,0 +1,87 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ai-media-factory/agents/research/output.schema.json",
+  "title": "ResearchFinished",
+  "description": "Event emitted by the Research agent to the Writer with a validated, evidence-backed research brief.",
+  "type": "object",
+  "required": ["schema_version", "event_id", "workflow_id", "timestamp", "type", "source_agent", "target_agent", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "event_id": { "type": "string", "format": "uuid" },
+    "workflow_id": { "type": "string", "format": "uuid" },
+    "correlation_id": { "type": ["string", "null"] },
+    "brand_id": { "type": ["string", "null"] },
+    "asset_id": { "type": ["string", "null"] },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "type": { "type": "string", "const": "ResearchFinished" },
+    "source_agent": { "type": "string", "const": "research" },
+    "target_agent": { "type": "string", "const": "writer" },
+    "payload": {
+      "type": "object",
+      "required": ["topic", "demand_signals", "sources", "key_points", "angle", "keyword_seeds"],
+      "additionalProperties": false,
+      "properties": {
+        "topic": {
+          "type": "object",
+          "required": ["title", "validated"],
+          "additionalProperties": false,
+          "properties": {
+            "title": { "type": "string" },
+            "validated": { "type": "boolean" },
+            "brand_id": { "type": "string" }
+          }
+        },
+        "demand_signals": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["signal", "value"],
+            "additionalProperties": false,
+            "properties": {
+              "signal": { "type": "string", "enum": ["search_volume", "trend_trajectory", "audience_interest", "competition"] },
+              "value": { "type": ["string", "number"] },
+              "source": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "sources": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "required": ["url", "credibility"],
+            "additionalProperties": false,
+            "properties": {
+              "url": { "type": "string", "format": "uri" },
+              "title": { "type": ["string", "null"] },
+              "credibility": { "type": "string", "enum": ["low", "medium", "high"] },
+              "retrieved_at": { "type": ["string", "null"], "format": "date-time" }
+            }
+          }
+        },
+        "key_points": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "angle": { "type": "string" },
+        "keyword_seeds": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "ice_score": { "type": ["number", "null"] }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "cost_usd": { "type": "number" },
+        "model": { "type": "string" },
+        "latency_ms": { "type": "number" }
+      }
+    }
+  }
+}

@@ -1,0 +1,58 @@
+# Analytics Agent — declarative configuration.
+# No secrets here; environment-overridable via configs/environments.
+schema_version: "1.0.0"
+agent:
+  id: analytics
+  name: "Analytics / Measurement"
+  layer: feedback
+  version: "1.0.0"
+
+model:
+  # Mid-tier reasoning; work is high-frequency, structured measurement and attribution.
+  primary: "reasoning-tier-medium"
+  fallback: "reasoning-tier-small"
+  temperature: 0.1
+  max_output_tokens: 3072
+  routing_ref: "../../../configs/models/README.md"
+
+tools:
+  # Read platform data, compute metrics, write lessons. No production or spend.
+  allow:
+    - company_brain.read
+    - analytics.query
+    - database.query
+    - knowledge.search
+    - knowledge.write
+  deny:
+    - media.render
+    - publisher.publish
+    - finance.write
+    - workflow.execute
+
+budgets:
+  # High-frequency, low-cost measurement; ceiling is per report.
+  max_cost_per_report_usd: 0.50
+  max_reports_per_day: 500
+  enforced_by: finance
+
+guardrails:
+  measurement_only: true          # Analytics never acts on the pipeline
+  require_evidence: true          # no metric reported without a substantiating source
+  document_attribution: true      # every attribution method is versioned and explicit
+  no_metric_without_source: true  # unverifiable metrics are flagged, not emitted
+
+escalation:
+  to: ceo
+  triggers:
+    - data_quality_gap
+    - attribution_gap
+    - tracking_or_feed_outage
+  timeout_seconds: 1800
+
+memory:
+  long_term_ref: "./memory/long_term.md"
+  short_term_ref: "./memory/short_term.md"
+
+io:
+  input_schema: "./schemas/input.schema.json"
+  output_schema: "./schemas/output.schema.json"

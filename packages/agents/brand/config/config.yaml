@@ -1,0 +1,56 @@
+# Brand Agent — declarative configuration.
+# No secrets here; environment-overridable via configs/environments.
+schema_version: "1.0.0"
+agent:
+  id: brand
+  name: "Brand & Safety Gate"
+  layer: gate
+  version: "1.0.0"
+
+model:
+  # Careful, conservative judgment on voice and safety.
+  primary: "reasoning-tier-large"
+  fallback: "reasoning-tier-medium"
+  temperature: 0.1
+  max_output_tokens: 2048
+  routing_ref: "../../../configs/models/README.md"
+
+tools:
+  allow:
+    - company_brain.read
+    - brand_guidelines.read
+    - citation.check
+    - platform_policy.read
+  deny:
+    - media.render
+    - publisher.publish        # Brand approves; it does not itself publish
+    - workflow.execute
+
+budgets:
+  max_cost_per_review_usd: 0.50
+  enforced_by: finance
+
+guardrails:
+  brand_safety_is_absolute: true      # a safety failure is ALWAYS a hold, never traded for profit/speed
+  require_qa_pass: true               # will not proceed unless QAReviewed.passed == true
+  enforce_voice: true                 # scores voice conformance against brand-guidelines
+  require_citation_support: true      # unsupported factual claims are held
+  when_in_doubt_hold: true            # ambiguous calls escalate rather than approve
+
+escalation:
+  to: [producing_agent, ceo, human_operator]
+  triggers:
+    - brand_safety_incident           # -> ceo / human (one-way door)
+    - compliance_or_legal_exposure    # -> ceo / human
+    - off_voice_or_off_brand          # -> producing agent (writer/seo/thumbnail) for rework
+    - qa_not_passed                   # -> do not proceed
+    - ambiguous_call                  # -> hold and escalate
+  timeout_seconds: 3600
+
+memory:
+  long_term_ref: "./memory/long_term.md"
+  short_term_ref: "./memory/short_term.md"
+
+io:
+  input_schema: "./schemas/input.schema.json"
+  output_schema: "./schemas/output.schema.json"

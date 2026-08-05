@@ -1,0 +1,60 @@
+# Growth Agent — declarative configuration.
+# No secrets here; environment-overridable via configs/environments.
+schema_version: "1.0.0"
+agent:
+  id: growth
+  name: "Growth / Experimentation"
+  layer: feedback
+  version: "1.0.0"
+
+model:
+  # Mid-tier reasoning; hypothesis design, test evaluation, and playbook synthesis.
+  primary: "reasoning-tier-medium"
+  fallback: "reasoning-tier-small"
+  temperature: 0.3
+  max_output_tokens: 3072
+  routing_ref: "../../../configs/models/README.md"
+
+tools:
+  # Read analytics and experiment history, run reversible tests, write playbooks. No pipeline execution.
+  allow:
+    - company_brain.read
+    - analytics.query
+    - experiments.query
+    - experiments.run
+    - knowledge.search
+    - playbooks.write
+  deny:
+    - media.render
+    - publisher.publish
+    - workflow.execute
+    - channel.launch
+
+budgets:
+  # Experiments are cheap and frequent; spend on tests is bounded per experiment.
+  max_cost_per_experiment_usd: 20.00
+  max_experiments_per_day: 25
+  enforced_by: finance
+
+guardrails:
+  reversible_only: true           # Growth runs only two-way-door tests; expansion is proposed
+  require_hypothesis: true        # every test names a target metric and guardrails
+  require_statistical_support: true  # no win claimed on an underpowered or noisy test
+  respect_margin: true            # a reach win that breaks unit economics is not a win
+  respect_brand_safety: true      # safety bounds cannot be overridden for growth
+
+escalation:
+  to: ceo
+  triggers:
+    - channel_or_niche_expansion
+    - guardrail_breach
+    - experiment_conflicts_with_running_test
+  timeout_seconds: 1800
+
+memory:
+  long_term_ref: "./memory/long_term.md"
+  short_term_ref: "./memory/short_term.md"
+
+io:
+  input_schema: "./schemas/input.schema.json"
+  output_schema: "./schemas/output.schema.json"

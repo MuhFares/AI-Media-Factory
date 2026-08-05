@@ -1,0 +1,26 @@
+{
+  "name": "@ai-media-factory/tool-framework",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tool Execution Framework — safe, policy-governed tool execution for AI agents. Contracts and architecture only.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@ai-media-factory/memory-engine": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}

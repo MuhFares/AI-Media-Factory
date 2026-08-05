@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ai-media-factory/agents/thumbnail/input.schema.json",
+  "title": "SEOFinished",
+  "description": "Event consumed by the Thumbnail agent: the discovery metadata emitted by the SEO agent.",
+  "type": "object",
+  "required": ["schema_version", "event_id", "workflow_id", "timestamp", "type", "source_agent", "target_agent", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "event_id": { "type": "string", "format": "uuid" },
+    "workflow_id": { "type": "string", "format": "uuid" },
+    "correlation_id": { "type": ["string", "null"] },
+    "brand_id": { "type": ["string", "null"] },
+    "asset_id": { "type": ["string", "null"] },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "type": { "type": "string", "const": "SEOFinished" },
+    "source_agent": { "type": "string", "const": "seo" },
+    "target_agent": { "type": "string", "const": "thumbnail" },
+    "payload": {
+      "type": "object",
+      "required": ["title", "description", "tags", "keywords", "chapters", "metadata"],
+      "additionalProperties": false,
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "keywords": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["term", "relevance"],
+            "properties": {
+              "term": { "type": "string" },
+              "relevance": { "type": "number", "minimum": 0, "maximum": 1 },
+              "opportunity": { "type": "number", "minimum": 0, "maximum": 1 }
+            }
+          }
+        },
+        "chapters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["title", "start_seconds"],
+            "properties": {
+              "title": { "type": "string" },
+              "start_seconds": { "type": "number", "minimum": 0 }
+            }
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "required": ["platform"],
+          "additionalProperties": false,
+          "properties": {
+            "platform": { "type": "string" },
+            "primary_keyword": { "type": "string" },
+            "language": { "type": "string" }
+          }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "cost_usd": { "type": "number" },
+        "model": { "type": "string" },
+        "latency_ms": { "type": "number" }
+      }
+    }
+  }
+}

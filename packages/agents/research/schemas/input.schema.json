@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ai-media-factory/agents/research/input.schema.json",
+  "title": "TaskDispatched",
+  "description": "Event consumed by the Research agent from the Orchestrator to trigger a research-and-validate cycle. Mirrors the Orchestrator output envelope, targeted at research.",
+  "type": "object",
+  "required": ["schema_version", "event_id", "workflow_id", "timestamp", "type", "source_agent", "target_agent", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "event_id": { "type": "string", "format": "uuid" },
+    "workflow_id": { "type": "string", "format": "uuid" },
+    "correlation_id": { "type": ["string", "null"] },
+    "brand_id": { "type": ["string", "null"] },
+    "asset_id": { "type": ["string", "null"] },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "type": { "type": "string", "const": "TaskDispatched" },
+    "source_agent": { "type": "string", "const": "orchestrator" },
+    "target_agent": { "type": "string", "const": "research" },
+    "payload": {
+      "type": "object",
+      "required": ["stage", "brand_id", "task", "retry_policy"],
+      "additionalProperties": false,
+      "properties": {
+        "stage": { "type": "string", "const": "research" },
+        "brand_id": { "type": "string" },
+        "task": {
+          "type": "object",
+          "required": ["description"],
+          "additionalProperties": false,
+          "properties": {
+            "description": { "type": "string" },
+            "topic_seed": { "type": ["string", "null"] },
+            "inputs": { "type": "object" },
+            "budget_ceiling_usd": { "type": ["number", "null"], "minimum": 0 },
+            "depends_on_event_id": { "type": ["string", "null"], "format": "uuid" }
+          }
+        },
+        "retry_policy": {
+          "type": "object",
+          "required": ["max_attempts", "attempt", "backoff"],
+          "additionalProperties": false,
+          "properties": {
+            "max_attempts": { "type": "integer", "minimum": 1 },
+            "attempt": { "type": "integer", "minimum": 1 },
+            "backoff": { "type": "string", "enum": ["none", "fixed", "exponential"] },
+            "dead_letter_on_exhaustion": { "type": "boolean" }
+          }
+        },
+        "checkpoint_ref": { "type": ["string", "null"] }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "cost_usd": { "type": "number" },
+        "model": { "type": "string" },
+        "latency_ms": { "type": "number" }
+      }
+    }
+  }
+}

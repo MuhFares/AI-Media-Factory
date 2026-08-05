@@ -1,0 +1,60 @@
+# Publisher Agent — declarative configuration.
+# No secrets here; environment-overridable via configs/environments.
+schema_version: "1.0.0"
+agent:
+  id: publisher
+  name: "Publisher / Distribution"
+  layer: production
+  version: "1.0.0"
+
+model:
+  # Mid-tier reasoning for scheduling and platform-timing decisions; work is I/O-bound distribution.
+  primary: "reasoning-tier-medium"
+  fallback: "reasoning-tier-small"
+  temperature: 0.2
+  max_output_tokens: 2048
+  routing_ref: "../../../configs/models/README.md"
+
+tools:
+  # Distribution-focused: the Publisher schedules and publishes approved assets only.
+  allow:
+    - company_brain.read
+    - publisher.publish
+    - scheduler.write
+    - knowledge.search
+  deny:
+    - media.render
+    - workflow.execute
+    - brand.approve       # cannot grant its own approvals
+    - qa.approve
+
+budgets:
+  max_publishes_per_day: 500
+  max_platforms_per_asset: 8
+  enforced_by: finance
+
+guardrails:
+  production_only: true                 # Publisher distributes; it does not set strategy
+  require_both_approvals: true          # HARD GATE: brand:true AND qa:true or no publish
+  no_publish_without_approval: true     # missing either approval => hold-and-escalate
+  respect_brand_safety: true            # safety and brand integrity are a hard line
+  respect_platform_policy: true         # honor per-platform rules and rate limits
+  final_quality_gate_owner: true        # Publisher owns the last content-quality gate
+
+escalation:
+  missing_approval_to: brand            # hard-gate holds route to brand/qa gate owners
+  platform_policy_risk_to: brand
+  repeated_failure_to: orchestrator
+  triggers:
+    - missing_brand_or_qa_approval
+    - platform_policy_risk
+    - repeated_publish_failure
+  timeout_seconds: 1800
+
+memory:
+  long_term_ref: "./memory/long_term.md"
+  short_term_ref: "./memory/short_term.md"
+
+io:
+  input_schema: "./schemas/input.schema.json"
+  output_schema: "./schemas/output.schema.json"

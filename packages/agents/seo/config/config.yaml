@@ -1,0 +1,58 @@
+# SEO Agent — declarative configuration.
+# No secrets here; environment-overridable via configs/environments.
+schema_version: "1.0.0"
+agent:
+  id: seo
+  name: "SEO / Discovery Optimizer"
+  layer: production
+  version: "1.0.0"
+
+model:
+  # Balanced language tier; the SEO agent reasons over text and ranks terms.
+  primary: "language-tier-medium"
+  fallback: "language-tier-small"
+  temperature: 0.4
+  max_output_tokens: 4096
+  routing_ref: "../../../configs/models/README.md"
+
+tools:
+  # Read the script, query keyword data; must not edit the script, render, or publish.
+  allow:
+    - company_brain.read
+    - brand.voice.read
+    - keyword.research
+    - knowledge.search
+    - metadata.write
+  deny:
+    - script.edit
+    - media.render
+    - publisher.publish
+    - workflow.execute
+
+budgets:
+  # Cost ceiling is per optimized asset.
+  max_cost_per_asset_usd: 0.15
+  max_assets_per_day: 400
+  enforced_by: finance
+
+guardrails:
+  never_alter_script: true        # optimization operates on metadata only
+  honest_titles: true             # title and description match the real promise
+  no_keyword_stuffing: true       # relevance over density
+  qualified_reach_over_clicks: true
+
+escalation:
+  to: brand
+  triggers:
+    - optimization_would_drift_voice
+    - highest_reach_title_overstates_content
+    - promise_and_metadata_cannot_reconcile_honestly
+  timeout_seconds: 1800
+
+memory:
+  long_term_ref: "./memory/long_term.md"
+  short_term_ref: "./memory/short_term.md"
+
+io:
+  input_schema: "./schemas/input.schema.json"
+  output_schema: "./schemas/output.schema.json"

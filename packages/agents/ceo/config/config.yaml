@@ -1,0 +1,57 @@
+# CEO Agent — declarative configuration.
+# No secrets here; environment-overridable via configs/environments.
+schema_version: "1.0.0"
+agent:
+  id: ceo
+  name: "CEO / Executive Brain"
+  layer: executive
+  version: "1.0.0"
+
+model:
+  # Highest-reasoning tier; the CEO makes low-frequency, high-stakes decisions.
+  primary: "reasoning-tier-large"
+  fallback: "reasoning-tier-medium"
+  temperature: 0.2
+  max_output_tokens: 4096
+  routing_ref: "../../../configs/models/README.md"
+
+tools:
+  # Read-heavy: the CEO analyzes and decides, it does not produce media.
+  allow:
+    - company_brain.read
+    - analytics.query
+    - finance.query
+    - knowledge.search
+    - report.write
+  deny:
+    - media.render
+    - publisher.publish
+    - workflow.execute
+
+budgets:
+  # The CEO reasons infrequently; cost ceiling is per weekly review cycle.
+  max_cost_per_review_usd: 5.00
+  max_reviews_per_day: 2
+  enforced_by: finance
+
+guardrails:
+  decisions_only: true            # CEO must not execute workflows
+  require_evidence: true          # no directive without a review package
+  respect_brand_safety: true      # safety gate cannot be overridden for profit
+  record_one_way_doors: true      # every irreversible decision is written to a decision record
+
+escalation:
+  to: human_operator
+  triggers:
+    - budget_exceeds_configured_cap
+    - legal_or_compliance_exposure
+    - brand_safety_incident
+  timeout_seconds: 3600
+
+memory:
+  long_term_ref: "./memory/long_term.md"
+  short_term_ref: "./memory/short_term.md"
+
+io:
+  input_schema: "./schemas/input.schema.json"
+  output_schema: "./schemas/output.schema.json"

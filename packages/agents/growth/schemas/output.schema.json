@@ -1,0 +1,84 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ai-media-factory/agents/growth/output.schema.json",
+  "title": "GrowthProposed",
+  "description": "Event emitted by the Growth agent to the CEO agent with proposed experiments, winning tactics, and channel-expansion proposals.",
+  "type": "object",
+  "required": ["schema_version", "event_id", "workflow_id", "timestamp", "type", "source_agent", "target_agent", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "event_id": { "type": "string", "format": "uuid" },
+    "workflow_id": { "type": "string", "format": "uuid" },
+    "correlation_id": { "type": ["string", "null"] },
+    "brand_id": { "type": ["string", "null"] },
+    "asset_id": { "type": ["string", "null"] },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "type": { "type": "string", "const": "GrowthProposed" },
+    "source_agent": { "type": "string", "const": "growth" },
+    "target_agent": { "type": "string", "const": "ceo" },
+    "payload": {
+      "type": "object",
+      "required": ["experiments"],
+      "additionalProperties": false,
+      "properties": {
+        "experiments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["hypothesis", "metric", "guardrails"],
+            "additionalProperties": false,
+            "properties": {
+              "hypothesis": { "type": "string" },
+              "metric": { "type": "string" },
+              "guardrails": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "spend_cap_usd": { "type": "number", "minimum": 0 },
+                  "min_sample": { "type": "number", "minimum": 0 },
+                  "stop_conditions": { "type": "array", "items": { "type": "string" } }
+                }
+              },
+              "door_type": { "type": "string", "enum": ["one_way", "two_way"] },
+              "status": { "type": "string", "enum": ["proposed", "running", "won", "inconclusive", "paused"] }
+            }
+          }
+        },
+        "winning_tactics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["tactic", "metric", "lift"],
+            "properties": {
+              "tactic": { "type": "string" },
+              "metric": { "type": "string" },
+              "lift": { "type": "number" },
+              "playbook_ref": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "channel_expansion_proposals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["channel", "rationale"],
+            "properties": {
+              "channel": { "type": "string" },
+              "rationale": { "type": "string" },
+              "evidence_ref": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "cost_usd": { "type": "number" },
+        "model": { "type": "string" },
+        "latency_ms": { "type": "number" }
+      }
+    }
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ai-media-factory/agents/analytics/output.schema.json",
+  "title": "AnalyticsReported",
+  "description": "Event emitted by the Analytics agent to the Finance agent with measured performance, attributed revenue, insights, and a lessons reference.",
+  "type": "object",
+  "required": ["schema_version", "event_id", "workflow_id", "timestamp", "type", "source_agent", "target_agent", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "event_id": { "type": "string", "format": "uuid" },
+    "workflow_id": { "type": "string", "format": "uuid" },
+    "correlation_id": { "type": ["string", "null"] },
+    "brand_id": { "type": ["string", "null"] },
+    "asset_id": { "type": "string" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "type": { "type": "string", "const": "AnalyticsReported" },
+    "source_agent": { "type": "string", "const": "analytics" },
+    "target_agent": { "type": "string", "const": "finance" },
+    "payload": {
+      "type": "object",
+      "required": ["asset_id", "metrics", "revenue_attributed"],
+      "additionalProperties": false,
+      "properties": {
+        "asset_id": { "type": "string" },
+        "metrics": {
+          "type": "object",
+          "required": ["views", "watch_time", "ctr", "retention", "conversions"],
+          "additionalProperties": false,
+          "properties": {
+            "views": { "type": ["number", "null"], "minimum": 0 },
+            "watch_time": { "type": ["number", "null"], "minimum": 0 },
+            "ctr": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+            "retention": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+            "conversions": { "type": ["number", "null"], "minimum": 0 }
+          }
+        },
+        "revenue_attributed": { "type": ["number", "null"], "minimum": 0 },
+        "insights": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["insight"],
+            "properties": {
+              "insight": { "type": "string" },
+              "evidence": { "type": "string" },
+              "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+            }
+          }
+        },
+        "lessons_written_ref": { "type": ["string", "null"] }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "cost_usd": { "type": "number" },
+        "model": { "type": "string" },
+        "latency_ms": { "type": "number" }
+      }
+    }
+  }
+}

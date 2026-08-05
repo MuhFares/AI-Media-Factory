@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ai-media-factory/agents/writer/input.schema.json",
+  "title": "ResearchFinished",
+  "description": "Event consumed by the Writer agent to produce a script from a validated research brief.",
+  "type": "object",
+  "required": ["schema_version", "event_id", "workflow_id", "timestamp", "type", "source_agent", "target_agent", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "event_id": { "type": "string", "format": "uuid" },
+    "workflow_id": { "type": "string", "format": "uuid" },
+    "correlation_id": { "type": ["string", "null"] },
+    "brand_id": { "type": ["string", "null"] },
+    "asset_id": { "type": ["string", "null"] },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "type": { "type": "string", "const": "ResearchFinished" },
+    "source_agent": { "type": "string" },
+    "target_agent": { "type": "string", "const": "writer" },
+    "payload": {
+      "type": "object",
+      "required": ["topic", "key_points", "sources", "angle"],
+      "additionalProperties": false,
+      "properties": {
+        "topic": { "type": "string" },
+        "demand_signals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["signal", "strength"],
+            "properties": {
+              "signal": { "type": "string" },
+              "strength": { "type": "number", "minimum": 0, "maximum": 1 }
+            }
+          }
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["url", "title"],
+            "properties": {
+              "url": { "type": "string" },
+              "title": { "type": "string" },
+              "credibility": { "type": "string", "enum": ["low", "medium", "high"] }
+            }
+          }
+        },
+        "key_points": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["point"],
+            "properties": {
+              "point": { "type": "string" },
+              "source_ref": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "angle": { "type": "string" },
+        "keyword_seeds": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "cost_usd": { "type": "number" },
+        "model": { "type": "string" },
+        "latency_ms": { "type": "number" }
+      }
+    }
+  }
+}

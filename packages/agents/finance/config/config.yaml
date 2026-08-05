@@ -1,0 +1,61 @@
+# Finance Agent — declarative configuration.
+# No secrets here; environment-overridable via configs/environments.
+schema_version: "1.0.0"
+agent:
+  id: finance
+  name: "Finance / Financial Controller"
+  layer: feedback
+  version: "1.0.0"
+
+model:
+  # Mid-tier reasoning; structured reconciliation, margin math, and routing recommendations.
+  primary: "reasoning-tier-medium"
+  fallback: "reasoning-tier-small"
+  temperature: 0.1
+  max_output_tokens: 3072
+  routing_ref: "../../../configs/models/README.md"
+
+tools:
+  # Read revenue and cost feeds, compute economics, enforce budgets. No production.
+  allow:
+    - company_brain.read
+    - analytics.query
+    - finance.query
+    - database.query
+    - budget.enforce
+    - knowledge.search
+  deny:
+    - media.render
+    - publisher.publish
+    - workflow.execute
+    - pricing.set
+
+budgets:
+  # The controller itself reasons cheaply and frequently; ceiling is per report.
+  max_cost_per_report_usd: 0.50
+  max_reports_per_day: 500
+  # Finance is the enforcer of every other agent's budget, not just its own.
+  enforces_budgets_for: all_agents
+
+guardrails:
+  control_only: true              # Finance enforces and recommends; it does not strategize
+  owns_margin_gate: true          # the Margin gate is Finance's to apply on every asset
+  require_reconciliation: true    # revenue must reconcile before a margin verdict is issued
+  no_negative_margin_without_mandate: true  # negative unit economics require a CEO investment rationale
+  safety_over_cost: true          # routing never trades brand safety or quality for cost
+
+escalation:
+  to: ceo
+  triggers:
+    - budget_overrun
+    - negative_unit_economics
+    - revenue_cost_reconciliation_gap
+  timeout_seconds: 1800
+
+memory:
+  long_term_ref: "./memory/long_term.md"
+  short_term_ref: "./memory/short_term.md"
+
+io:
+  input_schema: "./schemas/input.schema.json"
+  output_schema: "./schemas/output.schema.json"

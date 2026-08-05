@@ -1,0 +1,30 @@
+{
+  "name": "@ai-media-factory/workflow-engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Workflow orchestration layer — owns execution state and coordinates all AI workflows over the Runtime, Event Bus, and Memory Engine. Contracts and architecture only.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@ai-media-factory/runtime": "*",
+    "@ai-media-factory/memory-engine": "*",
+    "@ai-media-factory/context-engine": "*",
+    "@ai-media-factory/tool-framework": "*",
+    "@ai-media-factory/evaluation-framework": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}

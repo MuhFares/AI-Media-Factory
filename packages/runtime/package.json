@@ -1,0 +1,31 @@
+{
+  "name": "@ai-media-factory/runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Generic, agent-agnostic execution engine that runs every AI Media Factory agent. Contracts and architecture only.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@ai-media-factory/providers": "*",
+    "@ai-media-factory/memory-engine": "*",
+    "@ai-media-factory/prompt-compiler": "*",
+    "@ai-media-factory/context-engine": "*",
+    "@ai-media-factory/tool-framework": "*",
+    "@ai-media-factory/evaluation-framework": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}

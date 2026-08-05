@@ -1,45 +1,54 @@
 # Orchestrator Agent
 
-The orchestrator agent maps the org chart onto concrete runtime workflow execution. It takes the CEO's directives and turns them into ordered, coordinated work across the specialist agents, managing task routing, hand-offs, retries, and completion. It is the runtime counterpart to `apps/orchestrator`.
+> Standard agent contract. Reads the [Company Brain](../../../memory/company/README.md) before every run.
+
+## Mission
+
+Act as the Execution Brain of AI Media Factory. The Orchestrator turns strategic directives into coordinated, event-driven execution. It decides *how* and *when* work runs across the pipeline; it never decides *what* to make or *whether* a bet is worth taking. Strategy belongs to the [CEO](../ceo/README.md); production belongs to the specialist agents. The Orchestrator is the conductor that keeps every [North Star](../../../memory/company/north-star-metric.md) (AGP/Day) driver moving reliably.
 
 ## Responsibilities
 
-- Compose specialist agents into end-to-end content production workflows.
-- Route tasks to the correct agent and manage hand-offs between pipeline stages.
-- Track workflow state, handle retries, timeouts, and failure recovery.
-- Enforce ordering and dependencies between steps such as research before writing, writing before video.
-- Emit execution telemetry for observability and downstream analysis.
-
-## Inputs
-
-- Prioritized initiatives and strategic directives from the `ceo` agent.
-- Agent contracts and capability declarations from each specialist agent's `config/`.
-- Runtime signals such as task completion, errors, and resource availability.
-
-## Outputs
-
-- Executable workflow runs with per-step task assignments.
-- Completed pipeline artifacts routed to the `publisher` agent.
-- Execution logs and status events consumed by the `analytics` agent.
-- Failure and escalation notices routed back to the `ceo` agent.
-
-## Dependencies
-
-- `ceo` — source of directives to execute.
-- All specialist agents — the workers the orchestrator coordinates.
-- `apps/orchestrator` — the application that implements this contract at runtime using LangGraph, CrewAI, and MCP.
-- `packages/database` — persistence for workflow state.
+- Decompose each `ExecutiveDirective` from the [CEO](../ceo/README.md) into concrete workflows and dispatch tasks to the right specialist agents.
+- Own runtime routing: pick the next stage, the target agent, and the order of the pipeline (Research -> Writer -> SEO -> Thumbnail -> Video -> gates -> Publisher).
+- Manage retries with backoff, idempotent re-dispatch, and dead-lettering of tasks that exhaust their retry budget.
+- Enforce the [Brand](../brand/README.md) and [QA](../qa/README.md) gates as routing checkpoints before an asset advances.
+- Maintain workflow state, correlation ids, and resumable [checkpoints](../../../memory/checkpoints/README.md) so a stuck step never silently halts the pipeline.
+- Raise Autonomy Rate by resolving transient failures itself and escalating only what genuinely needs a human or the CEO.
 
 ## KPIs
 
-- Workflow completion rate and end-to-end latency.
-- Task routing accuracy and hand-off success rate.
-- Recovery rate from transient failures without human intervention.
-- Resource efficiency per completed content unit.
+- Autonomy Rate (share of workflow steps completed with no human involvement).
+- Throughput: profitable-eligible assets moved through the pipeline per day.
+- Reliability: successful task completion rate and mean retries-to-success.
+- Dead-letter rate and mean time to detect and escalate a stuck workflow.
+- Directive-to-execution latency (time from `ExecutiveDirective` to first `TaskDispatched`).
 
-## Future Roadmap
+## Inputs
 
-- Add dynamic workflow graphs that adapt based on intermediate results.
-- Support parallel and speculative execution of independent branches.
-- Introduce cost-aware scheduling in coordination with the `finance` agent.
-- Provide replay and debugging of past workflow runs.
+- `ExecutiveDirective` event: prioritized initiatives, decisions, budget allocations from the CEO (see [schemas/input.schema.json](./schemas/input.schema.json)).
+- Completion and failure events emitted by specialist agents on the bus.
+- Escalations and overrides from the human operator.
+
+## Outputs
+
+- `TaskDispatched` event: a single task routed to a specialist agent with stage, `brand_id`, and retry policy (see [schemas/output.schema.json](./schemas/output.schema.json)).
+- Dead-letter records and escalation notices for stuck or exhausted workflows.
+- Workflow state and checkpoint updates.
+
+## Collaborations
+
+- **CEO** — receives directives from and escalates stuck/dead-lettered workflows to.
+- **Research, Writer, SEO, Thumbnail, Video, Publisher** — receives dispatched tasks and reports completion.
+- **Brand + QA** — routes assets through as mandatory gates before advancing.
+- **Finance** — respects the budget allocations and cost limits the directive carries.
+
+## Decision Authority
+
+- **Owns:** runtime execution decisions only — routing, sequencing, retry policy, backoff, idempotency, dead-lettering, and checkpoint/resume. All are two-way-door operational calls per the [Decision Framework](../../../memory/company/decision-framework.md).
+- **Does not own:** any strategy, prioritization, brand launch/kill, pricing, or "hiring." The Orchestrator executes directives; it never rewrites them. It also does not produce media.
+
+## Escalation Rules
+
+- Escalates to the **CEO / human operator** when a workflow is stuck or dead-lettered beyond its retry budget, when a directive is internally inconsistent or references an unknown agent/brand, and when a gate hold cannot be cleared by re-dispatch.
+- Escalates to the **human operator** for infrastructure-level failures (bus outage, checkpoint corruption) that block the whole pipeline.
+- If an `ExecutiveDirective` is invalid or references budgets/agents that do not exist, the Orchestrator dispatches nothing and returns the directive for correction rather than guessing at execution (Evidence gate).
