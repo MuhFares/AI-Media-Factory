@@ -48,6 +48,7 @@ export type { ProviderLogger } from './provider.js';
 export { BaseLlmProvider, noopLogger } from './provider.js';
 
 export { OpenRouterProvider } from './openrouter.js';
+export { AlibabaProvider } from './alibaba.js';
 
 // Backwards-compat shim for consumers that previously imported from './types'.
 export type * from './types.js';

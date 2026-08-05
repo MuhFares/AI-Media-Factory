@@ -12,12 +12,13 @@
             "default": "./dist/index.js"
         }
     },
-    "scripts": {
-        "build": "tsc -p tsconfig.json",
-        "lint": "tsc -p tsconfig.json --noEmit",
-        "test": "node --test",
-        "test:smoke": "tsx test/smoke.ts"
-    },
+"scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test",
+    "test:smoke": "tsx test/smoke.ts",
+    "test:alibaba-smoke": "tsx test/alibaba-smoke.ts"
+  },
     "devDependencies": {
         "@types/node": "^20.19.43",
         "tsx": "^4.23.7",
