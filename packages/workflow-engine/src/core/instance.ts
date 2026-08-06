@@ -3,8 +3,11 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { StepId, Timestamp, Uuid, WorkflowState } from "./common";
-import type { WorkflowContext } from "../model/context";
+import type { StepId, Timestamp, Uuid, WorkflowState } from "./common.js";
+import type { WorkflowContext } from "../model/context.js";
+
+// Re-export for downstream consumers
+export type { StepId } from "./common.js";
 
 export interface StepRecord {
   stepId: StepId;

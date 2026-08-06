@@ -5,9 +5,9 @@
  * Models the QA/Brand rework loop: a gate failure branches back to a prior step.
  */
 
-import type { StepId } from "../core/common";
-import type { BranchStep } from "../model/step";
-import type { WorkflowContext } from "../model/context";
+import type { StepId } from "../core/common.js";
+import type { BranchStep } from "../model/step.js";
+import type { WorkflowContext } from "../model/context.js";
 
 export interface BranchRouter {
   /** Evaluate a branch step's predicate over context → the next step id. */

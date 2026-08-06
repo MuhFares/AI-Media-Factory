@@ -28,3 +28,17 @@ export type WorkflowState =
   | "FAILED"
   | "CANCELLED"
   | "ESCALATED";
+
+/** A state transition rule. */
+export interface StateTransition {
+  from: WorkflowState;
+  to: WorkflowState;
+  on: string;
+}
+
+/** Validates and applies workflow state transitions. */
+export interface WorkflowStateMachine {
+  can(from: WorkflowState, on: string): boolean;
+  next(from: WorkflowState, on: string): WorkflowState;
+  isTerminal(state: WorkflowState): boolean;
+}

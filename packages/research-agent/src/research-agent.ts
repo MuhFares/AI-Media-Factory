@@ -104,9 +104,8 @@ export class ResearchAgent extends BaseAgent {
 
     const prompt = this.buildResearchPrompt(input);
     const request = this.buildExecutionRequest(prompt);
-    void request;
 
-    const response = await this.runExecution(context, signal);
+    const response = await this.runExecution(context, request, signal);
     return {
       report: this.parseResearchResponse(response.output, input),
       response,

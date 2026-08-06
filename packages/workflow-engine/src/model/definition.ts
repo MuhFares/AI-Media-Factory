@@ -3,8 +3,8 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { StepId } from "../core/common";
-import type { Step } from "./step";
+import type { StepId } from "../core/common.js";
+import type { Step } from "./step.js";
 
 export type TriggerKind = "event" | "schedule" | "manual";
 

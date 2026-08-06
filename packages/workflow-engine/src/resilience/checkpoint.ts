@@ -7,8 +7,8 @@
  * declares the workflow-level checkpoint shape and the boundary policy.
  */
 
-import type { Uuid } from "../core/common";
-import type { WorkflowInstance } from "../core/instance";
+import type { Uuid } from "../core/common.js";
+import type { WorkflowInstance } from "../core/instance.js";
 
 /** A workflow checkpoint = a resumable snapshot of an instance at a boundary. */
 export interface WorkflowCheckpoint {

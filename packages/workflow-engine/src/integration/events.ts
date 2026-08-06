@@ -7,7 +7,7 @@
  * workflow. Mirrors the Orchestrator behavior.
  */
 
-import type { Json, Uuid } from "../core/common";
+import type { Json, Uuid } from "../core/common.js";
 
 /** Events the engine consumes to drive workflows. */
 export type InboundEventType =
@@ -21,6 +21,8 @@ export type OutboundEventType =
   | "WorkflowStarted"
   | "WorkflowSucceeded"
   | "WorkflowFailed"
+  | "WorkflowCancelled"
+  | "WorkflowReplayRequested"
   | "CheckpointCreated"
   | "EscalationRequired"
   | "TaskDispatched";        // drives each AgentStep
@@ -31,3 +33,6 @@ export interface WorkflowEventBridge {
   /** Emit an outbound workflow/step event to the bus. */
   emit(type: OutboundEventType, workflowId: Uuid, payload: Json): Promise<void>;
 }
+
+// Re-export for runtime use
+export type { Json, Uuid } from "../core/common.js";

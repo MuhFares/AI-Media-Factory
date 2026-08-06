@@ -3,7 +3,7 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { Uuid } from "../core/common";
+import type { Uuid } from "../core/common.js";
 
 export interface WorkflowMetrics {
   /** Cycle time, step latencies, retries, rework loops, parallel timings. */
@@ -24,3 +24,6 @@ export interface WorkflowMetrics {
     p50CycleTimeMs: number;
   };
 }
+
+// Re-export for runtime use
+export type { Uuid } from "../core/common.js";

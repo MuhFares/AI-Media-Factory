@@ -7,10 +7,10 @@
  * never executes an agent, transports an event, or stores memory itself.
  */
 
-import type { Json, Uuid } from "./common";
-import type { WorkflowDefinition } from "../model/definition";
-import type { WorkflowInstance } from "./instance";
-import type { ApprovalDecision } from "../execution/approval";
+import type { Json, Uuid } from "./common.js";
+import type { WorkflowDefinition } from "../model/definition.js";
+import type { WorkflowInstance } from "./instance.js";
+import type { ApprovalDecision } from "../execution/approval.js";
 
 export interface StartInput {
   definition: WorkflowDefinition;

@@ -1,6 +1,6 @@
 import type { AgentId, Json } from "../interfaces/common.js";
 import type { ExecutionContext } from "../interfaces/context.js";
-import type { ExecutionResponse } from "../interfaces/execution.js";
+import type { ExecutionRequest, ExecutionResponse } from "../interfaces/execution.js";
 import type { CancellationToken } from "../interfaces/resilience.js";
 
 export interface Agent {
@@ -20,7 +20,11 @@ export interface AgentExecutionOutput {
 }
 
 export interface BaseAgentDependencies {
-  execute(request: ExecutionContext, signal: CancellationToken): Promise<ExecutionResponse>;
+  execute(
+    context: ExecutionContext,
+    request: ExecutionRequest,
+    signal: CancellationToken
+  ): Promise<ExecutionResponse>;
 }
 
 export abstract class BaseAgent implements Agent {
@@ -36,7 +40,11 @@ export abstract class BaseAgent implements Agent {
 
   abstract execute(input: AgentExecutionInput, signal: CancellationToken): Promise<AgentExecutionOutput>;
 
-  protected async runExecution(request: ExecutionContext, signal: CancellationToken): Promise<ExecutionResponse> {
-    return this.deps.execute(request, signal);
+  protected async runExecution(
+    context: ExecutionContext,
+    request: ExecutionRequest,
+    signal: CancellationToken
+  ): Promise<ExecutionResponse> {
+    return this.deps.execute(context, request, signal);
   }
 }

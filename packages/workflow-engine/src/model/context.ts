@@ -3,7 +3,7 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { Json, StepId, Uuid } from "../core/common";
+import type { Json, StepId, Uuid } from "../core/common.js";
 
 /** Data carried across steps; snapshotted into checkpoints for resume. */
 export interface WorkflowContext {

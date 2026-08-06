@@ -3,7 +3,7 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { StepId, Uuid } from "../core/common";
+import type { StepId, Uuid } from "../core/common.js";
 
 export interface TimeoutController {
   /** Per-step deadline (from agent config timeout_seconds). */
@@ -13,3 +13,6 @@ export interface TimeoutController {
   /** Has a deadline elapsed as of now? */
   isExpired(deadline: Date): boolean;
 }
+
+// Re-export for runtime use
+export type { StepId, Uuid } from "../core/common.js";

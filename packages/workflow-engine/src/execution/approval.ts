@@ -7,7 +7,7 @@
  * the runtime uses, so gates are consistent across layers.
  */
 
-import type { Timestamp, Uuid } from "../core/common";
+import type { Timestamp, Uuid } from "../core/common.js";
 
 export type ApprovalOutcome = "approved" | "rejected";
 

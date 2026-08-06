@@ -1,11 +1,12 @@
 import { describe, it, beforeEach } from "node:test";
-import { strictEqual, ok } from "node:assert";
+import { deepStrictEqual, strictEqual, ok } from "node:assert";
 import { DefaultAgentRuntime } from "@ai-media-factory/runtime";
 import type { AgentRuntime, RuntimeInput, RuntimeResult, TurnStatus } from "@ai-media-factory/runtime";
 import type { ConfigLoader, PromptLoader, SchemaLoader, MemoryLoader } from "@ai-media-factory/runtime";
 import type { AgentConfig, PromptSet, AgentSchemas } from "@ai-media-factory/runtime";
 import type { LoadedMemory } from "@ai-media-factory/runtime";
 import type { RuntimeEvent } from "@ai-media-factory/runtime";
+import type { ExecutionRequest, CancellationToken } from "@ai-media-factory/runtime";
 import type { MemoryEngine } from "../types/memory-engine.js";
 import type { PromptCompiler } from "../types/prompt-compiler.js";
 import type { Router } from "@ai-media-factory/providers";
@@ -92,7 +93,10 @@ class MockPromptCompiler implements PromptCompiler {
 }
 
 class MockRouter implements Router {
+  lastRequest: unknown;
+
   async route(input: any) {
+    this.lastRequest = input.request;
     return {
       primary: {
         provider: {
@@ -139,17 +143,21 @@ function createTestEvent(): RuntimeEvent {
 
 describe("AgentRuntime smoke tests", () => {
   let runtime: AgentRuntime;
+  let defaultRuntime: DefaultAgentRuntime;
+  let router: MockRouter;
 
   beforeEach(() => {
-    runtime = new DefaultAgentRuntime({
+    router = new MockRouter();
+    defaultRuntime = new DefaultAgentRuntime({
       configLoader: new MockConfigLoader(),
       promptLoader: new MockPromptLoader(),
       schemaLoader: new MockSchemaLoader(),
       memoryLoader: new MockMemoryLoader(),
       memoryEngine: new MockMemoryEngine(),
       promptCompiler: new MockPromptCompiler(),
-      router: new MockRouter(),
+      router,
     });
+    runtime = defaultRuntime;
   });
 
   it("should run an agent turn successfully", async () => {
@@ -214,5 +222,42 @@ describe("AgentRuntime smoke tests", () => {
       const result = await runtime.run(input);
       strictEqual(result.status, "COMPLETED");
     }
+  });
+
+  it("should execute an agent-provided execution request", async () => {
+    const request: ExecutionRequest = {
+      model: "agent-selected-model",
+      system: "Agent system prompt",
+      messages: [
+        { role: "system", content: "Agent system prompt" },
+        { role: "user", content: "Agent request content" },
+      ],
+      temperature: 0.1,
+      maxOutputTokens: 42,
+      responseSchema: { type: "object" },
+    };
+    const signal: CancellationToken = {
+      isCancelled: false,
+      onCancelled() {},
+      throwIfCancelled() {},
+    };
+
+    await defaultRuntime.execute({} as ExecutionContext, request, signal);
+
+    const forwardedRequest = router.lastRequest as {
+      model: string;
+      messages: Array<{ role: string; content: Array<{ kind: string; text: string }> }>;
+      temperature: number;
+      maxOutputTokens: number;
+      responseFormat: unknown;
+    };
+    strictEqual(forwardedRequest.model, request.model);
+    strictEqual(forwardedRequest.temperature, request.temperature);
+    strictEqual(forwardedRequest.maxOutputTokens, request.maxOutputTokens);
+    deepStrictEqual(forwardedRequest.messages, [
+      { role: "system", content: [{ kind: "text", text: "Agent system prompt" }] },
+      { role: "user", content: [{ kind: "text", text: "Agent request content" }] },
+    ]);
+    deepStrictEqual(forwardedRequest.responseFormat, { kind: "json_schema", schema: request.responseSchema });
   });
 });

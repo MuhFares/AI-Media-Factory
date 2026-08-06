@@ -6,19 +6,7 @@
  * which runs INSIDE an AgentStep.
  */
 
-import type { WorkflowState } from "../core/common";
+import type { WorkflowState, StateTransition, WorkflowStateMachine } from "../core/common.js";
 
-export interface StateTransition {
-  from: WorkflowState;
-  to: WorkflowState;
-  on: string; // trigger: step_completed, step_failed, pause, resume, approve, reject, cancel, exhausted, ...
-}
-
-/** Validates and applies workflow state transitions. */
-export interface WorkflowStateMachine {
-  /** Is a transition permitted from the current state on a trigger? */
-  can(from: WorkflowState, on: string): boolean;
-  /** The resulting state for a permitted transition. */
-  next(from: WorkflowState, on: string): WorkflowState;
-  isTerminal(state: WorkflowState): boolean;
-}
+/** Re-export for backward compatibility. */
+export type { StateTransition, WorkflowStateMachine } from "../core/common.js";

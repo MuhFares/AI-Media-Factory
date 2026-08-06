@@ -11,6 +11,7 @@
  * See ./README.md for how each interface fits the execution pipeline.
  */
 
+export * from "./common.js";
 export * from "./runtime.js";
 export * from "./loaders.js";
 export * from "./context.js";

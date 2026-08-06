@@ -87,7 +87,7 @@ export class PlannerAgent extends BaseAgent {
 
     // Execute via the runtime (which calls the LLM)
     const request = this.buildExecutionRequest(prompt);
-    const response = await this.runExecution(context, signal);
+    const response = await this.runExecution(context, request, signal);
 
     // Parse and validate the response
     const plan = this.parsePlanResponse(response.output as Json, input);

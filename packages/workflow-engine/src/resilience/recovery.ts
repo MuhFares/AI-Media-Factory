@@ -6,8 +6,8 @@
  * steps are skipped (idempotent replay, dedupe by step/event id).
  */
 
-import type { Uuid } from "../core/common";
-import type { WorkflowInstance } from "../core/instance";
+import type { Uuid } from "../core/common.js";
+import type { WorkflowInstance } from "../core/instance.js";
 
 export interface RecoveryManager {
   /** Reconstruct a runnable instance from the last checkpoint. */

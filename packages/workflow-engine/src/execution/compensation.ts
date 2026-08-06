@@ -6,8 +6,8 @@
  * reverse order to undo side effects (e.g. un-publish, release a reservation).
  */
 
-import type { StepId } from "../core/common";
-import type { WorkflowInstance } from "../core/instance";
+import type { StepId } from "../core/common.js";
+import type { WorkflowInstance } from "../core/instance.js";
 
 export interface CompensationPlan {
   /** Completed steps that have a compensation, newest-first. */

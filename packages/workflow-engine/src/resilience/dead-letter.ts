@@ -7,7 +7,7 @@
  * Event Bus DLQ semantics; records the workflow-level dead-letter.
  */
 
-import type { StepId, Timestamp, Uuid } from "../core/common";
+import type { StepId, Timestamp, Uuid } from "../core/common.js";
 
 export interface WorkflowDeadLetter {
   workflowId: Uuid;

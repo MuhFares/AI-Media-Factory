@@ -9,29 +9,47 @@
  */
 
 // core
-export * from "./core/common";
-export * from "./core/engine";
-export * from "./core/instance";
+export * from "./core/common.js";
+export * from "./core/engine.js";
+export * from "./core/instance.js";
 // model
-export * from "./model/definition";
-export * from "./model/step";
-export * from "./model/context";
+export * from "./model/definition.js";
+export * from "./model/step.js";
+export * from "./model/context.js";
 // execution
-export * from "./execution/state-machine";
-export * from "./execution/scheduler";
-export * from "./execution/step-executor";
-export * from "./execution/router";
-export * from "./execution/compensation";
-export * from "./execution/approval";
+export * from "./execution/state-machine.js";
+export * from "./execution/scheduler.js";
+export * from "./execution/step-executor.js";
+export * from "./execution/router.js";
+export * from "./execution/compensation.js";
+export * from "./execution/approval.js";
 // resilience
-export * from "./resilience/retry";
-export * from "./resilience/timeout";
-export * from "./resilience/checkpoint";
-export * from "./resilience/recovery";
-export * from "./resilience/dead-letter";
+export * from "./resilience/retry.js";
+export * from "./resilience/timeout.js";
+export * from "./resilience/checkpoint.js";
+export * from "./resilience/recovery.js";
+export * from "./resilience/dead-letter.js";
 // integration
-export * from "./integration/events";
+export * from "./integration/events.js";
 // observability
-export * from "./observability/metrics";
-export * from "./observability/logging";
-export * from "./observability/audit";
+export * from "./observability/metrics.js";
+export * from "./observability/logging.js";
+export * from "./observability/audit.js";
+// runtime (implementations)
+export * from "./runtime/state-machine.js";
+export * from "./runtime/timeout.js";
+export * from "./runtime/retry.js";
+export * from "./runtime/scheduler.js";
+export * from "./runtime/router.js";
+export * from "./runtime/checkpoint.js";
+export * from "./runtime/recovery.js";
+export * from "./runtime/compensation.js";
+export * from "./runtime/approval.js";
+export * from "./runtime/step-executor.js";
+export * from "./runtime/dead-letter.js";
+export * from "./runtime/audit.js";
+export * from "./runtime/logging.js";
+export * from "./runtime/metrics.js";
+export * from "./runtime/events.js";
+export * from "./runtime/engine.js";
+export * from "./runtime/builder.js";

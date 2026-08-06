@@ -6,9 +6,9 @@
  * execute the agent itself. For other step kinds it evaluates control flow.
  */
 
-import type { Json } from "../core/common";
-import type { Step } from "../model/step";
-import type { WorkflowContext } from "../model/context";
+import type { Json } from "../core/common.js";
+import type { Step } from "../model/step.js";
+import type { WorkflowContext } from "../model/context.js";
 
 export interface StepOutcome {
   status: "completed" | "failed" | "awaiting_approval";

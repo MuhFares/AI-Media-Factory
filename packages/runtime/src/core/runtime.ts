@@ -8,7 +8,8 @@ import type { ConfigLoader, PromptLoader, SchemaLoader, MemoryLoader } from "../
 import type { MemoryEngine } from "../types/memory-engine.js";
 import type { PromptCompiler } from "../types/prompt-compiler.js";
 import type { Router } from "@ai-media-factory/providers";
-import type { LlmExecutor, PromptAssembler } from "../interfaces/execution.js";
+import type { ExecutionRequest, ExecutionResponse, LlmExecutor, PromptAssembler } from "../interfaces/execution.js";
+import type { CancellationToken } from "../interfaces/resilience.js";
 import { DefaultRuntimeProviderBinding } from "../providers/binding.js";
 import { DefaultLlmExecutor, DefaultPromptAssembler } from "./executor.js";
 import { v4 as uuidv4 } from "uuid";
@@ -53,6 +54,14 @@ export class DefaultAgentRuntime implements AgentRuntime {
     };
   }
 
+  async execute(
+    _context: ExecutionContext,
+    request: ExecutionRequest,
+    signal: CancellationToken
+  ): Promise<ExecutionResponse> {
+    return this.llmExecutor.execute(request, signal);
+  }
+
   async run(input: RuntimeInput): Promise<RuntimeResult> {
     const turnId = uuidv4();
     const startTime = Date.now();
@@ -71,7 +80,7 @@ export class DefaultAgentRuntime implements AgentRuntime {
       });
 
       const request = this.llmExecutor.buildRequest(context);
-      const response = await this.llmExecutor.execute(request, { cancelled: false } as any);
+      const response = await this.execute(context, request, { cancelled: false } as any);
 
       const durationMs = Date.now() - startTime;
 

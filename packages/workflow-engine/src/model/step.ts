@@ -3,7 +3,10 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { Json, StepId } from "../core/common";
+import type { Json, StepId } from "../core/common.js";
+
+// Re-export StepId for convenience
+export type { StepId } from "../core/common.js";
 
 export type StepKind =
   | "agent"        // run one agent turn via the Runtime (#4)

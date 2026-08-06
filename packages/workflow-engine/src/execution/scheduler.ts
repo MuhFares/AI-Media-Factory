@@ -3,8 +3,8 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { StepId } from "../core/common";
-import type { WorkflowInstance } from "../core/instance";
+import type { StepId } from "../core/common.js";
+import type { WorkflowInstance } from "../core/instance.js";
 
 export interface Scheduler {
   /** Which steps are ready to run now (deps satisfied). Supports parallel. */
