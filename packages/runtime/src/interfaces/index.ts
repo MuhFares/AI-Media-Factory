@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Runtime interface contracts.
  *
  * ARCHITECTURE ONLY. These are type/interface declarations that define the
@@ -23,3 +23,4 @@ export * from "./gates.js";
 export * from "./resilience.js";
 export * from "./observability.js";
 export * from "./errors.js";
+export * from "./agent-executor-port.js";

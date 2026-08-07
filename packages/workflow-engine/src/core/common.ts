@@ -1,20 +1,18 @@
-/**
+﻿/**
  * Shared primitives for the workflow engine.
  * ARCHITECTURE ONLY — type declarations, no logic.
  */
 
-export type Uuid = string;
-export type Timestamp = string; // ISO-8601 UTC
-export type StepId = string;
-export type WorkflowId = string;
+import type {
+  Uuid,
+  Timestamp,
+  StepId,
+  Json,
+} from "@ai-media-factory/shared";
 
-export type Json =
-  | null
-  | boolean
-  | number
-  | string
-  | Json[]
-  | { [key: string]: Json };
+export type { Uuid, Timestamp, StepId, Json };
+
+export type WorkflowId = Uuid;
 
 /** The per-workflow execution states (owned by the workflow engine). */
 export type WorkflowState =

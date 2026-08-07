@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "@ai-media-factory/workflow-engine",
   "version": "0.1.0",
   "private": true,
@@ -22,7 +22,8 @@
     "@ai-media-factory/memory-engine": "*",
     "@ai-media-factory/context-engine": "*",
     "@ai-media-factory/tool-framework": "*",
-    "@ai-media-factory/evaluation-framework": "*"
+    "@ai-media-factory/evaluation-framework": "*",
+    "@ai-media-factory/shared": "*"
   },
   "devDependencies": {
     "typescript": "^5.5.0"

@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "@ai-media-factory/runtime",
   "version": "0.1.0",
   "private": true,
@@ -23,6 +23,7 @@
     "@ai-media-factory/memory-engine": "*",
     "@ai-media-factory/prompt-compiler": "*",
     "@ai-media-factory/providers": "*",
+    "@ai-media-factory/shared": "*",
     "@ai-media-factory/tool-framework": "*",
     "@types/uuid": "^10.0.0",
     "uuid": "^14.0.1"
