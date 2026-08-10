@@ -12,12 +12,23 @@ export class DefaultDeadLetterSink implements DeadLetterSink {
   ) {}
 
   async deadLetter(entry: WorkflowDeadLetter): Promise<void> {
-    await this.eventBridge.emit("EscalationRequired", entry.workflowId, entry as unknown as Json);
+    const payload: Json = {
+      workflowId: entry.workflowId,
+      definitionId: entry.definitionId,
+      definitionVersion: entry.definitionVersion,
+      failedStep: entry.failedStep,
+      reason: entry.reason,
+      lastError: entry.lastError,
+      checkpointRef: entry.checkpointRef,
+      deadLetteredAt: entry.deadLetteredAt,
+    };
+    await this.eventBridge.emit("EscalationRequired", entry.workflowId, payload);
   }
 
   async replay(workflowId: Uuid): Promise<void> {
     // In a real implementation, this would create a new workflow instance
     // with the same definition but corrected input
-    await this.eventBridge.emit("WorkflowReplayRequested", workflowId, { originalWorkflowId: workflowId } as Json);
+    const payload: Json = { originalWorkflowId: workflowId };
+    await this.eventBridge.emit("WorkflowReplayRequested", workflowId, payload);
   }
 }

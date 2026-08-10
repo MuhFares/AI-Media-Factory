@@ -2,7 +2,7 @@
  * Default RecoveryManager implementation.
  */
 
-import type { Uuid } from "../core/common.js";
+import type { Uuid, WorkflowState } from "../core/common.js";
 import type { WorkflowInstance } from "../core/instance.js";
 import type { RecoveryManager } from "../resilience/recovery.js";
 import type { WorkflowCheckpoint, CheckpointCoordinator } from "../resilience/checkpoint.js";
@@ -25,10 +25,12 @@ export class DefaultRecoveryManager implements RecoveryManager {
       throw new Error(`Workflow instance not found: ${workflowId}`);
     }
 
+    const state = parseWorkflowState(checkpoint.state);
+
     // Restore from checkpoint
     return {
       ...instance,
-      state: checkpoint.state as any,
+      state,
       context: instance.context, // Would restore from contextSnapshotRef
       steps: instance.steps.map((s) => {
         if (checkpoint.completedSteps.includes(s.stepId)) {
@@ -57,5 +59,23 @@ export class DefaultRecoveryManager implements RecoveryManager {
     // Check if all dependencies of this step are completed
     // Simplified: assume sequential dependencies
     return true;
+  }
+}
+
+function parseWorkflowState(value: string): WorkflowState {
+  switch (value) {
+    case "PENDING":
+    case "RUNNING":
+    case "PAUSED":
+    case "AWAITING_APPROVAL":
+    case "RETRYING":
+    case "COMPENSATING":
+    case "COMPLETED":
+    case "FAILED":
+    case "CANCELLED":
+    case "ESCALATED":
+      return value;
+    default:
+      throw new Error(`Invalid workflow state in checkpoint: ${value}`);
   }
 }
