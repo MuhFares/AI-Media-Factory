@@ -180,3 +180,16 @@ export type {
   FilesystemCapabilityOutput,
   FilesystemCapabilityPolicy,
 } from "./filesystem/filesystem-capability.js";
+
+// command capability
+export {
+  CommandCapabilityExecutor,
+  COMMAND_CAPABILITY_ID,
+} from "./command/command-capability.js";
+export type {
+  AllowedCommand,
+  CommandCapabilityInput,
+  CommandCapabilityOutput,
+  CommandCapabilityPolicy,
+  CommandEnvironmentPolicy,
+} from "./command/command-capability.js";

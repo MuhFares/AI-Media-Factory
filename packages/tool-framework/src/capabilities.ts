@@ -30,6 +30,10 @@ export interface ExecutionEvidence {
   executedAt: string;
   durationMs: number;
   command?: string;
+  arguments?: readonly string[];
+  stdout?: string;
+  stderr?: string;
+  resultStatus?: "success" | "failed";
   exitCode?: number;
   stdoutRef?: string;
   stderrRef?: string;
