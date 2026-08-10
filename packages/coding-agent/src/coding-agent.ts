@@ -75,6 +75,8 @@ function isCodingAgentInput(value: Json): value is JsonRecord & CodingAgentInput
     typeof task.name === "string" &&
     typeof task.description === "string" &&
     typeof task.agent === "string" &&
+    isJsonRecord(task.inputSchema) &&
+    isJsonRecord(task.outputSchema) &&
     Array.isArray(task.dependencies) &&
     task.dependencies.every((dependency) => typeof dependency === "string")
   );
@@ -124,7 +126,7 @@ export class CodingAgent extends BaseAgent {
     signal: CancellationToken,
   ): Promise<{ result: CodingResult; response: ExecutionResponse }> {
     signal.throwIfCancelled();
-    const prompt = this.buildCodingPrompt(input);
+    const prompt = this.buildCodingPrompt(input, context);
     const request = this.buildExecutionRequest(prompt);
     const response = await this.runExecution(context, request, signal);
 
@@ -134,7 +136,7 @@ export class CodingAgent extends BaseAgent {
     };
   }
 
-  private buildCodingPrompt(input: CodingAgentInput): string {
+  private buildCodingPrompt(input: CodingAgentInput, context: ExecutionContext): string {
     const { task } = input;
 
     return `${this.codingConfig.systemPrompt}
@@ -151,6 +153,9 @@ ${JSON.stringify(task.inputSchema, null, 2)}
 
 Expected task output schema:
 ${JSON.stringify(task.outputSchema, null, 2)}
+
+Execution context:
+${JSON.stringify(context, null, 2)}
 
 Produce a valid CodingResult JSON with resultId, taskDescription, status, summary, actions, affectedFiles, errors, recommendedTests, confidence, and metadata. Mark the result blocked when completing the task requires unavailable filesystem, shell, or code-editing tools.`;
   }
@@ -177,10 +182,64 @@ Produce a valid CodingResult JSON with resultId, taskDescription, status, summar
         taskDescription: { type: "string" },
         status: { type: "string", enum: ["completed", "partially_completed", "failed", "blocked"] },
         summary: { type: "string" },
-        actions: { type: "array" },
-        affectedFiles: { type: "array" },
-        errors: { type: "array" },
-        recommendedTests: { type: "array" },
+        actions: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              type: { type: "string", enum: ["create_file", "modify_file", "delete_file", "read_file", "run_command", "analyze"] },
+              description: { type: "string" },
+              filePath: { type: "string" },
+              content: { type: "string" },
+              command: { type: "string" },
+              workingDirectory: { type: "string" },
+              status: { type: "string", enum: ["planned", "executing", "completed", "failed", "blocked"] },
+              error: { type: "string" },
+              output: { type: "string" },
+            },
+            required: ["id", "type", "description", "status"],
+          },
+        },
+        affectedFiles: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              changeType: { type: "string", enum: ["created", "modified", "deleted", "read"] },
+              description: { type: "string" },
+            },
+            required: ["path", "changeType", "description"],
+          },
+        },
+        errors: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              code: { type: "string" },
+              message: { type: "string" },
+              recoverable: { type: "boolean" },
+              actionId: { type: "string" },
+              details: { type: "object" },
+            },
+            required: ["code", "message", "recoverable"],
+          },
+        },
+        recommendedTests: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              type: { type: "string", enum: ["unit", "integration", "e2e", "manual"] },
+              description: { type: "string" },
+              priority: { type: "string", enum: ["high", "medium", "low"] },
+              suggestedPath: { type: "string" },
+            },
+            required: ["type", "description", "priority"],
+          },
+        },
         confidence: { type: "number", minimum: 0, maximum: 1 },
         metadata: {
           type: "object",
@@ -242,7 +301,7 @@ Produce a valid CodingResult JSON with resultId, taskDescription, status, summar
       throw new Error("Invalid coding response: invalid duration metadata");
     }
 
-    return {
+    const result: CodingResult = {
       resultId: resultId as Uuid,
       taskDescription,
       status: status as CodingResult["status"],
@@ -257,6 +316,29 @@ Produce a valid CodingResult JSON with resultId, taskDescription, status, summar
         agentVersion: metadata.agentVersion,
         durationMs,
       },
+    };
+
+    return this.normalizeCapabilityClaims(result);
+  }
+
+  private normalizeCapabilityClaims(result: CodingResult): CodingResult {
+    if (result.status === "blocked") return result;
+
+    const executionClaim = /\b(implemented|created|modified|deleted|executed|ran|applied|completed|passed tests|tested)\b/i;
+    const claimsExecution = result.status === "completed" || result.status === "partially_completed";
+    const claimsToolWork = result.actions.some((action) => action.type !== "analyze" && action.status !== "planned") || result.affectedFiles.length > 0 || executionClaim.test(result.summary) || result.actions.some((action) => executionClaim.test(`${action.description} ${action.output ?? ""}`));
+
+    if (!claimsExecution || !claimsToolWork) return result;
+
+    return {
+      ...result,
+      status: "blocked",
+      summary: `Blocked: no filesystem, code-editing, or execution tools are available. ${result.summary}`,
+      actions: result.actions.map((action) => action.status === "completed" || action.status === "executing" ? { ...action, status: "blocked", error: "No concrete coding tool execution evidence is available." } : action),
+      errors: [
+        ...result.errors,
+        { code: "TOOLS_UNAVAILABLE", message: "Coding actions were reported without concrete tool execution evidence.", recoverable: true },
+      ],
     };
   }
 
