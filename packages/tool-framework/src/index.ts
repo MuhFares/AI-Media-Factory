@@ -152,3 +152,19 @@ export type { LogLevel, ToolLogger, InvocationLogEntry } from "./observability/l
 export type { ToolMetrics, ToolMetricsSnapshot } from "./observability/metrics.js";
 
 export type { CostTracker, CostBreakdown, TokenUsage as CostTokenUsage, CostEstimator } from "./observability/cost.js";
+
+// capabilities - injectable boundary contracts (no implementations)
+export type {
+  CapabilityId,
+  CapabilityPattern,
+  CapabilityRequest,
+  CapabilityResult,
+  CapabilitySuccess,
+  CapabilityBlocked,
+  CapabilityFailure,
+  CapabilityExecutorPort,
+  CapabilityDescriptor,
+  CapabilityAuthorization,
+  CapabilityResolver,
+  ExecutionEvidence,
+} from "./capabilities.js";
