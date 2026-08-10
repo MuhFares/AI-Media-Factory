@@ -6,6 +6,23 @@ export type CollaborationStatus = "pending" | "in_progress" | "completed" | "blo
 /** Stable discriminator for artifacts exchanged by the core agents. */
 export type AgentArtifactKind = "execution_plan" | "research_report" | "coding_report" | "review_report" | "qa_report" | "documentation_report";
 
+/** Canonical structural payloads used at the collaboration boundary. */
+export interface ExecutionPlanArtifactPayload extends Record<string, Json> { planId: Uuid; objective: string; tasks: Json[]; }
+export interface ResearchReportArtifactPayload extends Record<string, Json> { reportId: Uuid; taskDescription: string; summary: string; sources: Json[]; }
+export interface CodingReportArtifactPayload extends Record<string, Json> { resultId: Uuid; taskDescription: string; status: string; summary: string; actions: Json[]; }
+export interface ReviewReportArtifactPayload extends Record<string, Json> { reportId: Uuid; taskDescription: string; status: string; summary: string; findings: Json[]; }
+export interface QAReportArtifactPayload extends Record<string, Json> { reportId: Uuid; objective: string; status: string; summary: string; testResults: Json[]; }
+export interface DocumentationReportArtifactPayload extends Record<string, Json> { resultId: Uuid; objective: string; status: string; summary: string; sections: Json[]; }
+
+export interface AgentArtifactPayloadByKind {
+  execution_plan: ExecutionPlanArtifactPayload;
+  research_report: ResearchReportArtifactPayload;
+  coding_report: CodingReportArtifactPayload;
+  review_report: ReviewReportArtifactPayload;
+  qa_report: QAReportArtifactPayload;
+  documentation_report: DocumentationReportArtifactPayload;
+}
+
 /** State of the artifact itself, independent from transport/workflow state. */
 export type AgentArtifactStatus = "proposed" | "completed" | "blocked" | "failed";
 
@@ -47,6 +64,9 @@ export interface AgentArtifact<TKind extends AgentArtifactKind, TPayload extends
   readonly createdAt: Timestamp;
   readonly parentArtifact?: { readonly artifactId: Uuid; readonly kind: AgentArtifactKind };
 }
+
+/** Discriminated artifact union for boundary consumers. */
+export type CollaborationArtifact = { [K in AgentArtifactKind]: AgentArtifact<K, AgentArtifactPayloadByKind[K]> }[AgentArtifactKind];
 
 interface AgentHandoffBase<TKind extends AgentArtifactKind, TPayload extends object> {
   readonly workflowId: Uuid;

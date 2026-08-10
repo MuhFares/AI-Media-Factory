@@ -47,10 +47,19 @@ export function greet(name: string): string {
 export type {
   CollaborationStatus,
   AgentArtifactKind,
+  AgentArtifactStatus,
+  ExecutionPlanArtifactPayload,
+  ResearchReportArtifactPayload,
+  CodingReportArtifactPayload,
+  ReviewReportArtifactPayload,
+  QAReportArtifactPayload,
+  DocumentationReportArtifactPayload,
+  AgentArtifactPayloadByKind,
   AgentEvidence,
   AgentError,
   CollaborationMetadata,
   AgentArtifact,
+  CollaborationArtifact,
   AgentHandoff,
   CollaborationEnvelope,
 } from "./collaboration.js";
@@ -86,6 +95,7 @@ export interface AgentStep {
 export interface StepOutcome {
   status: "completed" | "failed" | "awaiting_approval";
   output: Json;
+  artifact?: import("./collaboration.js").CollaborationArtifact;
   chosenNext?: string;
   error?: { message: string; retryable: boolean };
 }
