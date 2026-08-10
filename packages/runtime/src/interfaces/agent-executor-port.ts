@@ -10,3 +10,17 @@ export {
   StepOutcome,
   AgentExecutorPort,
 } from "@ai-media-factory/shared";
+
+import type { AgentId, Json } from "./common.js";
+import type { WorkflowContext } from "@ai-media-factory/shared";
+
+/** Injectable resolution boundary used by the workflow-facing executor. */
+export interface AgentResolver {
+  resolve(agentId: AgentId): Promise<ResolvedAgent>;
+}
+
+/** Agent execution semantics exposed after resolution; concrete agents stay behind this port. */
+export interface ResolvedAgent {
+  readonly id: AgentId;
+  execute(input: Json, context: WorkflowContext): Promise<Json>;
+}

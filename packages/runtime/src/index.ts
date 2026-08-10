@@ -19,3 +19,5 @@ export * from "./providers/provider.js";
 export * from "./core/agent.js";
 export * from "./core/runtime.js";
 export * from "./core/executor.js";
+export * from "./execution/runtime-agent-executor.js";
+export * from "./execution/registry-agent-resolver.js";

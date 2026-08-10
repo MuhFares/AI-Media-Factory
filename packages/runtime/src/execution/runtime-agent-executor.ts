@@ -4,42 +4,19 @@
  */
 
 import type { AgentExecutorPort } from "../interfaces/agent-executor-port.js";
-import type { AgentRuntime, RuntimeInput } from "../interfaces/runtime.js";
 import type { AgentStep, WorkflowContext, StepOutcome } from "@ai-media-factory/shared";
+import type { AgentResolver } from "../interfaces/agent-executor-port.js";
 
 export class RuntimeAgentExecutor implements AgentExecutorPort {
-  constructor(private readonly agentRuntime: AgentRuntime) {}
+  constructor(private readonly agentResolver: AgentResolver) {}
 
   async executeAgentStep(step: AgentStep, context: WorkflowContext): Promise<StepOutcome> {
-    const workflowId = context.workflowId;
-
-    const input: RuntimeInput = {
-      agent: step.agent,
-      event: {
-        schema_version: "1.0.0",
-        event_id: `evt-${Date.now()}`,
-        workflow_id: workflowId,
-        correlation_id: context.correlationId,
-        brand_id: context.brandId,
-        asset_id: null,
-        timestamp: new Date().toISOString(),
-        type: step.emits,
-        source_agent: "workflow-engine",
-        target_agent: step.agent,
-        payload: context.data,
-        metadata: {},
-      },
-    };
-
-    const result = await this.agentRuntime.run(input);
-
-    if (result.status === "COMPLETED") {
-      return {
-        status: "completed",
-        output: result.emitted?.payload ?? {},
-      };
+    try {
+      const agent = await this.agentResolver.resolve(step.agent);
+      const output = await agent.execute(context.data, { ...context, data: { ...context.data, stepId: step.id } });
+      return { status: "completed", output };
+    } catch (error) {
+      return { status: "failed", output: {}, error: { message: error instanceof Error ? error.message : String(error), retryable: false } };
     }
-
-    throw new Error(`Agent step failed: ${result.error?.message ?? "Unknown error"}`);
   }
 }

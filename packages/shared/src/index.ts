@@ -44,6 +44,17 @@ export function greet(name: string): string {
   return `Hello from ${name}!`;
 }
 
+export type {
+  CollaborationStatus,
+  AgentArtifactKind,
+  AgentEvidence,
+  AgentError,
+  CollaborationMetadata,
+  AgentArtifact,
+  AgentHandoff,
+  CollaborationEnvelope,
+} from "./collaboration.js";
+
 /**
  * Canonical Workflow Context shared between Runtime and Workflow Engine.
  * This is the single source of truth for workflow execution context.

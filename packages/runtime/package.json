@@ -24,6 +24,7 @@
     "@ai-media-factory/prompt-compiler": "*",
     "@ai-media-factory/providers": "*",
     "@ai-media-factory/shared": "*",
+    "@ai-media-factory/agent-registry": "*",
     "@ai-media-factory/tool-framework": "*",
     "@types/uuid": "^10.0.0",
     "uuid": "^14.0.1"
