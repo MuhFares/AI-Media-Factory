@@ -1,0 +1,2 @@
+export type { DocumentationType, DocumentationStatus, DocumentationPriority, DocumentationRequest, DocumentationInput, DocumentationSection, DocumentationArtifact, DocumentationMetadata, DocumentationIssue, DocumentationRecommendation, DocumentationResult, DocumentationConfig, DocumentationAgentDependencies, DocumentationExecutionOutput } from "./documentation-types.js";
+export { DocumentationAgent, createDocumentationAgent, DEFAULT_DOCUMENTATION_SYSTEM_PROMPT } from "./documentation-agent.js";
