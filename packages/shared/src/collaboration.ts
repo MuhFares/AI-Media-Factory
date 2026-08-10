@@ -11,8 +11,8 @@ export interface ExecutionPlanArtifactPayload extends Record<string, Json> { pla
 export interface ResearchReportArtifactPayload extends Record<string, Json> { reportId: Uuid; taskDescription: string; summary: string; sources: Json[]; }
 export interface CodingReportArtifactPayload extends Record<string, Json> { resultId: Uuid; taskDescription: string; status: string; summary: string; actions: Json[]; }
 export interface ReviewReportArtifactPayload extends Record<string, Json> { reportId: Uuid; taskDescription: string; status: string; summary: string; findings: Json[]; }
-export interface QAReportArtifactPayload extends Record<string, Json> { reportId: Uuid; objective: string; status: string; summary: string; testResults: Json[]; }
-export interface DocumentationReportArtifactPayload extends Record<string, Json> { resultId: Uuid; objective: string; status: string; summary: string; sections: Json[]; }
+export interface QAReportArtifactPayload extends Record<string, Json> { reportId: Uuid; objective: string; status: string; summary: string; testResults: Json[]; executionEvidencePresent: boolean; }
+export interface DocumentationReportArtifactPayload extends Record<string, Json> { resultId: Uuid; objective: string; status: string; summary: string; sections: Json[]; generatedOnly: boolean; persistence: "not_written" | "blocked"; }
 
 export interface AgentArtifactPayloadByKind {
   execution_plan: ExecutionPlanArtifactPayload;

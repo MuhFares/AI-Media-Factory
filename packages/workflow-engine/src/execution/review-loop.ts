@@ -5,6 +5,7 @@ export interface ReviewerFeedbackLoopConfig {
   readonly codingStep: AgentStep;
   readonly reviewerStep: AgentStep;
   readonly maxReviewIterations: number;
+  readonly initialParentArtifact?: CollaborationArtifact;
 }
 
 export interface ReviewerFeedbackLoopResult {
@@ -55,8 +56,8 @@ export class ReviewerFeedbackLoop {
   async run(config: ReviewerFeedbackLoopConfig, context: WorkflowContext): Promise<ReviewerFeedbackLoopResult> {
     if (!Number.isInteger(config.maxReviewIterations) || config.maxReviewIterations < 1) return { status: "failed", lineage: [], iterations: 0, error: { message: "maxReviewIterations must be a positive integer", retryable: false } };
     const lineage: CollaborationArtifact[] = [];
-    let currentContext = context;
-    let parent: CollaborationArtifact | undefined;
+    let currentContext = config.initialParentArtifact === undefined ? context : withHandoff(context, config.initialParentArtifact, 0);
+    let parent: CollaborationArtifact | undefined = config.initialParentArtifact;
 
     for (let iteration = 1; iteration <= config.maxReviewIterations; iteration += 1) {
       const codingOutcome = await this.agentExecutor.executeAgentStep(config.codingStep, { ...currentContext, data: { ...currentContext.data, reviewIteration: iteration } });

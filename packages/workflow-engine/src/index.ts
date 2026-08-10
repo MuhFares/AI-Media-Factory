@@ -22,6 +22,7 @@ export * from "./execution/scheduler.js";
 export * from "./execution/step-executor.js";
 export * from "./execution/collaboration.js";
 export * from "./execution/review-loop.js";
+export * from "./execution/quality-workflow.js";
 export * from "./execution/router.js";
 export * from "./execution/compensation.js";
 export * from "./execution/approval.js";
