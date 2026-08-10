@@ -9,7 +9,7 @@
 import type { Json, JsonSchema } from "./core/common.js";
 
 /** Stable identifier for a capability, for example `filesystem.read`. */
-export type CapabilityId = `${string}.${string}`;
+export type CapabilityId = string;
 
 /** Capability patterns used by authorization policies. */
 export type CapabilityPattern = CapabilityId | `${string}.*`;
@@ -34,6 +34,14 @@ export interface ExecutionEvidence {
   stdoutRef?: string;
   stderrRef?: string;
   workingDirectory?: string;
+  operation?: string;
+  requestedPath?: string;
+  resolvedPath?: string;
+  workflowId?: string;
+  correlationId?: string;
+  agentId?: string;
+  succeeded?: boolean;
+  error?: { code: string; message: string };
 }
 
 export interface CapabilitySuccess<TOutput = Json> {
@@ -60,6 +68,7 @@ export interface CapabilityFailure {
     message: string;
     retryable: boolean;
   };
+  evidence?: ExecutionEvidence;
 }
 
 export type CapabilityResult<TOutput = Json> =
@@ -67,8 +76,8 @@ export type CapabilityResult<TOutput = Json> =
   | CapabilityBlocked
   | CapabilityFailure;
 
-export interface CapabilityExecutorPort {
-  execute<TInput = Json, TOutput = Json>(
+export interface CapabilityExecutorPort<TInput = Json, TOutput = Json> {
+  execute(
     request: CapabilityRequest<TInput>
   ): Promise<CapabilityResult<TOutput>>;
 }

@@ -168,3 +168,15 @@ export type {
   CapabilityResolver,
   ExecutionEvidence,
 } from "./capabilities.js";
+
+// filesystem capability
+export {
+  FilesystemCapabilityExecutor,
+  FILESYSTEM_CAPABILITY_ID,
+} from "./filesystem/filesystem-capability.js";
+export type {
+  FilesystemOperation,
+  FilesystemCapabilityInput,
+  FilesystemCapabilityOutput,
+  FilesystemCapabilityPolicy,
+} from "./filesystem/filesystem-capability.js";
