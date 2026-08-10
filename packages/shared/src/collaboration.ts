@@ -6,6 +6,9 @@ export type CollaborationStatus = "pending" | "in_progress" | "completed" | "blo
 /** Stable discriminator for artifacts exchanged by the core agents. */
 export type AgentArtifactKind = "execution_plan" | "research_report" | "coding_report" | "review_report" | "qa_report" | "documentation_report";
 
+/** State of the artifact itself, independent from transport/workflow state. */
+export type AgentArtifactStatus = "proposed" | "completed" | "blocked" | "failed";
+
 /** Evidence provenance, kept distinct so supplied claims cannot be mistaken for execution. */
 export type AgentEvidence =
   | { readonly kind: "runtime"; readonly evidenceId: Uuid; readonly observedAt: Timestamp; readonly source: string; readonly details: string }
@@ -30,35 +33,50 @@ export interface CollaborationMetadata {
   readonly traceId: string;
 }
 
-/** A typed artifact carrying one agent's structured output. */
-export interface AgentArtifact<TPayload = Record<string, Json>> {
+/** A structurally typed artifact. The kind and payload type are coupled by the caller. */
+export interface AgentArtifact<TKind extends AgentArtifactKind, TPayload extends object> {
   readonly artifactId: Uuid;
-  readonly kind: AgentArtifactKind;
+  readonly kind: TKind;
+  readonly producerAgent: AgentId;
+  readonly workflowId: Uuid;
+  readonly correlationId: Uuid;
+  readonly status: AgentArtifactStatus;
   readonly payload: TPayload;
   readonly contentType: "application/json";
   readonly schemaVersion: string;
   readonly createdAt: Timestamp;
-  readonly parentArtifactId?: Uuid;
+  readonly parentArtifact?: { readonly artifactId: Uuid; readonly kind: AgentArtifactKind };
 }
 
-/** A directed transfer of an artifact between agents. */
-export interface AgentHandoff<TPayload = Record<string, Json>> {
+interface AgentHandoffBase<TKind extends AgentArtifactKind, TPayload extends object> {
   readonly workflowId: Uuid;
   readonly correlationId: Uuid;
   readonly sourceAgent: AgentId;
   readonly targetAgent: AgentId;
   readonly objective: string;
-  readonly status: CollaborationStatus;
-  readonly artifact: AgentArtifact<TPayload>;
   readonly evidence: readonly AgentEvidence[];
   readonly errors: readonly AgentError[];
   readonly previousArtifactId?: Uuid;
   readonly metadata: CollaborationMetadata;
 }
 
-/** Top-level envelope used by workflow coordination transports. */
-export interface CollaborationEnvelope<TPayload = Record<string, Json>> {
+/** Successful/in-flight artifacts are the only artifacts accepted as successful upstream output. */
+export type SuccessfulAgentHandoff<TKind extends AgentArtifactKind, TPayload extends object> = AgentHandoffBase<TKind, TPayload> & {
+  readonly status: "pending" | "in_progress" | "completed";
+  readonly artifact: AgentArtifact<TKind, TPayload> & { readonly status: "proposed" | "completed" };
+};
+
+/** Blocked/failed artifacts remain typed failures and cannot be represented as successful handoffs. */
+export type UnsuccessfulAgentHandoff<TKind extends AgentArtifactKind, TPayload extends object> = AgentHandoffBase<TKind, TPayload> & {
+  readonly status: "blocked" | "failed" | "cancelled";
+  readonly artifact: AgentArtifact<TKind, TPayload> & { readonly status: "blocked" | "failed" };
+};
+
+export type AgentHandoff<TKind extends AgentArtifactKind, TPayload extends object> = SuccessfulAgentHandoff<TKind, TPayload> | UnsuccessfulAgentHandoff<TKind, TPayload>;
+
+/** Top-level in-memory envelope; it carries no persistence or transport semantics. */
+export interface CollaborationEnvelope<TKind extends AgentArtifactKind, TPayload extends object> {
   readonly envelopeId: Uuid;
-  readonly handoff: AgentHandoff<TPayload>;
+  readonly handoff: AgentHandoff<TKind, TPayload>;
   readonly metadata: CollaborationMetadata;
 }

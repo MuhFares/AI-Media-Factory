@@ -2,7 +2,7 @@ import { strictEqual, deepStrictEqual, ok } from "node:assert";
 import { describe, it } from "node:test";
 
 const metadata = { schemaVersion: "1.0", createdAt: "2026-08-10T00:00:00.000Z", attempt: 1, traceId: "trace-1" };
-const artifact = { artifactId: "artifact-1", kind: "research_report", payload: { summary: "facts" }, contentType: "application/json", schemaVersion: "1.0", createdAt: metadata.createdAt };
+const artifact = { artifactId: "artifact-1", kind: "research_report", producerAgent: "research", workflowId: "workflow-1", correlationId: "correlation-1", status: "completed", payload: { summary: "facts" }, contentType: "application/json", schemaVersion: "1.0", createdAt: metadata.createdAt };
 
 describe("collaboration contracts", () => {
   it("represents a valid directed handoff", () => {
@@ -26,6 +26,16 @@ describe("collaboration contracts", () => {
     const error = { code: "CAPABILITY_UNAVAILABLE", category: "capability", message: "No test runner", retryable: false };
     ok(error.category === "capability");
     strictEqual(artifact.artifactId, "artifact-1");
+  });
+  it("keeps artifact status separate from handoff status", () => {
+    const blockedArtifact = { ...artifact, status: "blocked" };
+    const failedHandoff = { status: "failed", artifact: blockedArtifact, errors: [{ code: "BLOCKED", category: "capability", message: "Unavailable", retryable: false }] };
+    strictEqual(failedHandoff.status, "failed");
+    strictEqual(failedHandoff.artifact.status, "blocked");
+  });
+  it("carries compatible parent lineage", () => {
+    const child = { ...artifact, parentArtifact: { artifactId: "parent-1", kind: "execution_plan" } };
+    strictEqual(child.parentArtifact.kind, "execution_plan");
   });
   it("keeps collaboration status values closed", () => {
     const invalidStatus = "unknown";
