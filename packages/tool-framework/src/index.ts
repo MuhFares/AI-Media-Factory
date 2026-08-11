@@ -169,6 +169,24 @@ export type {
   ExecutionEvidence,
 } from "./capabilities.js";
 
+// capability registry + authorization policy
+export type {
+  AuthorizationPolicy,
+  CapabilityGrant,
+} from "./capability-registry/authorization-policy.js";
+export {
+  DefaultAuthorizationPolicy,
+} from "./capability-registry/authorization-policy.js";
+export type {
+  CapabilityRegistry,
+  CapabilityRegistryOptions,
+  CreateCapabilityRegistryOptions,
+} from "./capability-registry/capability-registry.js";
+export {
+  DefaultCapabilityRegistry,
+  createCapabilityRegistry,
+} from "./capability-registry/capability-registry.js";
+
 // filesystem capability
 export {
   FilesystemCapabilityExecutor,
