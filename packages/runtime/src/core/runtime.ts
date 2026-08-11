@@ -10,11 +10,14 @@ import type { PromptCompiler } from "../types/prompt-compiler.js";
 import type { Router } from "@ai-media-factory/providers";
 import type { ExecutionRequest, ExecutionResponse, LlmExecutor, PromptAssembler } from "../interfaces/execution.js";
 import type { CancellationToken } from "../interfaces/resilience.js";
+import type { CapabilityExecutionPort } from "../interfaces/capability-execution.js";
+import type { CapabilityExecutorPort, CapabilityRequest, CapabilityResolver, CapabilityResult } from "@ai-media-factory/tool-framework";
 import { DefaultRuntimeProviderBinding } from "../providers/binding.js";
 import { DefaultLlmExecutor, DefaultPromptAssembler } from "./executor.js";
+import { RuntimeCapabilityExecutor } from "../execution/runtime-capability-executor.js";
 import { v4 as uuidv4 } from "uuid";
 
-interface AgentRuntimeDependencies {
+export interface AgentRuntimeDependencies {
   configLoader: ConfigLoader;
   promptLoader: PromptLoader;
   schemaLoader: SchemaLoader;
@@ -22,13 +25,16 @@ interface AgentRuntimeDependencies {
   memoryEngine: MemoryEngine;
   promptCompiler: PromptCompiler;
   router: Router;
+  capabilityResolver?: CapabilityResolver;
+  capabilityExecutor?: CapabilityExecutorPort;
 }
 
-export class DefaultAgentRuntime implements AgentRuntime {
+export class DefaultAgentRuntime implements AgentRuntime, CapabilityExecutionPort {
   private readonly deps: AgentRuntimeDependencies;
   private readonly llmExecutor: LlmExecutor;
   private readonly promptAssembler: PromptAssembler;
   private readonly contextBuilder: ContextBuilder;
+  private readonly capabilityExecution: CapabilityExecutionPort | undefined;
 
   constructor(deps: AgentRuntimeDependencies) {
     this.deps = deps;
@@ -36,6 +42,9 @@ export class DefaultAgentRuntime implements AgentRuntime {
     const binding = new DefaultRuntimeProviderBinding(deps.router);
     this.llmExecutor = new DefaultLlmExecutor(binding, deps.promptCompiler);
     this.promptAssembler = new DefaultPromptAssembler(deps.promptCompiler);
+    this.capabilityExecution = deps.capabilityResolver && deps.capabilityExecutor
+      ? new RuntimeCapabilityExecutor({ resolver: deps.capabilityResolver, executor: deps.capabilityExecutor })
+      : undefined;
 
     this.contextBuilder = {
       build: async (input) => {
@@ -60,6 +69,31 @@ export class DefaultAgentRuntime implements AgentRuntime {
     signal: CancellationToken
   ): Promise<ExecutionResponse> {
     return this.llmExecutor.execute(request, signal);
+  }
+
+  async executeCapability(request: CapabilityRequest): Promise<CapabilityResult> {
+    if (this.capabilityExecution) {
+      try {
+        return await this.capabilityExecution.executeCapability(request);
+      } catch (error) {
+        return {
+          status: "failed",
+          resultId: `runtime-capability-result-${request.requestId}`,
+          capabilityId: request.capabilityId,
+          error: {
+            code: "CAPABILITY_RUNTIME_ERROR",
+            message: error instanceof Error ? error.message : "Capability execution failed",
+            retryable: false,
+          },
+        };
+      }
+    }
+    return {
+      status: "blocked",
+      resultId: `runtime-capability-result-${request.requestId}`,
+      capabilityId: request.capabilityId,
+      reason: "Capability execution is not configured",
+    };
   }
 
   async run(input: RuntimeInput): Promise<RuntimeResult> {

@@ -24,3 +24,4 @@ export * from "./resilience.js";
 export * from "./observability.js";
 export * from "./errors.js";
 export * from "./agent-executor-port.js";
+export * from "./capability-execution.js";
