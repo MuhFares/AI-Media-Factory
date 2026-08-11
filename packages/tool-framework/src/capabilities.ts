@@ -17,6 +17,8 @@ export type CapabilityPattern = CapabilityId | `${string}.*`;
 export interface CapabilityRequest<TInput = Json> {
   requestId: string;
   capabilityId: CapabilityId;
+  /** Optional operation discriminator for capabilities with multiple actions. */
+  operation?: string;
   agentId: string;
   workflowId: string;
   correlationId: string;

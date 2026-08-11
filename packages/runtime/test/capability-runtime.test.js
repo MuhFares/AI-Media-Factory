@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import { strictEqual, deepStrictEqual } from "node:assert";
-import { DefaultAgentRuntime, RuntimeCapabilityExecutor } from "../dist/index.js";
+import { BaseAgent, DefaultAgentRuntime, RuntimeCapabilityExecutor } from "../dist/index.js";
 
 const descriptor = {
   capabilityId: "web.search",
@@ -29,6 +29,48 @@ function resolver(authorized = true, known = true) {
 }
 
 describe("runtime capability execution", () => {
+  it("exposes the same injected boundary to agents without exposing implementations", async () => {
+    class TestAgent extends BaseAgent {
+      id = "research";
+      name = "Test Agent";
+      version = "1.0.0";
+
+      async execute(input) {
+        const result = await this.executeCapability(input.input);
+        return { output: result, response: {} };
+      }
+    }
+    const capabilityRequest = request();
+    let received;
+    const agent = new TestAgent({
+      execute: async () => ({}),
+      capabilityExecution: {
+        executeCapability: async (value) => {
+          received = value;
+          return {
+            status: "success",
+            resultId: "agent-result",
+            capabilityId: value.capabilityId,
+            output: { executed: true },
+            evidence: {
+              evidenceId: "agent-evidence",
+              capabilityId: value.capabilityId,
+              agentId: value.agentId,
+              workflowId: value.workflowId,
+              correlationId: value.correlationId,
+              executedAt: "2026-08-11T00:00:01.000Z",
+              durationMs: 1,
+              succeeded: true,
+            },
+          };
+        },
+      },
+    });
+    const result = await agent.execute({ context: {}, input: capabilityRequest }, { cancelled: false });
+    strictEqual(result.output.status, "success");
+    deepStrictEqual(received, capabilityRequest);
+  });
+
   it("forwards an authorized typed request to the injected executor", async () => {
     let received;
     const executor = {
@@ -73,7 +115,7 @@ describe("runtime capability execution", () => {
   it("preserves explicit capability failures and converts executor throws to failures", async () => {
     const explicit = new RuntimeCapabilityExecutor({
       resolver: resolver(),
-      executor: { execute: async () => ({ status: "failed", resultId: "failure-1", capabilityId: "web.search", error: { code: "TIMEOUT", message: "timed out", retryable: false } }) },
+      executor: { execute: async (value) => ({ status: "failed", resultId: "failure-1", capabilityId: "web.search", error: { code: "TIMEOUT", message: "timed out", retryable: false }, evidence: { evidenceId: "failure-evidence", capabilityId: value.capabilityId, agentId: value.agentId, workflowId: value.workflowId, correlationId: value.correlationId, executedAt: "2026-08-11T00:00:01.000Z", durationMs: 1, succeeded: false } }) },
     });
     const explicitResult = await explicit.executeCapability(request());
     strictEqual(explicitResult.status, "failed");
@@ -87,7 +129,7 @@ describe("runtime capability execution", () => {
   it("exposes the injected boundary through DefaultAgentRuntime without a second path", async () => {
     const runtime = new DefaultAgentRuntime({
       configLoader: {}, promptLoader: {}, schemaLoader: {}, memoryLoader: {}, memoryEngine: {}, promptCompiler: {}, router: {},
-      capabilityResolver: resolver(), capabilityExecutor: { execute: async (value) => ({ status: "success", resultId: "runtime-result", capabilityId: value.capabilityId, output: { executed: true } }) },
+      capabilityResolver: resolver(), capabilityExecutor: { execute: async (value) => ({ status: "success", resultId: "runtime-result", capabilityId: value.capabilityId, output: { executed: true }, evidence: { evidenceId: "runtime-evidence", capabilityId: value.capabilityId, agentId: value.agentId, workflowId: value.workflowId, correlationId: value.correlationId, executedAt: "2026-08-11T00:00:01.000Z", durationMs: 1, succeeded: true } }) },
     });
     const result = await runtime.executeCapability(request());
     strictEqual(result.status, "success");
@@ -100,5 +142,15 @@ describe("runtime capability execution", () => {
     const failed = await throwingRuntime.executeCapability(request());
     strictEqual(failed.status, "failed");
     strictEqual(failed.error.code, "CAPABILITY_EXECUTION_ERROR");
+  });
+
+  it("rejects success or failure results without matching execution evidence", async () => {
+    const boundary = new RuntimeCapabilityExecutor({
+      resolver: resolver(),
+      executor: { execute: async () => ({ status: "success", resultId: "fake", capabilityId: "web.search", output: {} }) },
+    });
+    const result = await boundary.executeCapability(request());
+    strictEqual(result.status, "failed");
+    strictEqual(result.error.code, "MISSING_EXECUTION_EVIDENCE");
   });
 });

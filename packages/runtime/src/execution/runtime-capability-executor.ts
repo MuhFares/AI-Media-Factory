@@ -27,7 +27,26 @@ export class RuntimeCapabilityExecutor implements CapabilityExecutionPort {
       return this.blocked(request, "Capability is not authorized for this agent");
     }
     try {
-      return await this.deps.executor.execute(request);
+      const result = await this.deps.executor.execute(request);
+      if (result.status === "blocked") return result;
+      const evidence = result.evidence;
+      if (evidence === undefined
+        || evidence.capabilityId !== request.capabilityId
+        || evidence.agentId !== request.agentId
+        || evidence.workflowId !== request.workflowId
+        || evidence.correlationId !== request.correlationId) {
+        return {
+          status: "failed",
+          resultId: `runtime-capability-result-${request.requestId}`,
+          capabilityId: request.capabilityId,
+          error: {
+            code: "MISSING_EXECUTION_EVIDENCE",
+            message: "Capability execution did not return matching execution evidence",
+            retryable: false,
+          },
+        };
+      }
+      return result;
     } catch (error) {
       return {
         status: "failed",
