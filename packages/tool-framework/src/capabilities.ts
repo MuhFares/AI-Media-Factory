@@ -34,6 +34,9 @@ export interface ExecutionEvidence {
   stdout?: string;
   stderr?: string;
   resultStatus?: "success" | "failed";
+  providerId?: string;
+  resultCount?: number;
+  providerInvoked?: boolean;
   exitCode?: number;
   stdoutRef?: string;
   stderrRef?: string;

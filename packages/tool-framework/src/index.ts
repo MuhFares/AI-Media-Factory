@@ -193,3 +193,18 @@ export type {
   CommandCapabilityPolicy,
   CommandEnvironmentPolicy,
 } from "./command/command-capability.js";
+
+// web search capability
+export {
+  WebSearchCapabilityExecutor,
+  WEB_SEARCH_CAPABILITY_ID,
+} from "./web-search/web-search-capability.js";
+export type {
+  WebSearchRequest,
+  WebSearchResult,
+  WebSearchProviderResponse,
+  WebSearchProvider,
+  WebSearchCapabilityInput,
+  WebSearchCapabilityOutput,
+  WebSearchCapabilityPolicy,
+} from "./web-search/web-search-capability.js";
