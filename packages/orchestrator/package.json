@@ -19,9 +19,14 @@
   },
   "dependencies": {
     "@ai-media-factory/shared": "*",
-    "@ai-media-factory/workflow-engine": "*"
+    "@ai-media-factory/workflow-engine": "*",
+    "@ai-media-factory/runtime": "*"
   },
   "devDependencies": {
+    "@ai-media-factory/agent-registry": "*",
+    "@ai-media-factory/tool-framework": "*",
+    "@ai-media-factory/planner-agent": "*",
+    "@ai-media-factory/research-agent": "*",
     "typescript": "^5.5.0"
   }
 }
