@@ -1,0 +1,10 @@
+{
+  "name": "benchmark-repo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Isolated deterministic repository used by the Sprint 8 real repository engineering benchmark.",
+  "scripts": {
+    "test": "node --test tests/math-check.js"
+  }
+}
