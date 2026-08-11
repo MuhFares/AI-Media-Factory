@@ -27,6 +27,7 @@
     "@ai-media-factory/tool-framework": "*",
     "@ai-media-factory/planner-agent": "*",
     "@ai-media-factory/research-agent": "*",
+    "@ai-media-factory/ceo-agent": "*",
     "typescript": "^5.5.0"
   }
 }
