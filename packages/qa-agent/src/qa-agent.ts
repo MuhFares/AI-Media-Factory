@@ -1,6 +1,7 @@
 import type { AgentId, Json } from "@ai-media-factory/runtime";
 import { BaseAgent, type AgentExecutionInput, type AgentExecutionOutput, type CancellationToken, type ExecutionContext, type ExecutionRequest, type ExecutionResponse, type JsonSchema } from "@ai-media-factory/runtime";
-import type { QAAgentDependencies, QAConfig, QAEvidenceSource, QAFinding, QAFindingCategory, QAFindingSeverity, QAInput, QAPriority, QAReport, QAReportStatus, QARisk, QATestResult, QATestStatus, QARecommendation } from "./qa-types.js";
+import type { CapabilityResult } from "@ai-media-factory/runtime";
+import type { QAAgentDependencies, QAConfig, QAEvidenceSource, QAExecutionEvidence, QAFinding, QAFindingCategory, QAFindingSeverity, QAInput, QAPriority, QAReport, QAReportStatus, QARisk, QATestResult, QATestStatus, QARecommendation } from "./qa-types.js";
 
 type JsonRecord = { [key: string]: Json };
 const testStatuses: QATestStatus[] = ["passed", "failed", "skipped", "not_executed"];
@@ -15,7 +16,14 @@ function oneOf<T extends string>(value: Json, values: T[]): value is T { return 
 function validInput(value: Json): value is JsonRecord & QAInput {
   if (!record(value) || typeof value.requestId !== "string" || typeof value.objective !== "string" || value.objective.trim() === "" || !record(value.request)) return false;
   const request = value.request;
-  return typeof request.scope === "string" && request.scope.trim() !== "" && Array.isArray(request.requirements) && request.requirements.length > 0 && request.requirements.every((item) => typeof item === "string" && item.trim() !== "") && Array.isArray(request.expectedTests) && request.expectedTests.length > 0 && request.expectedTests.every((item) => typeof item === "string" && item.trim() !== "") && (request.suppliedEvidence === undefined || (Array.isArray(request.suppliedEvidence) && request.suppliedEvidence.every((item) => record(item) && thisEvidence(item))));
+  const validRequest = typeof request.scope === "string" && request.scope.trim() !== "" && Array.isArray(request.requirements) && request.requirements.length > 0 && request.requirements.every((item) => typeof item === "string" && item.trim() !== "") && Array.isArray(request.expectedTests) && request.expectedTests.length > 0 && request.expectedTests.every((item) => typeof item === "string" && item.trim() !== "") && (request.suppliedEvidence === undefined || (Array.isArray(request.suppliedEvidence) && request.suppliedEvidence.every((item) => record(item) && thisEvidence(item))));
+  if (!validRequest) return false;
+  return value.capabilityRequests === undefined
+    || (Array.isArray(value.capabilityRequests)
+      && value.capabilityRequests.every((item) => record(item)
+        && typeof item.requestId === "string"
+        && typeof item.capabilityId === "string"
+        && record(item.input)));
 }
 function thisEvidence(value: JsonRecord): boolean { return typeof value.testName === "string" && oneOf(value.status, testStatuses) && typeof value.executed === "boolean" && oneOf(value.source, sources) && (value.evidence === undefined || typeof value.evidence === "string") && (value.durationMs === undefined || (typeof value.durationMs === "number" && Number.isFinite(value.durationMs) && value.durationMs >= 0)) && (value.failure === undefined || typeof value.failure === "string") && !(value.executed && (value.source !== "runtime" || typeof value.evidence !== "string" || value.evidence.trim() === "")); }
 
@@ -31,11 +39,43 @@ export class QAAgent extends BaseAgent {
   async execute(input: AgentExecutionInput, signal: CancellationToken): Promise<AgentExecutionOutput> {
     signal.throwIfCancelled();
     if (!validInput(input.input)) throw new Error("Invalid QA input: expected a complete quality request");
-    const response = await this.runExecution(input.context, this.buildExecutionRequest(this.buildPrompt(input.input, input.context)), signal);
-    const report = this.parseResponse(response.output, input.input);
-    const output = this.toJson(report);
+    const capabilityRequests = input.input.capabilityRequests;
+    const capabilityExecutions = capabilityRequests === undefined
+      ? []
+      : await this.runCapabilities(capabilityRequests);
+    const prepared = this.prepareInput(input.input, capabilityExecutions);
+    const response = await this.runExecution(input.context, this.buildExecutionRequest(this.buildPrompt(prepared, input.context)), signal);
+    const report = this.parseResponse(response.output, prepared);
+    const baseOutput = this.toJson(report);
+    const output: Json = capabilityExecutions.length > 0 && record(baseOutput)
+      ? { ...baseOutput, capabilityExecutions: JSON.parse(JSON.stringify(capabilityExecutions)) as Json[] }
+      : baseOutput;
     const normalized: ExecutionResponse = { ...response, output, raw: JSON.stringify(report, null, 2) };
     return { output, response: normalized };
+  }
+
+  private prepareInput(input: QAInput, executions: readonly CapabilityResult[]): QAInput {
+    if (executions.length === 0) return input;
+    const derived: QAExecutionEvidence[] = [];
+    for (const execution of executions) {
+      if (execution.status !== "success" || execution.evidence === undefined) continue;
+      const output = execution.output;
+      const stdout = record(output) && typeof output.stdout === "string" ? output.stdout : "";
+      const commandName = record(output) && typeof output.command === "string" ? output.command : execution.capabilityId;
+      const args = record(output) && Array.isArray(output.args) ? output.args.filter((item): item is string => typeof item === "string") : [];
+      const testName = [commandName, ...args].join(" ");
+      derived.push({
+        testName,
+        status: "passed",
+        executed: true,
+        source: "runtime",
+        evidence: stdout.trim().length > 0 ? stdout.trim() : `executed ${execution.capabilityId}`,
+        durationMs: execution.evidence.durationMs,
+      });
+    }
+    if (derived.length === 0) return input;
+    const existing = input.request.suppliedEvidence ?? [];
+    return { ...input, request: { ...input.request, suppliedEvidence: [...existing, ...derived] } };
   }
 
   private buildPrompt(input: QAInput, context: ExecutionContext): string { return `${this.config.systemPrompt}\n\nQA objective: ${input.objective}\nRequest:\n${JSON.stringify(input.request, null, 2)}\nExecution context:\n${JSON.stringify(context, null, 2)}\nProduce a QAReport that distinguishes runtime evidence, supplied results, and not-executed tests.`; }

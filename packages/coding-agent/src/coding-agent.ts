@@ -3,9 +3,14 @@
  * Extends BaseAgent to produce structured coding results from coding tasks.
  */
 
-import type { AgentId, Json, Uuid } from "@ai-media-factory/runtime";
+import type {
+  AgentId,
+  Json,
+  Uuid,
+} from "@ai-media-factory/runtime";
 import type {
   CancellationToken,
+  CapabilityResult,
   ExecutionContext,
   ExecutionRequest,
   ExecutionResponse,
@@ -70,7 +75,7 @@ function isCodingAgentInput(value: Json): value is JsonRecord & CodingAgentInput
   if (!isJsonRecord(value) || !isJsonRecord(value.task)) return false;
 
   const { task } = value;
-  return (
+  const validTask =
     typeof task.id === "string" &&
     typeof task.name === "string" &&
     typeof task.description === "string" &&
@@ -78,8 +83,15 @@ function isCodingAgentInput(value: Json): value is JsonRecord & CodingAgentInput
     isJsonRecord(task.inputSchema) &&
     isJsonRecord(task.outputSchema) &&
     Array.isArray(task.dependencies) &&
-    task.dependencies.every((dependency) => typeof dependency === "string")
-  );
+    task.dependencies.every((dependency) => typeof dependency === "string");
+  if (!validTask) return false;
+
+  return value.capabilityRequests === undefined
+    || (Array.isArray(value.capabilityRequests)
+      && value.capabilityRequests.every((request) => isJsonRecord(request)
+        && typeof request.requestId === "string"
+        && typeof request.capabilityId === "string"
+        && isJsonRecord(request.input)));
 }
 
 export class CodingAgent extends BaseAgent {
@@ -102,7 +114,11 @@ export class CodingAgent extends BaseAgent {
     }
 
     const startedAt = Date.now();
-    const { result, response: executionResponse } = await this.createResult(input.input, input.context, signal);
+    const capabilityRequests = input.input.capabilityRequests;
+    const capabilityExecutions = capabilityRequests === undefined
+      ? []
+      : await this.runCapabilities(capabilityRequests);
+    const { result, response: executionResponse } = await this.createResult(input.input, input.context, capabilityExecutions, signal);
     const resultWithDuration: CodingResult = {
       ...result,
       metadata: {
@@ -110,7 +126,10 @@ export class CodingAgent extends BaseAgent {
         durationMs: Date.now() - startedAt,
       },
     };
-    const output = this.toJson(resultWithDuration);
+    const baseOutput = this.toJson(resultWithDuration);
+    const output: Json = capabilityExecutions.length > 0 && isJsonRecord(baseOutput)
+      ? { ...baseOutput, capabilityExecutions: JSON.parse(JSON.stringify(capabilityExecutions)) as Json[] }
+      : baseOutput;
     const response: ExecutionResponse = {
       ...executionResponse,
       output,
@@ -123,6 +142,7 @@ export class CodingAgent extends BaseAgent {
   private async createResult(
     input: CodingAgentInput,
     context: ExecutionContext,
+    capabilityExecutions: readonly CapabilityResult[],
     signal: CancellationToken,
   ): Promise<{ result: CodingResult; response: ExecutionResponse }> {
     signal.throwIfCancelled();
@@ -131,7 +151,7 @@ export class CodingAgent extends BaseAgent {
     const response = await this.runExecution(context, request, signal);
 
     return {
-      result: this.parseCodingResponse(response.output, input),
+      result: this.parseCodingResponse(response.output, input, capabilityExecutions),
       response,
     };
   }
@@ -255,7 +275,7 @@ Produce a valid CodingResult JSON with resultId, taskDescription, status, summar
     };
   }
 
-  private parseCodingResponse(output: Json, input: CodingAgentInput): CodingResult {
+  private parseCodingResponse(output: Json, input: CodingAgentInput, capabilityExecutions: readonly CapabilityResult[]): CodingResult {
     if (!isJsonRecord(output)) {
       throw new Error("Invalid coding response: missing required fields");
     }
@@ -318,11 +338,16 @@ Produce a valid CodingResult JSON with resultId, taskDescription, status, summar
       },
     };
 
-    return this.normalizeCapabilityClaims(result);
+    return this.normalizeCapabilityClaims(result, capabilityExecutions);
   }
 
-  private normalizeCapabilityClaims(result: CodingResult): CodingResult {
+  private normalizeCapabilityClaims(result: CodingResult, capabilityExecutions: readonly CapabilityResult[]): CodingResult {
     if (result.status === "blocked") return result;
+
+    const realExecutionEvidence = capabilityExecutions.some(
+      (execution) => execution.status === "success" && execution.evidence !== undefined
+    );
+    if (realExecutionEvidence) return result;
 
     const executionClaim = /\b(implemented|created|modified|deleted|executed|ran|applied|completed|passed tests|tested)\b/i;
     const claimsExecution = result.status === "completed" || result.status === "partially_completed";

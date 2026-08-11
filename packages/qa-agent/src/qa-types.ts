@@ -1,5 +1,6 @@
 import type { BaseAgentDependencies, ExecutionResponse } from "@ai-media-factory/runtime";
 import type { Json, Uuid } from "@ai-media-factory/runtime";
+import type { CapabilityRequest } from "@ai-media-factory/runtime";
 
 export type QATestStatus = "passed" | "failed" | "skipped" | "not_executed";
 export type QAEvidenceSource = "runtime" | "provided-result" | "none";
@@ -29,6 +30,8 @@ export interface QAInput {
   requestId: Uuid;
   objective: string;
   request: QARequest;
+  /** Optional authorized capability requests (e.g. command) to execute through the runtime boundary. */
+  capabilityRequests?: readonly CapabilityRequest[];
 }
 
 export interface QATestResult extends QAExecutionEvidence { recommendation?: string; }

@@ -4,12 +4,15 @@
 
 import type { BaseAgentDependencies } from "@ai-media-factory/runtime";
 import type { Json, Uuid } from "@ai-media-factory/runtime";
+import type { CapabilityRequest } from "@ai-media-factory/runtime";
 import type { PlanTask } from "@ai-media-factory/planner-agent";
 
 /** Input to the coding agent: a coding task from the planner. */
 export interface CodingAgentInput {
   /** The task to implement. */
   task: PlanTask;
+  /** Optional authorized capability requests (e.g. filesystem, command) to execute through the runtime boundary. */
+  capabilityRequests?: readonly CapabilityRequest[];
 }
 
 /** The type of coding action. */

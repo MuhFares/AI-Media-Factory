@@ -4,12 +4,15 @@
 
 import type { Uuid } from "@ai-media-factory/runtime";
 import type { ExecutionContext, ExecutionResponse } from "@ai-media-factory/runtime";
+import type { CapabilityRequest } from "@ai-media-factory/runtime";
 import type { PlanTask } from "@ai-media-factory/planner-agent";
 
 /** Input to the research agent: a research task from the planner. */
 export interface ResearchAgentInput {
   /** The task to research. */
   task: PlanTask;
+  /** Optional authorized capability requests (e.g. web search) to execute through the runtime boundary. */
+  capabilityRequests?: readonly CapabilityRequest[];
 }
 
 /** A single source in the research report. */

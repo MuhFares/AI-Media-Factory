@@ -62,4 +62,14 @@ export abstract class BaseAgent implements Agent {
     }
     return this.deps.capabilityExecution.executeCapability(request);
   }
+
+  /** Execute a set of typed capability requests through the injected boundary. */
+  protected async runCapabilities(requests: readonly CapabilityRequest[]): Promise<readonly CapabilityResult[]> {
+    if (this.deps.capabilityExecution === undefined || requests.length === 0) return [];
+    const results: CapabilityResult[] = [];
+    for (const request of requests) {
+      results.push(await this.deps.capabilityExecution.executeCapability(request));
+    }
+    return results;
+  }
 }

@@ -35,14 +35,21 @@ function isResearchAgentInput(value: Json): value is JsonRecord & ResearchAgentI
   if (!isJsonRecord(value) || !isJsonRecord(value.task)) return false;
 
   const { task } = value;
-  return (
+  const validTask =
     typeof task.id === "string" &&
     typeof task.name === "string" &&
     typeof task.description === "string" &&
     typeof task.agent === "string" &&
     Array.isArray(task.dependencies) &&
-    task.dependencies.every((dependency) => typeof dependency === "string")
-  );
+    task.dependencies.every((dependency) => typeof dependency === "string");
+  if (!validTask) return false;
+
+  return value.capabilityRequests === undefined
+    || (Array.isArray(value.capabilityRequests)
+      && value.capabilityRequests.every((request) => isJsonRecord(request)
+        && typeof request.requestId === "string"
+        && typeof request.capabilityId === "string"
+        && isJsonRecord(request.input)));
 }
 
 /** Default research system prompt. */
@@ -80,7 +87,13 @@ export class ResearchAgent extends BaseAgent {
 
     const researchInput = input.input;
     const { report, response: executionResponse } = await this.createReport(researchInput, input.context, signal);
-    const output = this.toJson(report);
+    const capabilityExecutions = researchInput.capabilityRequests === undefined
+      ? []
+      : await this.runCapabilities(researchInput.capabilityRequests);
+    const baseOutput = this.toJson(report);
+    const output: Json = capabilityExecutions.length > 0 && isJsonRecord(baseOutput)
+      ? { ...baseOutput, capabilityExecutions: JSON.parse(JSON.stringify(capabilityExecutions)) as Json[] }
+      : baseOutput;
 
     // Preserve provider execution metadata while returning normalized output.
     const response: ExecutionResponse = {
