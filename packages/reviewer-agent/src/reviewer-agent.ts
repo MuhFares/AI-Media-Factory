@@ -36,6 +36,7 @@ function modeFromKind(kind: string): ReviewMode {
     case "writer_report": return "writer";
     case "seo_report": return "seo";
     case "brand_report": return "brand";
+    case "thumbnail_report": return "thumbnail";
     default: throw new Error(`Invalid review input: unsupported artifact kind "${String(kind)}"`);
   }
 }
@@ -49,6 +50,8 @@ function domainInstructions(mode: ReviewMode): string {
       return "This is an SEO review. Assess keyword coverage, search intent alignment, content structure, and optimization quality against the supplied objectives. Do not review as code.";
     case "brand":
       return "This is a BRAND compliance review. Verify the artifact aligns with brand constraints. If the upstream brand gate reports a non-approved status, the artifact must not be approved.";
+    case "thumbnail":
+      return "This is a THUMBNAIL review. Assess the thumbnail report's viability: it must report an image generated through the image.generate capability with matching runtime evidence, and include an image reference. An artifact that lacks runtime evidence of image generation must not be approved.";
     case "coding":
     default:
       return "This is a CODE review. Analyze only the supplied task, code, change, diff, and references.";
@@ -127,6 +130,11 @@ export class ReviewerAgent extends BaseAgent {
         return [];
       case "brand":
         if (typeof p.status !== "string" || (p.status !== "approved" && p.status !== "needs_revision" && p.status !== "rejected")) return ["brand_report payload has an invalid status."];
+        return [];
+      case "thumbnail":
+        if (typeof p.executionEvidencePresent !== "boolean" || p.executionEvidencePresent !== true) return ["thumbnail_report does not carry matching runtime evidence of image generation."];
+        if (typeof p.status !== "string" || p.status !== "completed") return ["thumbnail_report is not completed."];
+        if (typeof p.imageId !== "string" || p.imageId.trim() === "" || typeof p.imageUrl !== "string" || p.imageUrl.trim() === "") return ["thumbnail_report lacks a reference to the generated image."];
         return [];
       default:
         return [`Unsupported review mode "${String(mode)}".`];

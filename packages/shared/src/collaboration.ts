@@ -4,7 +4,7 @@ import type { AgentId, Json, Timestamp, Uuid } from "./index.js";
 export type CollaborationStatus = "pending" | "in_progress" | "completed" | "blocked" | "failed" | "cancelled";
 
 /** Stable discriminator for artifacts exchanged by the core agents. */
-export type AgentArtifactKind = "execution_plan" | "research_report" | "writer_report" | "seo_report" | "brand_report" | "coding_report" | "review_report" | "qa_report" | "documentation_report";
+export type AgentArtifactKind = "execution_plan" | "research_report" | "writer_report" | "seo_report" | "brand_report" | "coding_report" | "review_report" | "qa_report" | "documentation_report" | "thumbnail_report";
 
 /** Canonical structural payloads used at the collaboration boundary. */
 export interface ExecutionPlanArtifactPayload extends Record<string, Json> { planId: Uuid; objective: string; tasks: Json[]; }
@@ -16,6 +16,7 @@ export interface CodingReportArtifactPayload extends Record<string, Json> { resu
 export interface ReviewReportArtifactPayload extends Record<string, Json> { reportId: Uuid; taskDescription: string; status: string; summary: string; findings: Json[]; }
 export interface QAReportArtifactPayload extends Record<string, Json> { reportId: Uuid; objective: string; status: string; summary: string; testResults: Json[]; executionEvidencePresent: boolean; }
 export interface DocumentationReportArtifactPayload extends Record<string, Json> { resultId: Uuid; objective: string; status: string; summary: string; sections: Json[]; generatedOnly: boolean; persistence: "not_written" | "blocked"; }
+export interface ThumbnailReportArtifactPayload extends Record<string, Json> { reportId: Uuid; taskDescription: string; objective: string; status: string; summary: string; imageId: string; imageUrl: string; imageTitle: string; providerId: string; executionEvidencePresent: boolean; }
 
 export interface AgentArtifactPayloadByKind {
   execution_plan: ExecutionPlanArtifactPayload;
@@ -27,6 +28,7 @@ export interface AgentArtifactPayloadByKind {
   review_report: ReviewReportArtifactPayload;
   qa_report: QAReportArtifactPayload;
   documentation_report: DocumentationReportArtifactPayload;
+  thumbnail_report: ThumbnailReportArtifactPayload;
 }
 
 /** State of the artifact itself, independent from transport/workflow state. */

@@ -10,8 +10,9 @@ const severities: QAFindingSeverity[] = ["critical", "high", "medium", "low", "i
 const categories: QAFindingCategory[] = ["correctness", "regression", "coverage", "reliability", "performance", "security", "process"];
 const priorities: QAPriority[] = ["high", "medium", "low"];
 const sources: QAEvidenceSource[] = ["runtime", "provided-result", "none"];
-const contentKinds: QAContentKind[] = ["research_report", "writer_report", "seo_report", "brand_report", "review_report"];
-const contentOrder: readonly QAContentKind[] = ["research_report", "writer_report", "seo_report", "brand_report", "review_report"];
+const contentKinds: QAContentKind[] = ["research_report", "writer_report", "seo_report", "brand_report", "review_report", "thumbnail_report"];
+const coreOrder: readonly QAContentKind[] = ["research_report", "writer_report", "seo_report", "brand_report", "review_report"];
+const thumbnailOrder: readonly QAContentKind[] = [...coreOrder, "thumbnail_report"];
 
 function record(value: Json): value is JsonRecord { return value !== null && typeof value === "object" && !Array.isArray(value); }
 function oneOf<T extends string>(value: Json, values: T[]): value is T { return typeof value === "string" && values.includes(value as T); }
@@ -157,6 +158,7 @@ export class QAAgent extends BaseAgent {
   private applyContentQAGate(report: QAReport, input: QAInput): QAReport {
     const artifacts = input.validatedArtifacts ?? [];
     const verdict = this.validateContentChain(artifacts);
+    const order = artifacts.length === thumbnailOrder.length || (artifacts.length === coreOrder.length + 1 && artifacts[artifacts.length - 1]?.kind === "thumbnail_report") ? thumbnailOrder : coreOrder;
     if (verdict.blocked) {
       return {
         ...report,
@@ -170,7 +172,7 @@ export class QAAgent extends BaseAgent {
     return {
       ...report,
       status: "passed",
-      summary: `Content chain validated: ${contentOrder.join(" → ")}. ${report.summary}`,
+      summary: `Content chain validated: ${order.join(" → ")}. ${report.summary}`,
       findings: [...verdict.findings, ...report.findings],
       recommendations: [...verdict.recommendations, ...report.recommendations],
       validatedArtifacts: artifacts,
@@ -184,12 +186,17 @@ export class QAAgent extends BaseAgent {
       findings.push({ id: `content-${findings.length + 1}`, severity: "critical", category: "correctness", description, evidence: detail, recommendation: "Resolve this before the content chain can pass QA." });
     };
 
-    if (artifacts.length !== contentOrder.length) {
-      block(`Content QA requires the upstream chain (${contentOrder.join(" → ")}) but received ${artifacts.length} artifact(s).`, `received kinds: ${artifacts.map((a) => a.kind).join(",")}`);
+    // Normalize to the core chain plus an optional terminal thumbnail_report.
+    const hasThumbnailTerminal = artifacts.length > coreOrder.length && artifacts[artifacts.length - 1]?.kind === "thumbnail_report";
+    const expectedOrder = hasThumbnailTerminal ? thumbnailOrder : coreOrder;
+    const core = hasThumbnailTerminal ? artifacts.slice(0, coreOrder.length) : artifacts;
+
+    if ((hasThumbnailTerminal && artifacts.length !== thumbnailOrder.length) || (!hasThumbnailTerminal && artifacts.length !== coreOrder.length)) {
+      block(`Content QA requires the upstream chain (${expectedOrder.join(" → ")}) but received ${artifacts.length} artifact(s).`, `received kinds: ${artifacts.map((a) => a.kind).join(",")}`);
     }
-    for (let i = 0; i < artifacts.length; i++) {
-      if (artifacts[i].kind !== contentOrder[i]) {
-        block(`Artifact at position ${i + 1} has kind "${artifacts[i].kind}" but expected "${contentOrder[i]}".`);
+    for (let i = 0; i < expectedOrder.length && i < artifacts.length; i++) {
+      if (artifacts[i].kind !== expectedOrder[i]) {
+        block(`Artifact at position ${i + 1} has kind "${artifacts[i].kind}" but expected "${expectedOrder[i]}".`);
       }
     }
     for (let i = 1; i < artifacts.length; i++) {
@@ -214,22 +221,34 @@ export class QAAgent extends BaseAgent {
         block(`Artifact ${artifact.kind} is missing required metadata.`);
       }
     }
-    const writer = artifacts.find((a) => a.kind === "writer_report");
+    const writer = core.find((a) => a.kind === "writer_report");
     if (writer !== undefined && record(writer.payload)) {
       if (typeof writer.payload.title !== "string" || writer.payload.title.trim() === "") block("Writer artifact is missing a title.");
       if (typeof writer.payload.content !== "string" || writer.payload.content.trim() === "") block("Writer artifact is missing required content.");
     }
-    const seo = artifacts.find((a) => a.kind === "seo_report");
+    const seo = core.find((a) => a.kind === "seo_report");
     if (seo !== undefined && record(seo.payload) && (typeof seo.payload.optimizedTitle !== "string" || seo.payload.optimizedTitle.trim() === "")) {
       block("SEO artifact is missing optimizedTitle.");
     }
-    const brand = artifacts.find((a) => a.kind === "brand_report");
+    const brand = core.find((a) => a.kind === "brand_report");
     if (brand !== undefined && record(brand.payload) && brand.payload.status !== "approved") {
       block(`Brand gate status is "${String(brand.payload.status)}"; QA cannot pass until the brand gate is approved.`);
     }
-    const review = artifacts.find((a) => a.kind === "review_report");
+    const review = core.find((a) => a.kind === "review_report");
     if (review !== undefined && record(review.payload) && review.payload.status !== "approved") {
       block(`Reviewer status is "${String(review.payload.status)}"; QA cannot pass until the reviewer approves the artifact.`);
+    }
+    const thumbnail = artifacts.find((a) => a.kind === "thumbnail_report");
+    if (thumbnail !== undefined && record(thumbnail.payload)) {
+      if (thumbnail.payload.status !== "completed") {
+        block(`Thumbnail status is "${String(thumbnail.payload.status)}"; QA cannot pass until the thumbnail is completed.`);
+      }
+      if (thumbnail.payload.executionEvidencePresent !== true) {
+        block("Thumbnail artifact lacks matching runtime evidence of image.generate execution.");
+      }
+      if (typeof thumbnail.payload.imageId !== "string" || thumbnail.payload.imageId.trim() === "" || typeof thumbnail.payload.imageUrl !== "string" || thumbnail.payload.imageUrl.trim() === "") {
+        block("Thumbnail artifact lacks a reference to the generated image.");
+      }
     }
 
     const blocked = findings.length > 0;

@@ -226,3 +226,18 @@ export type {
   WebSearchCapabilityOutput,
   WebSearchCapabilityPolicy,
 } from "./web-search/web-search-capability.js";
+
+// image generation capability
+export {
+  ImageGenerationCapabilityExecutor,
+  IMAGE_GENERATION_CAPABILITY_ID,
+  createImageGenerationCapability,
+} from "./image-generation/image-generation-capability.js";
+export type {
+  ImageGenerationRequest,
+  ImageGenerationProviderResponse,
+  ImageGenerationProvider,
+  ImageGenerationCapabilityInput,
+  ImageGenerationCapabilityOutput,
+  ImageGenerationCapabilityPolicy,
+} from "./image-generation/image-generation-capability.js";

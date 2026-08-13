@@ -39,6 +39,7 @@ export interface ExecutionEvidence {
   providerId?: string;
   resultCount?: number;
   providerInvoked?: boolean;
+  imageId?: string;
   exitCode?: number;
   stdoutRef?: string;
   stderrRef?: string;

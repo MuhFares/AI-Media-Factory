@@ -272,6 +272,51 @@ describe("ReviewerAgent", () => {
     );
     strictEqual(result.output.status, "blocked");
   });
+
+  it("derives the thumbnail review mode from the thumbnail_report kind", async () => {
+    let mode;
+    const agent = createReviewerAgent({
+      config: {},
+      execute: async (_context, request) => {
+        mode = /Review domain: (\w+)/.exec(request.messages[1].content)?.[1];
+        return response({ ...validApproved(), status: "approved" });
+      },
+    });
+
+    const result = await agent.execute(
+      { context: {}, input: { requestId: "request-1", task, context: { artifact: { kind: "thumbnail_report", artifactId: "thumb-1", payload: { reportId: "t", status: "completed", imageId: "img-1", imageUrl: "https://cdn.example.com/img-1.png", imageTitle: "T", providerId: "fake-image", executionEvidencePresent: true } } } } },
+      activeSignal,
+    );
+    strictEqual(mode, "thumbnail");
+    strictEqual(result.output.status, "approved");
+  });
+
+  it("does not approve a thumbnail_report lacking runtime evidence", async () => {
+    const agent = createReviewerAgent({
+      config: {},
+      execute: async () => response({ ...validApproved(), status: "approved" }),
+    });
+
+    const result = await agent.execute(
+      { context: {}, input: { requestId: "request-1", task, context: { artifact: { kind: "thumbnail_report", artifactId: "thumb-1", payload: { reportId: "t", status: "completed", imageId: "img-1", imageUrl: "https://cdn.example.com/img-1.png", executionEvidencePresent: false } } } } },
+      activeSignal,
+    );
+    strictEqual(result.output.status, "blocked");
+    ok(result.output.findings.some((finding) => finding.title === "Artifact failed the review gate"));
+  });
+
+  it("does not approve a thumbnail_report missing an image reference", async () => {
+    const agent = createReviewerAgent({
+      config: {},
+      execute: async () => response({ ...validApproved(), status: "approved" }),
+    });
+
+    const result = await agent.execute(
+      { context: {}, input: { requestId: "request-1", task, context: { artifact: { kind: "thumbnail_report", artifactId: "thumb-1", payload: { reportId: "t", status: "completed", imageId: "", imageUrl: "", executionEvidencePresent: true } } } } },
+      activeSignal,
+    );
+    strictEqual(result.output.status, "blocked");
+  });
 });
 
 function validApproved() {

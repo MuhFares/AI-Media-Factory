@@ -1,0 +1,28 @@
+{
+  "name": "@ai-media-factory/thumbnail-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Thumbnail Agent — derives an image generation prompt from the content chain and produces a thumbnail report via the image.generate capability.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json && node --test"
+  },
+  "dependencies": {
+    "@ai-media-factory/runtime": "*",
+    "@ai-media-factory/planner-agent": "*",
+    "@ai-media-factory/tool-framework": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}

@@ -35,6 +35,12 @@ function contentChain(overrides = {}) {
   return [research, writer, seo, brand, review];
 }
 
+function contentChainWithThumbnail(thumbOverrides = {}) {
+  const chain = contentChain();
+  const thumbnail = artifact({ artifactId: "a-thumbnail", kind: "thumbnail_report", producerAgent: "thumbnail", workflowId: "workflow-1", correlationId: "correlation-1", parentArtifact: { artifactId: chain[4].artifactId, kind: chain[4].kind }, payload: { reportId: "t", taskDescription: "Thumbnail", objective: "Generate a thumbnail", status: "completed", summary: "ok", imageId: "img-0001", imageUrl: "https://cdn.example.com/img-0001.png", imageTitle: "Generated Thumbnail", providerId: "fake-image", executionEvidencePresent: true, metadata: { createdAt: "2026-08-11T00:00:00.000Z", agentVersion: "1.0.0" } }, ...thumbOverrides });
+  return [...chain, thumbnail];
+}
+
 const contentOutput = (status = "passed") => ({ reportId: "00000000-0000-4000-8000-000000000002", requestId: "00000000-0000-4000-8000-000000000001", objective: "Validate the content chain", status, summary: "review", testResults: [], findings: [], risks: [], recommendations: [], metadata: { createdAt: "2026-08-11T00:00:00.000Z", agentVersion: "1.0.0", executionEvidencePresent: false } });
 const contentResponse = (output) => ({ output, raw: "{}", usage: { inputTokens: 1, outputTokens: 1, costUsd: 0 }, model: "test", provider: "test", latencyMs: 1 });
 const contentAgent = (execute = async () => contentResponse(contentOutput())) => createQAAgent({ execute, config: {} });
@@ -187,5 +193,36 @@ describe("QAAgent content QA", () => {
     const chain = contentChain();
     chain[0].kind = "qa_report";
     await rejects(() => contentAgent().execute({ context: {}, input: contentInput(chain) }, signal), /Invalid QA input/);
+  });
+
+  it("passes a content chain with an optional terminal thumbnail_report", async () => {
+    const chain = contentChainWithThumbnail();
+    const result = await contentAgent().execute({ context: {}, input: contentInput(chain) }, signal);
+    strictEqual(result.output.status, "passed");
+    strictEqual(result.output.validatedArtifacts.length, 6);
+  });
+
+  it("cannot pass a thumbnail_report that is not completed", async () => {
+    const chain = contentChainWithThumbnail();
+    chain.find((a) => a.kind === "thumbnail_report").payload.status = "blocked";
+    const result = await contentAgent().execute({ context: {}, input: contentInput(chain) }, signal);
+    strictEqual(result.output.status, "blocked");
+    ok(result.output.findings.some((f) => f.description.includes("Thumbnail status")));
+  });
+
+  it("cannot pass a thumbnail_report lacking runtime evidence", async () => {
+    const chain = contentChainWithThumbnail();
+    chain.find((a) => a.kind === "thumbnail_report").payload.executionEvidencePresent = false;
+    const result = await contentAgent().execute({ context: {}, input: contentInput(chain) }, signal);
+    strictEqual(result.output.status, "blocked");
+    ok(result.output.findings.some((f) => f.description.includes("runtime evidence")));
+  });
+
+  it("cannot pass a thumbnail_report missing an image reference", async () => {
+    const chain = contentChainWithThumbnail();
+    chain.find((a) => a.kind === "thumbnail_report").payload.imageId = "";
+    const result = await contentAgent().execute({ context: {}, input: contentInput(chain) }, signal);
+    strictEqual(result.output.status, "blocked");
+    ok(result.output.findings.some((f) => f.description.includes("reference to the generated image")));
   });
 });
