@@ -14,6 +14,7 @@ export type {
   ExecutiveDirective,
   ExecutiveObjectiveInput,
   Priority,
+  SourceArtifactReference,
   WorkflowIntent,
 } from "./types.js";
 export {
@@ -29,3 +30,13 @@ export {
   toOrchestratorDirective,
 } from "./orchestrator-bridge.js";
 export type { ExecutiveRunTarget } from "./orchestrator-bridge.js";
+export {
+  decideBusinessCycle,
+  validateBusinessFeedback,
+} from "./business-decision.js";
+export type {
+  BusinessFeedbackArtifact,
+  BusinessFeedbackDecision,
+  BusinessFeedbackInput,
+  FeedbackDecisionStatus,
+} from "./business-decision.js";

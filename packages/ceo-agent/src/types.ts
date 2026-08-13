@@ -26,6 +26,12 @@ export interface ExecutiveConstraints {
   readonly deterministic?: boolean;
 }
 
+/** Reference to an upstream collaboration artifact a decision is grounded in. */
+export interface SourceArtifactReference {
+  readonly artifactId: Uuid;
+  readonly kind: string;
+}
+
 /** Decision input from an executive caller. */
 export interface ExecutiveObjectiveInput {
   readonly objective: string;
@@ -60,6 +66,11 @@ export interface ExecutiveDirective {
   readonly constraints: Readonly<Record<string, unknown>>;
   readonly createdAt: Timestamp;
   readonly decisionEvidence: DecisionEvidence;
+  /** Optional business-cycle metadata present on CEO business feedback directives. */
+  readonly successCriteria?: readonly string[];
+  readonly rationale?: string;
+  readonly sourceArtifactReferences?: readonly SourceArtifactReference[];
+  readonly cycle?: number;
 }
 
 /** Options to construct a CEOAgent. */
