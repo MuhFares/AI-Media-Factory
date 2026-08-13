@@ -56,6 +56,7 @@ export type {
 DocumentationReportArtifactPayload,
   AnalyticsReportArtifactPayload,
   GrowthReportArtifactPayload,
+  FinanceReportArtifactPayload,
   AgentArtifactPayloadByKind,
   AgentEvidence,
   AgentError,
