@@ -4,11 +4,12 @@ import type { AgentId, Json, Timestamp, Uuid } from "./index.js";
 export type CollaborationStatus = "pending" | "in_progress" | "completed" | "blocked" | "failed" | "cancelled";
 
 /** Stable discriminator for artifacts exchanged by the core agents. */
-export type AgentArtifactKind = "execution_plan" | "research_report" | "coding_report" | "review_report" | "qa_report" | "documentation_report";
+export type AgentArtifactKind = "execution_plan" | "research_report" | "writer_report" | "coding_report" | "review_report" | "qa_report" | "documentation_report";
 
 /** Canonical structural payloads used at the collaboration boundary. */
 export interface ExecutionPlanArtifactPayload extends Record<string, Json> { planId: Uuid; objective: string; tasks: Json[]; }
 export interface ResearchReportArtifactPayload extends Record<string, Json> { reportId: Uuid; taskDescription: string; summary: string; sources: Json[]; }
+export interface WriterReportArtifactPayload extends Record<string, Json> { contentId: Uuid; taskDescription: string; objective: string; title: string; content: string; summary: string; sourceReferences: Json[]; status: string; }
 export interface CodingReportArtifactPayload extends Record<string, Json> { resultId: Uuid; taskDescription: string; status: string; summary: string; actions: Json[]; }
 export interface ReviewReportArtifactPayload extends Record<string, Json> { reportId: Uuid; taskDescription: string; status: string; summary: string; findings: Json[]; }
 export interface QAReportArtifactPayload extends Record<string, Json> { reportId: Uuid; objective: string; status: string; summary: string; testResults: Json[]; executionEvidencePresent: boolean; }
@@ -17,6 +18,7 @@ export interface DocumentationReportArtifactPayload extends Record<string, Json>
 export interface AgentArtifactPayloadByKind {
   execution_plan: ExecutionPlanArtifactPayload;
   research_report: ResearchReportArtifactPayload;
+  writer_report: WriterReportArtifactPayload;
   coding_report: CodingReportArtifactPayload;
   review_report: ReviewReportArtifactPayload;
   qa_report: QAReportArtifactPayload;

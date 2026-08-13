@@ -28,6 +28,7 @@
     "@ai-media-factory/planner-agent": "*",
     "@ai-media-factory/research-agent": "*",
     "@ai-media-factory/ceo-agent": "*",
+    "@ai-media-factory/writer-agent": "*",
     "typescript": "^5.5.0"
   }
 }
