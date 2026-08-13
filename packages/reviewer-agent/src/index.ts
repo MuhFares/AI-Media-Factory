@@ -3,6 +3,9 @@
 export type {
   ReviewContext,
   ReviewerInput,
+  ReviewArtifactKind,
+  ReviewMode,
+  ArtifactUnderReview,
   ReviewFindingSeverity,
   ReviewFindingCategory,
   ReviewFinding,

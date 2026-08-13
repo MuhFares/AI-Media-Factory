@@ -4,14 +4,17 @@ import type { AgentId, Json } from "@ai-media-factory/runtime";
 import type { CancellationToken, ExecutionContext, ExecutionRequest, ExecutionResponse } from "@ai-media-factory/runtime";
 import { BaseAgent, type AgentExecutionInput, type AgentExecutionOutput } from "@ai-media-factory/runtime";
 import type {
+  ArtifactUnderReview,
   ReviewFinding,
   ReviewFindingCategory,
   ReviewFindingSeverity,
+  ReviewMode,
   ReviewRecommendation,
   ReviewReport,
   ReviewerAgentDependencies,
   ReviewerConfig,
   ReviewerInput,
+  ReviewArtifactKind,
 } from "./review-types.js";
 
 type JsonRecord = { [key: string]: Json };
@@ -25,6 +28,32 @@ Your output must be valid JSON conforming to the ReviewReport schema. Do not inc
 
 const severities: ReviewFindingSeverity[] = ["critical", "high", "medium", "low", "info"];
 const categories: ReviewFindingCategory[] = ["correctness", "architecture", "bug", "risk", "security", "maintainability"];
+
+/** Derive the review domain from the artifact kind. */
+function modeFromKind(kind: string): ReviewMode {
+  switch (kind) {
+    case "coding_report": return "coding";
+    case "writer_report": return "writer";
+    case "seo_report": return "seo";
+    case "brand_report": return "brand";
+    default: throw new Error(`Invalid review input: unsupported artifact kind "${String(kind)}"`);
+  }
+}
+
+/** Domain-specific review guidance appended to the prompt. */
+function domainInstructions(mode: ReviewMode): string {
+  switch (mode) {
+    case "writer":
+      return "This is a CONTENT review. Assess factual grounding, citation consistency, completeness, clarity, and adherence to the stated objective. Do not review as code.";
+    case "seo":
+      return "This is an SEO review. Assess keyword coverage, search intent alignment, content structure, and optimization quality against the supplied objectives. Do not review as code.";
+    case "brand":
+      return "This is a BRAND compliance review. Verify the artifact aligns with brand constraints. If the upstream brand gate reports a non-approved status, the artifact must not be approved.";
+    case "coding":
+    default:
+      return "This is a CODE review. Analyze only the supplied task, code, change, diff, and references.";
+  }
+}
 
 function isRecord(value: Json): value is JsonRecord {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -68,13 +97,87 @@ export class ReviewerAgent extends BaseAgent {
 
   private async createReport(input: ReviewerInput, context: ExecutionContext, signal: CancellationToken): Promise<{ report: ReviewReport; response: ExecutionResponse }> {
     signal.throwIfCancelled();
-    const request = this.buildExecutionRequest(this.buildReviewPrompt(input));
+    const { mode, artifact } = this.resolveReviewContext(input);
+    const request = this.buildExecutionRequest(this.buildReviewPrompt(input, mode, artifact));
     const response = await this.runExecution(context, request, signal);
-    return { report: this.parseReviewResponse(response.output, input), response };
+    const parsed = this.parseReviewResponse(response.output, input);
+    return { report: this.applyReviewGate(mode, artifact, parsed), response };
   }
 
-  private buildReviewPrompt(input: ReviewerInput): string {
+  /** Determine the review domain from the artifact kind under review. */
+  private resolveReviewContext(input: ReviewerInput): { mode: ReviewMode; artifact?: ArtifactUnderReview } {
+    const artifact = input.context?.artifact;
+    if (artifact === undefined) return { mode: "coding" };
+    return { mode: modeFromKind(artifact.kind), artifact };
+  }
+
+  /** Structural validation of the artifact payload for its review domain. */
+  private validateArtifact(mode: ReviewMode, artifact: ArtifactUnderReview | undefined): string[] {
+    if (mode === "coding") return [];
+    if (artifact === undefined) return ["Missing artifact payload: a content review requires the artifact under review."];
+    if (!isRecord(artifact.payload)) return ["Artifact payload is not an object."];
+    const p = artifact.payload;
+    switch (mode) {
+      case "writer":
+        if (typeof p.title !== "string" || p.title.trim() === "") return ["writer_report payload lacks a title."];
+        if (typeof p.content !== "string" || p.content.trim() === "") return ["writer_report payload lacks content."];
+        return [];
+      case "seo":
+        if (typeof p.optimizedTitle !== "string" || p.optimizedTitle.trim() === "") return ["seo_report payload lacks optimizedTitle."];
+        return [];
+      case "brand":
+        if (typeof p.status !== "string" || (p.status !== "approved" && p.status !== "needs_revision" && p.status !== "rejected")) return ["brand_report payload has an invalid status."];
+        return [];
+      default:
+        return [`Unsupported review mode "${String(mode)}".`];
+    }
+  }
+
+  /**
+   * Enforce the review gate so an artifact that fails structural validation or
+   * that an upstream brand gate rejected can never be approved.
+   */
+  private applyReviewGate(mode: ReviewMode, artifact: ArtifactUnderReview | undefined, report: ReviewReport): ReviewReport {
+    const problems = this.validateArtifact(mode, artifact);
+    const brandBlocked = mode === "brand" && artifact !== undefined && isRecord(artifact.payload) && artifact.payload.status !== "approved";
+    if (problems.length === 0 && !brandBlocked) return report;
+
+    const gateFindings: ReviewFinding[] = problems.map((problem, index) => ({
+      id: `gate-${index + 1}`,
+      severity: "critical",
+      category: "correctness",
+      title: "Artifact failed the review gate",
+      description: problem,
+      recommendation: "Resolve the structural issue before this artifact can be reviewed and approved.",
+    }));
+    if (brandBlocked) {
+      gateFindings.push({
+        id: `gate-${gateFindings.length + 1}`,
+        severity: "critical",
+        category: "risk",
+        title: "Brand compliance gate rejected this artifact",
+        description: 'The upstream brand gate returned a non-approved status, so this artifact must not be approved.',
+        recommendation: "Resolve the brand compliance issues before resubmitting this artifact for review.",
+      });
+    }
+
+    return {
+      ...report,
+      status: "blocked",
+      findings: [...gateFindings, ...report.findings],
+      recommendations: [
+        { priority: "high", description: "Resolve all critical findings surfaced by the Review gate before approving.", relatedFindingIds: gateFindings.map((finding) => finding.id) },
+        ...report.recommendations,
+      ],
+    };
+  }
+
+  private buildReviewPrompt(input: ReviewerInput, mode: ReviewMode, artifact: ArtifactUnderReview | undefined): string {
+    const artifactBlock = artifact === undefined ? "" : `\n\nArtifact under review (kind: ${artifact.kind}, id: ${artifact.artifactId}):\n${JSON.stringify(artifact.payload, null, 2)}`;
     return `${this.reviewerConfig.systemPrompt}
+
+Review domain: ${mode}
+${domainInstructions(mode)}
 
 Review request:
 - Request ID: ${input.requestId}
@@ -82,9 +185,9 @@ Review request:
 - Assigned agent: ${input.task.agent}
 
 Supplied review context:
-${JSON.stringify(input.context ?? {}, null, 2)}
+${JSON.stringify(input.context ?? {}, null, 2)}${artifactBlock}
 
-Return a ReviewReport with summary, status, findings, recommendations, and metadata. Do not infer that any code was executed or changed.`;
+Return a ReviewReport with summary, status, findings, recommendations, and metadata. Do not infer that any code was executed or changed. Refuse to approve an artifact that failed an upstream gate.`;
   }
 
   private buildExecutionRequest(prompt: string): ExecutionRequest {

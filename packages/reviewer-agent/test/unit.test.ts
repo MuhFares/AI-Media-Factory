@@ -155,4 +155,133 @@ describe("ReviewerAgent", () => {
       /Invalid review response: invalid finding/
     );
   });
+
+  it("derives the review mode from the artifact kind", async () => {
+    let mode;
+    let sawPayload = false;
+    const agent = createReviewerAgent({
+      config: {},
+      execute: async (_context, request) => {
+        mode = /Review domain: (\w+)/.exec(request.messages[1].content)?.[1];
+        sawPayload = request.messages[1].content.includes('"optimizedTitle"');
+        return response({ ...validApproved(), status: "approved" });
+      },
+    });
+
+    const result = await agent.execute(
+      { context: {}, input: { requestId: "request-1", task, context: { artifact: { kind: "seo_report", artifactId: "seo-1", payload: { reportId: "r", optimizedTitle: "title", status: "completed" } } } } },
+      activeSignal,
+    );
+    strictEqual(mode, "seo");
+    strictEqual(sawPayload, true);
+    strictEqual(result.output.status, "approved");
+  });
+
+  it("rejects an unsupported artifact kind", async () => {
+    const agent = createReviewerAgent({
+      config: {},
+      execute: async () => response({ ...validApproved(), status: "approved" }),
+    });
+
+    await rejects(
+      () => agent.execute(
+        { context: {}, input: { requestId: "request-1", task, context: { artifact: { kind: "unknown_report", artifactId: "x", payload: { status: "completed" } } } } },
+        activeSignal,
+      ),
+      /Invalid review input: unsupported artifact kind/
+    );
+  });
+
+  it("reviews a valid writer_report and preserves the approved verdict", async () => {
+    const agent = createReviewerAgent({
+      config: {},
+      execute: async () => response({ ...validApproved(), status: "approved" }),
+    });
+
+    const result = await agent.execute(
+      { context: {}, input: { requestId: "request-1", task, context: { artifact: { kind: "writer_report", artifactId: "writer-1", payload: { contentId: "w", title: "T", content: "Body.", status: "completed" } } } } },
+      activeSignal,
+    );
+    strictEqual(result.output.status, "approved");
+    strictEqual(result.output.findings.length, 0);
+  });
+
+  it("does not approve an invalid writer_report (gate forces blocked)", async () => {
+    const agent = createReviewerAgent({
+      config: {},
+      execute: async () => response({ ...validApproved(), status: "approved" }),
+    });
+
+    const result = await agent.execute(
+      { context: {}, input: { requestId: "request-1", task, context: { artifact: { kind: "writer_report", artifactId: "writer-1", payload: { contentId: "w", status: "completed" } } } } },
+      activeSignal,
+    );
+    strictEqual(result.output.status, "blocked");
+    ok(result.output.findings.some((finding) => finding.title === "Artifact failed the review gate"));
+  });
+
+  it("reviews a valid seo_report", async () => {
+    const agent = createReviewerAgent({
+      config: {},
+      execute: async () => response({ ...validApproved(), status: "approved" }),
+    });
+
+    const result = await agent.execute(
+      { context: {}, input: { requestId: "request-1", task, context: { artifact: { kind: "seo_report", artifactId: "seo-1", payload: { reportId: "r", optimizedTitle: "T", status: "completed" } } } } },
+      activeSignal,
+    );
+    strictEqual(result.output.status, "approved");
+  });
+
+  it("reviews an approved brand_report as approved", async () => {
+    const agent = createReviewerAgent({
+      config: {},
+      execute: async () => response({ ...validApproved(), status: "approved" }),
+    });
+
+    const result = await agent.execute(
+      { context: {}, input: { requestId: "request-1", task, context: { artifact: { kind: "brand_report", artifactId: "brand-1", payload: { reportId: "b", status: "approved", issues: [], passedChecks: [], failedChecks: [], recommendations: [] } } } } },
+      activeSignal,
+    );
+    strictEqual(result.output.status, "approved");
+  });
+
+  it("keeps a brand rejection visible to the reviewer (gate forces blocked)", async () => {
+    const agent = createReviewerAgent({
+      config: {},
+      execute: async () => response({ ...validApproved(), status: "approved" }),
+    });
+
+    const result = await agent.execute(
+      { context: {}, input: { requestId: "request-1", task, context: { artifact: { kind: "brand_report", artifactId: "brand-1", payload: { reportId: "b", status: "rejected", issues: [{ code: "brand.tonality" }], passedChecks: [], failedChecks: [], recommendations: [] } } } } },
+      activeSignal,
+    );
+    strictEqual(result.output.status, "blocked");
+    ok(result.output.findings.some((finding) => finding.title === "Brand compliance gate rejected this artifact"));
+  });
+
+  it("rejects an invalid brand_report status", async () => {
+    const agent = createReviewerAgent({
+      config: {},
+      execute: async () => response({ ...validApproved(), status: "approved" }),
+    });
+
+    const result = await agent.execute(
+      { context: {}, input: { requestId: "request-1", task, context: { artifact: { kind: "brand_report", artifactId: "brand-1", payload: { reportId: "b", status: "weird", issues: [] } } } } },
+      activeSignal,
+    );
+    strictEqual(result.output.status, "blocked");
+  });
 });
+
+function validApproved() {
+  return {
+    reportId: "00000000-0000-4000-8000-000000000000",
+    taskDescription: task.description,
+    summary: "Nothing to fix.",
+    status: "approved",
+    findings: [],
+    recommendations: [],
+    metadata: { createdAt: "2026-08-10T00:00:00.000Z", agentVersion: "1.0.0" },
+  };
+}
