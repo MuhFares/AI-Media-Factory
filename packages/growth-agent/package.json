@@ -1,0 +1,28 @@
+{
+  "name": "@ai-media-factory/growth-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Growth Agent - deterministic decision/recommendation specialist that turns a validated analytics_report into a traceable growth recommendation report.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json && node --test"
+  },
+  "dependencies": {
+    "@ai-media-factory/runtime": "*",
+    "@ai-media-factory/shared": "*",
+    "@ai-media-factory/tool-framework": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}

@@ -4,7 +4,7 @@ import type { AgentId, Json, Timestamp, Uuid } from "./index.js";
 export type CollaborationStatus = "pending" | "in_progress" | "completed" | "blocked" | "failed" | "cancelled";
 
 /** Stable discriminator for artifacts exchanged by the core agents. */
-export type AgentArtifactKind = "execution_plan" | "research_report" | "writer_report" | "seo_report" | "brand_report" | "coding_report" | "review_report" | "qa_report" | "documentation_report" | "thumbnail_report" | "video_report" | "published_report" | "analytics_report";
+export type AgentArtifactKind = "execution_plan" | "research_report" | "writer_report" | "seo_report" | "brand_report" | "coding_report" | "review_report" | "qa_report" | "documentation_report" | "thumbnail_report" | "video_report" | "published_report" | "analytics_report" | "growth_report";
 
 /** Canonical structural payloads used at the collaboration boundary. */
 export interface ExecutionPlanArtifactPayload extends Record<string, Json> { planId: Uuid; objective: string; tasks: Json[]; }
@@ -20,6 +20,7 @@ export interface ThumbnailReportArtifactPayload extends Record<string, Json> { r
 export interface VideoReportArtifactPayload extends Record<string, Json> { reportId: Uuid; taskDescription: string; objective: string; status: string; summary: string; videoId: string; videoUrl: string; videoTitle: string; providerId: string; jobId: string; durationSeconds: number; aspectRatio: string; executionEvidencePresent: boolean; }
 export interface PublishedReportArtifactPayload extends Record<string, Json> { reportId: Uuid; publicationId: string; platform: string; idempotencyKey: string; status: string; summary: string; publishedUrl: string; publishedAt: string; sourceVideoId: string; providerId: string; executionEvidencePresent: boolean; metadata: Record<string, Json>; capabilityExecutions: Json[]; }
 export interface AnalyticsReportArtifactPayload extends Record<string, Json> { reportId: Uuid; publicationId: string; contentId: string; platform: string; retrievedAt: string; status: string; summary: string; metrics: Record<string, number>; source: string; sourceId: string; executionEvidencePresent: boolean; metadata: Record<string, Json>; capabilityExecutions: Json[]; }
+export interface GrowthReportArtifactPayload extends Record<string, Json> { recommendationId: Uuid; objective: string; contentId: string; status: string; summary: string; winningPatterns: Json[]; losingPatterns: Json[]; recommendations: Json[]; experiments: Json[]; priorities: Json[]; confidence: number; sourceArtifactReferences: Json[]; metadata: Record<string, Json>; }
 
 export interface AgentArtifactPayloadByKind {
   execution_plan: ExecutionPlanArtifactPayload;
@@ -35,6 +36,7 @@ export interface AgentArtifactPayloadByKind {
   video_report: VideoReportArtifactPayload;
   published_report: PublishedReportArtifactPayload;
   analytics_report: AnalyticsReportArtifactPayload;
+  growth_report: GrowthReportArtifactPayload;
 }
 
 /** State of the artifact itself, independent from transport/workflow state. */
