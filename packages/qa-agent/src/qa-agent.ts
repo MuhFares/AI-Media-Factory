@@ -10,9 +10,9 @@ const severities: QAFindingSeverity[] = ["critical", "high", "medium", "low", "i
 const categories: QAFindingCategory[] = ["correctness", "regression", "coverage", "reliability", "performance", "security", "process"];
 const priorities: QAPriority[] = ["high", "medium", "low"];
 const sources: QAEvidenceSource[] = ["runtime", "provided-result", "none"];
-const contentKinds: QAContentKind[] = ["research_report", "writer_report", "seo_report", "brand_report", "review_report", "thumbnail_report", "video_report"];
+const contentKinds: QAContentKind[] = ["research_report", "writer_report", "seo_report", "brand_report", "review_report", "thumbnail_report", "video_report", "published_report"];
 const coreOrder: readonly QAContentKind[] = ["research_report", "writer_report", "seo_report", "brand_report", "review_report"];
-const optionalTerminalOrder: readonly QAContentKind[] = ["thumbnail_report", "video_report"];
+const optionalTerminalOrder: readonly QAContentKind[] = ["thumbnail_report", "video_report", "published_report"];
 
 /** Deterministically derive the expected content order for a given artifact set. */
 function expectedOrderFor(artifacts: readonly QAContentArtifact[]): readonly QAContentKind[] {
@@ -269,6 +269,28 @@ export class QAAgent extends BaseAgent {
       }
       if (typeof video.payload.jobId !== "string" || video.payload.jobId.trim() === "") {
         block("Video artifact lacks a job identifier.");
+      }
+    }
+    const published = artifacts.find((a) => a.kind === "published_report");
+    if (published !== undefined && record(published.payload)) {
+      if (published.payload.status !== "completed") {
+        block(`Publish status is "${String(published.payload.status)}"; QA cannot pass until the publication is completed.`);
+      }
+      if (published.payload.executionEvidencePresent !== true) {
+        block("Published artifact lacks matching runtime evidence of publish.youtube completion.");
+      }
+      if (typeof published.payload.publicationId !== "string" || published.payload.publicationId.trim() === "" || typeof published.payload.publishedUrl !== "string" || published.payload.publishedUrl.trim() === "") {
+        block("Published artifact lacks a reference to the confirmed publication.");
+      }
+      if (typeof published.payload.idempotencyKey !== "string" || published.payload.idempotencyKey.trim() === "") {
+        block("Published artifact lacks an idempotency key.");
+      }
+      if (typeof published.payload.sourceVideoId !== "string" || published.payload.sourceVideoId.trim() === "") {
+        block("Published artifact lacks a source video reference.");
+      }
+      const publishedSourceVideoId = published.payload.sourceVideoId;
+      if (artifacts.some((a) => a.kind === "video_report" && record(a.payload) && a.payload.videoId !== publishedSourceVideoId)) {
+        block("Published artifact's source video does not match the upstream video_report.");
       }
     }
 

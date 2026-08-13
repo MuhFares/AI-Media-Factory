@@ -38,6 +38,7 @@ function modeFromKind(kind: string): ReviewMode {
     case "brand_report": return "brand";
     case "thumbnail_report": return "thumbnail";
     case "video_report": return "video";
+    case "published_report": return "published";
     default: throw new Error(`Invalid review input: unsupported artifact kind "${String(kind)}"`);
   }
 }
@@ -55,6 +56,8 @@ function domainInstructions(mode: ReviewMode): string {
       return "This is a THUMBNAIL review. Assess the thumbnail report's viability: it must report an image generated through the image.generate capability with matching runtime evidence, and include an image reference. An artifact that lacks runtime evidence of image generation must not be approved.";
     case "video":
       return "This is a VIDEO review. Assess the video report's viability: it must report a completed video generated through the video.generate capability with matching completion evidence, expected metadata, and a valid asset reference. An artifact that lacks confirmed completion evidence must not be approved.";
+    case "published":
+      return "This is a PUBLISH review. Assess the published report's viability: it must report confirmed publication through the publish.youtube capability with matching runtime evidence, a non-empty idempotency key, and a valid published URL/reference sourced from a completed video. An artifact that lacks confirmed publication evidence must not be approved.";
     case "coding":
     default:
       return "This is a CODE review. Analyze only the supplied task, code, change, diff, and references.";
@@ -145,6 +148,13 @@ export class ReviewerAgent extends BaseAgent {
         if (typeof p.videoId !== "string" || p.videoId.trim() === "" || typeof p.videoUrl !== "string" || p.videoUrl.trim() === "") return ["video_report lacks a reference to the generated video asset."];
         if (typeof p.jobId !== "string" || p.jobId.trim() === "") return ["video_report lacks a job identifier."];
         if (typeof p.durationSeconds !== "number" || !Number.isFinite(p.durationSeconds) || p.durationSeconds <= 0) return ["video_report has an invalid duration."];
+        return [];
+      case "published":
+        if (typeof p.executionEvidencePresent !== "boolean" || p.executionEvidencePresent !== true) return ["published_report does not carry matching runtime evidence of publication."];
+        if (typeof p.status !== "string" || p.status !== "completed") return ["published_report is not completed."];
+        if (typeof p.publicationId !== "string" || p.publicationId.trim() === "" || typeof p.publishedUrl !== "string" || p.publishedUrl.trim() === "") return ["published_report lacks a reference to the confirmed publication."];
+        if (typeof p.idempotencyKey !== "string" || p.idempotencyKey.trim() === "") return ["published_report lacks an idempotency key."];
+        if (typeof p.sourceVideoId !== "string" || p.sourceVideoId.trim() === "") return ["published_report lacks a source video reference."];
         return [];
       default:
         return [`Unsupported review mode "${String(mode)}".`];

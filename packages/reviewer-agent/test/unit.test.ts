@@ -362,6 +362,51 @@ describe("ReviewerAgent", () => {
     );
     strictEqual(missingAsset.output.status, "blocked");
   });
+
+  it("derives the published review mode from the published_report kind", async () => {
+    let mode;
+    const agent = createReviewerAgent({
+      config: {},
+      execute: async (_context, request) => {
+        mode = /Review domain: (\w+)/.exec(request.messages[1].content)?.[1];
+        return response({ ...validApproved(), status: "approved" });
+      },
+    });
+
+    const result = await agent.execute(
+      { context: {}, input: { requestId: "request-1", task, context: { artifact: { kind: "published_report", artifactId: "pub-1", payload: { reportId: "p", status: "completed", publicationId: "pub-0001", publishedUrl: "https://youtube.com/watch?v=pub-0001", idempotencyKey: "publish:assetId=vid-1&platform=youtube&workflowId=w", sourceVideoId: "vid-1", executionEvidencePresent: true } } } } },
+      activeSignal,
+    );
+    strictEqual(mode, "published");
+    strictEqual(result.output.status, "approved");
+  });
+
+  it("does not approve a published_report lacking publication evidence", async () => {
+    const agent = createReviewerAgent({
+      config: {},
+      execute: async () => response({ ...validApproved(), status: "approved" }),
+    });
+
+    const result = await agent.execute(
+      { context: {}, input: { requestId: "request-1", task, context: { artifact: { kind: "published_report", artifactId: "pub-1", payload: { reportId: "p", status: "completed", publicationId: "pub-0001", publishedUrl: "https://youtube.com/watch?v=pub-0001", idempotencyKey: "k", sourceVideoId: "vid-1", executionEvidencePresent: false } } } } },
+      activeSignal,
+    );
+    strictEqual(result.output.status, "blocked");
+    ok(result.output.findings.some((finding) => finding.title === "Artifact failed the review gate"));
+  });
+
+  it("does not approve a published_report missing a publication reference or idempotency key", async () => {
+    const agent = createReviewerAgent({
+      config: {},
+      execute: async () => response({ ...validApproved(), status: "approved" }),
+    });
+
+    const noRef = await agent.execute(
+      { context: {}, input: { requestId: "request-1", task, context: { artifact: { kind: "published_report", artifactId: "pub-1", payload: { reportId: "p", status: "completed", publicationId: "", publishedUrl: "", idempotencyKey: "k", sourceVideoId: "vid-1", executionEvidencePresent: true } } } } },
+      activeSignal,
+    );
+    strictEqual(noRef.output.status, "blocked");
+  });
 });
 
 function validApproved() {

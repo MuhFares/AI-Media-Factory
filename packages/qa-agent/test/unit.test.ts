@@ -47,6 +47,12 @@ function contentChainWithVideo(videoOverrides = {}) {
   return [...chain, video];
 }
 
+function contentChainWithPublished(pubOverrides = {}) {
+  const chain = contentChainWithVideo();
+  const published = artifact({ artifactId: "a-published", kind: "published_report", producerAgent: "publisher", workflowId: "workflow-1", correlationId: "correlation-1", parentArtifact: { artifactId: chain[6].artifactId, kind: chain[6].kind }, payload: { reportId: "p", taskDescription: "Publish", objective: "Publish the approved content", status: "completed", summary: "ok", publicationId: "pub-0001", platform: "youtube", idempotencyKey: "publish:assetId=vid-0001&platform=youtube&workflowId=workflow-1", publishedUrl: "https://youtube.com/watch?v=pub-0001", publishedAt: "2026-08-11T00:00:00.000Z", sourceVideoId: "vid-0001", providerId: "fake-publish", executionEvidencePresent: true, metadata: { createdAt: "2026-08-11T00:00:00.000Z", agentVersion: "1.0.0", workflowId: "workflow-1", correlationId: "correlation-1" }, capabilityExecutions: [], createdAt: "2026-08-11T00:00:00.000Z" }, ...pubOverrides });
+  return [...chain, published];
+}
+
 const contentOutput = (status = "passed") => ({ reportId: "00000000-0000-4000-8000-000000000002", requestId: "00000000-0000-4000-8000-000000000001", objective: "Validate the content chain", status, summary: "review", testResults: [], findings: [], risks: [], recommendations: [], metadata: { createdAt: "2026-08-11T00:00:00.000Z", agentVersion: "1.0.0", executionEvidencePresent: false } });
 const contentResponse = (output) => ({ output, raw: "{}", usage: { inputTokens: 1, outputTokens: 1, costUsd: 0 }, model: "test", provider: "test", latencyMs: 1 });
 const contentAgent = (execute = async () => contentResponse(contentOutput())) => createQAAgent({ execute, config: {} });
@@ -277,5 +283,51 @@ describe("QAAgent content QA", () => {
     chain.splice(chain.indexOf(thumbnail), 0, video);
     const result = await contentAgent().execute({ context: {}, input: contentInput(chain) }, signal);
     strictEqual(result.output.status, "blocked");
+  });
+
+  it("passes a content chain with a terminal published_report", async () => {
+    const chain = contentChainWithPublished();
+    const result = await contentAgent().execute({ context: {}, input: contentInput(chain) }, signal);
+    strictEqual(result.output.status, "passed");
+    strictEqual(result.output.validatedArtifacts.length, 8);
+    strictEqual(result.output.validatedArtifacts[7].kind, "published_report");
+  });
+
+  it("cannot pass a published_report that is not completed", async () => {
+    const chain = contentChainWithPublished();
+    chain.find((a) => a.kind === "published_report").payload.status = "blocked";
+    const result = await contentAgent().execute({ context: {}, input: contentInput(chain) }, signal);
+    strictEqual(result.output.status, "blocked");
+    ok(result.output.findings.some((f) => f.description.includes("Publish status")));
+  });
+
+  it("cannot pass a published_report lacking runtime evidence", async () => {
+    const chain = contentChainWithPublished();
+    chain.find((a) => a.kind === "published_report").payload.executionEvidencePresent = false;
+    const result = await contentAgent().execute({ context: {}, input: contentInput(chain) }, signal);
+    strictEqual(result.output.status, "blocked");
+    ok(result.output.findings.some((f) => f.description.includes("runtime evidence of publish.youtube")));
+  });
+
+  it("cannot pass a published_report missing a publication reference or idempotency key", async () => {
+    const chain = contentChainWithPublished();
+    chain.find((a) => a.kind === "published_report").payload.publishedUrl = "";
+    const result = await contentAgent().execute({ context: {}, input: contentInput(chain) }, signal);
+    strictEqual(result.output.status, "blocked");
+    ok(result.output.findings.some((f) => f.description.includes("confirmed publication")));
+
+    const noKey = contentChainWithPublished();
+    noKey.find((a) => a.kind === "published_report").payload.idempotencyKey = "";
+    const result2 = await contentAgent().execute({ context: {}, input: contentInput(noKey) }, signal);
+    strictEqual(result2.output.status, "blocked");
+    ok(result2.output.findings.some((f) => f.description.includes("idempotency key")));
+  });
+
+  it("cannot pass a published_report whose source video does not match upstream", async () => {
+    const chain = contentChainWithPublished();
+    chain.find((a) => a.kind === "published_report").payload.sourceVideoId = "vid-OTHER";
+    const result = await contentAgent().execute({ context: {}, input: contentInput(chain) }, signal);
+    strictEqual(result.output.status, "blocked");
+    ok(result.output.findings.some((f) => f.description.includes("source video")));
   });
 });

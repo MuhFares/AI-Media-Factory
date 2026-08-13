@@ -30,7 +30,7 @@ export interface QARequest {
  * The content artifact kinds QA can validate. Coding/engineering QA uses the
  * existing evidence-based input model unchanged.
  */
-export type QAContentKind = "research_report" | "writer_report" | "seo_report" | "brand_report" | "review_report" | "thumbnail_report" | "video_report";
+export type QAContentKind = "research_report" | "writer_report" | "seo_report" | "brand_report" | "review_report" | "thumbnail_report" | "video_report" | "published_report";
 
 /** QA domain, derived from whether the input carries a content artifact chain. */
 export type QAMode = "engineering" | "content";

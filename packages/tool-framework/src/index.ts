@@ -257,3 +257,23 @@ export type {
   VideoGenerationCapabilityOutput,
   VideoGenerationCapabilityPolicy,
 } from "./video-generation/video-generation-capability.js";
+
+// publishing capability
+export {
+  PublishingCapabilityExecutor,
+  PUBLISH_CAPABILITY_ID,
+  PUBLISH_PLATFORM,
+  idempotencyKeyFor,
+  createPublishingCapability,
+} from "./publishing/publishing-capability.js";
+export type {
+  PublishingPlatform,
+  PublishStatus,
+  PublishRequest,
+  PublishingProviderResponse,
+  PublishingProvider,
+  PublishStore,
+  PublishingCapabilityInput,
+  PublishingCapabilityOutput,
+  PublishingCapabilityPolicy,
+} from "./publishing/publishing-capability.js";

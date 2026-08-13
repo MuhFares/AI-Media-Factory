@@ -58,6 +58,12 @@ export interface ExecutionEvidence {
   agentId?: string;
   succeeded?: boolean;
   error?: { code: string; message: string };
+  platform?: string;
+  idempotencyKey?: string;
+  publicationId?: string;
+  publishedUrl?: string;
+  publishedAt?: string;
+  deduplicated?: boolean;
 }
 
 export interface CapabilitySuccess<TOutput = Json> {

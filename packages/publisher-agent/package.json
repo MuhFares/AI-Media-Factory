@@ -1,0 +1,27 @@
+{
+  "name": "@ai-media-factory/publisher-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Publisher Agent - validates the approved content chain and requests the publish.youtube capability through the runtime boundary.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json && node --test"
+  },
+  "dependencies": {
+    "@ai-media-factory/runtime": "*",
+    "@ai-media-factory/tool-framework": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}
