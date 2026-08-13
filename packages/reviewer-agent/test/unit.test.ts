@@ -317,6 +317,51 @@ describe("ReviewerAgent", () => {
     );
     strictEqual(result.output.status, "blocked");
   });
+
+  it("derives the video review mode from the video_report kind", async () => {
+    let mode;
+    const agent = createReviewerAgent({
+      config: {},
+      execute: async (_context, request) => {
+        mode = /Review domain: (\w+)/.exec(request.messages[1].content)?.[1];
+        return response({ ...validApproved(), status: "approved" });
+      },
+    });
+
+    const result = await agent.execute(
+      { context: {}, input: { requestId: "request-1", task, context: { artifact: { kind: "video_report", artifactId: "video-1", payload: { reportId: "v", status: "completed", videoId: "vid-1", videoUrl: "https://cdn.example.com/vid-1.mp4", videoTitle: "V", providerId: "fake-video", jobId: "job-1", durationSeconds: 30, aspectRatio: "16:9", executionEvidencePresent: true } } } } },
+      activeSignal,
+    );
+    strictEqual(mode, "video");
+    strictEqual(result.output.status, "approved");
+  });
+
+  it("does not approve a video_report lacking completion evidence", async () => {
+    const agent = createReviewerAgent({
+      config: {},
+      execute: async () => response({ ...validApproved(), status: "approved" }),
+    });
+
+    const result = await agent.execute(
+      { context: {}, input: { requestId: "request-1", task, context: { artifact: { kind: "video_report", artifactId: "video-1", payload: { reportId: "v", status: "completed", videoId: "vid-1", videoUrl: "https://cdn.example.com/vid-1.mp4", jobId: "job-1", durationSeconds: 30, executionEvidencePresent: false } } } } },
+      activeSignal,
+    );
+    strictEqual(result.output.status, "blocked");
+    ok(result.output.findings.some((finding) => finding.title === "Artifact failed the review gate"));
+  });
+
+  it("does not approve a video_report missing an asset reference or jobId", async () => {
+    const agent = createReviewerAgent({
+      config: {},
+      execute: async () => response({ ...validApproved(), status: "approved" }),
+    });
+
+    const missingAsset = await agent.execute(
+      { context: {}, input: { requestId: "request-1", task, context: { artifact: { kind: "video_report", artifactId: "video-1", payload: { reportId: "v", status: "completed", videoId: "", videoUrl: "", jobId: "job-1", durationSeconds: 30, executionEvidencePresent: true } } } } },
+      activeSignal,
+    );
+    strictEqual(missingAsset.output.status, "blocked");
+  });
 });
 
 function validApproved() {

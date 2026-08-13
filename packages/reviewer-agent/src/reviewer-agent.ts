@@ -37,6 +37,7 @@ function modeFromKind(kind: string): ReviewMode {
     case "seo_report": return "seo";
     case "brand_report": return "brand";
     case "thumbnail_report": return "thumbnail";
+    case "video_report": return "video";
     default: throw new Error(`Invalid review input: unsupported artifact kind "${String(kind)}"`);
   }
 }
@@ -52,6 +53,8 @@ function domainInstructions(mode: ReviewMode): string {
       return "This is a BRAND compliance review. Verify the artifact aligns with brand constraints. If the upstream brand gate reports a non-approved status, the artifact must not be approved.";
     case "thumbnail":
       return "This is a THUMBNAIL review. Assess the thumbnail report's viability: it must report an image generated through the image.generate capability with matching runtime evidence, and include an image reference. An artifact that lacks runtime evidence of image generation must not be approved.";
+    case "video":
+      return "This is a VIDEO review. Assess the video report's viability: it must report a completed video generated through the video.generate capability with matching completion evidence, expected metadata, and a valid asset reference. An artifact that lacks confirmed completion evidence must not be approved.";
     case "coding":
     default:
       return "This is a CODE review. Analyze only the supplied task, code, change, diff, and references.";
@@ -135,6 +138,13 @@ export class ReviewerAgent extends BaseAgent {
         if (typeof p.executionEvidencePresent !== "boolean" || p.executionEvidencePresent !== true) return ["thumbnail_report does not carry matching runtime evidence of image generation."];
         if (typeof p.status !== "string" || p.status !== "completed") return ["thumbnail_report is not completed."];
         if (typeof p.imageId !== "string" || p.imageId.trim() === "" || typeof p.imageUrl !== "string" || p.imageUrl.trim() === "") return ["thumbnail_report lacks a reference to the generated image."];
+        return [];
+      case "video":
+        if (typeof p.executionEvidencePresent !== "boolean" || p.executionEvidencePresent !== true) return ["video_report does not carry matching runtime evidence of video generation."];
+        if (typeof p.status !== "string" || p.status !== "completed") return ["video_report is not completed."];
+        if (typeof p.videoId !== "string" || p.videoId.trim() === "" || typeof p.videoUrl !== "string" || p.videoUrl.trim() === "") return ["video_report lacks a reference to the generated video asset."];
+        if (typeof p.jobId !== "string" || p.jobId.trim() === "") return ["video_report lacks a job identifier."];
+        if (typeof p.durationSeconds !== "number" || !Number.isFinite(p.durationSeconds) || p.durationSeconds <= 0) return ["video_report has an invalid duration."];
         return [];
       default:
         return [`Unsupported review mode "${String(mode)}".`];

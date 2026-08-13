@@ -241,3 +241,19 @@ export type {
   ImageGenerationCapabilityOutput,
   ImageGenerationCapabilityPolicy,
 } from "./image-generation/image-generation-capability.js";
+
+// video generation capability
+export {
+  VideoGenerationCapabilityExecutor,
+  VIDEO_GENERATION_CAPABILITY_ID,
+  createVideoGenerationCapability,
+} from "./video-generation/video-generation-capability.js";
+export type {
+  VideoGenerationStatus,
+  VideoGenerationRequest,
+  VideoGenerationProviderResponse,
+  VideoGenerationProvider,
+  VideoGenerationCapabilityInput,
+  VideoGenerationCapabilityOutput,
+  VideoGenerationCapabilityPolicy,
+} from "./video-generation/video-generation-capability.js";

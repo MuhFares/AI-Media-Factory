@@ -41,6 +41,12 @@ function contentChainWithThumbnail(thumbOverrides = {}) {
   return [...chain, thumbnail];
 }
 
+function contentChainWithVideo(videoOverrides = {}) {
+  const chain = contentChainWithThumbnail();
+  const video = artifact({ artifactId: "a-video", kind: "video_report", producerAgent: "video", workflowId: "workflow-1", correlationId: "correlation-1", parentArtifact: { artifactId: chain[5].artifactId, kind: chain[5].kind }, payload: { reportId: "v", taskDescription: "Video", objective: "Generate a video", status: "completed", summary: "ok", videoId: "vid-0001", videoUrl: "https://cdn.example.com/vid-0001.mp4", videoTitle: "Generated Video", providerId: "fake-video", jobId: "job-0001", statusLink: "https://provider.example.com/jobs/job-0001", durationSeconds: 30, width: 1920, height: 1080, frameRate: 30, aspectRatio: "16:9", fileSizeBytes: 1048576, outputFormat: "mp4", executionEvidencePresent: true, metadata: { createdAt: "2026-08-11T00:00:00.000Z", agentVersion: "1.0.0" } }, ...videoOverrides });
+  return [...chain, video];
+}
+
 const contentOutput = (status = "passed") => ({ reportId: "00000000-0000-4000-8000-000000000002", requestId: "00000000-0000-4000-8000-000000000001", objective: "Validate the content chain", status, summary: "review", testResults: [], findings: [], risks: [], recommendations: [], metadata: { createdAt: "2026-08-11T00:00:00.000Z", agentVersion: "1.0.0", executionEvidencePresent: false } });
 const contentResponse = (output) => ({ output, raw: "{}", usage: { inputTokens: 1, outputTokens: 1, costUsd: 0 }, model: "test", provider: "test", latencyMs: 1 });
 const contentAgent = (execute = async () => contentResponse(contentOutput())) => createQAAgent({ execute, config: {} });
@@ -224,5 +230,52 @@ describe("QAAgent content QA", () => {
     const result = await contentAgent().execute({ context: {}, input: contentInput(chain) }, signal);
     strictEqual(result.output.status, "blocked");
     ok(result.output.findings.some((f) => f.description.includes("reference to the generated image")));
+  });
+
+  it("passes a content chain with a terminal video_report", async () => {
+    const chain = contentChainWithVideo();
+    const result = await contentAgent().execute({ context: {}, input: contentInput(chain) }, signal);
+    strictEqual(result.output.status, "passed");
+    strictEqual(result.output.validatedArtifacts.length, 7);
+    strictEqual(result.output.validatedArtifacts[6].kind, "video_report");
+  });
+
+  it("cannot pass a video_report that is not completed", async () => {
+    const chain = contentChainWithVideo();
+    chain.find((a) => a.kind === "video_report").payload.status = "blocked";
+    const result = await contentAgent().execute({ context: {}, input: contentInput(chain) }, signal);
+    strictEqual(result.output.status, "blocked");
+    ok(result.output.findings.some((f) => f.description.includes("Video status")));
+  });
+
+  it("cannot pass a video_report lacking runtime evidence", async () => {
+    const chain = contentChainWithVideo();
+    chain.find((a) => a.kind === "video_report").payload.executionEvidencePresent = false;
+    const result = await contentAgent().execute({ context: {}, input: contentInput(chain) }, signal);
+    strictEqual(result.output.status, "blocked");
+    ok(result.output.findings.some((f) => f.description.includes("runtime evidence of video.generate")));
+  });
+
+  it("cannot pass a video_report missing an asset reference or jobId", async () => {
+    const chain = contentChainWithVideo();
+    chain.find((a) => a.kind === "video_report").payload.videoId = "";
+    const result = await contentAgent().execute({ context: {}, input: contentInput(chain) }, signal);
+    strictEqual(result.output.status, "blocked");
+    ok(result.output.findings.some((f) => f.description.includes("reference to the generated video")));
+
+    const noJob = contentChainWithVideo({ ...undefined });
+    noJob.find((a) => a.kind === "video_report").payload.jobId = "";
+    const result2 = await contentAgent().execute({ context: {}, input: contentInput(noJob) }, signal);
+    strictEqual(result2.output.status, "blocked");
+    ok(result2.output.findings.some((f) => f.description.includes("job identifier")));
+  });
+
+  it("cannot pass a video_report appearing out of order", async () => {
+    const chain = contentChainWithVideo();
+    const video = chain.pop();
+    const thumbnail = chain.find((a) => a.kind === "thumbnail_report");
+    chain.splice(chain.indexOf(thumbnail), 0, video);
+    const result = await contentAgent().execute({ context: {}, input: contentInput(chain) }, signal);
+    strictEqual(result.output.status, "blocked");
   });
 });

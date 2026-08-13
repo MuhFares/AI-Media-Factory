@@ -40,6 +40,12 @@ export interface ExecutionEvidence {
   resultCount?: number;
   providerInvoked?: boolean;
   imageId?: string;
+  jobId?: string;
+  videoId?: string;
+  videoStatus?: "submitted" | "running" | "completed" | "failed";
+  durationSeconds?: number;
+  width?: number;
+  height?: number;
   exitCode?: number;
   stdoutRef?: string;
   stderrRef?: string;
