@@ -60,7 +60,14 @@ export class CollaborationRunner {
       }
       lineage.push(artifact);
       previous = artifact;
-      currentContext = { ...currentContext, data: { ...currentContext.data, previousArtifact: artifactToJson(artifact) } };
+      currentContext = {
+        ...currentContext,
+        data: {
+          ...currentContext.data,
+          previousArtifact: artifactToJson(artifact),
+          validatedArtifacts: [...(Array.isArray(currentContext.data.validatedArtifacts) ? currentContext.data.validatedArtifacts : []), artifactToJson(artifact)],
+        },
+      };
     }
 
     return previous === undefined

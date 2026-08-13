@@ -1,2 +1,2 @@
-export type { QATestStatus, QAEvidenceSource, QAFindingSeverity, QAFindingCategory, QAPriority, QAReportStatus, QAExecutionEvidence, QARequest, QAInput, QATestResult, QAFinding, QARisk, QARecommendation, QAReport, QAConfig, QAAgentDependencies, QAExecutionOutput } from "./qa-types.js";
+export type { QATestStatus, QAEvidenceSource, QAFindingSeverity, QAFindingCategory, QAPriority, QAReportStatus, QAExecutionEvidence, QARequest, QAInput, QAContentKind, QAMode, QAContentArtifact, QATestResult, QAFinding, QARisk, QARecommendation, QAReport, QAConfig, QAAgentDependencies, QAExecutionOutput } from "./qa-types.js";
 export { QAAgent, createQAAgent, DEFAULT_QA_SYSTEM_PROMPT } from "./qa-agent.js";
