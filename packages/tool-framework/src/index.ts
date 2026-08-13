@@ -277,3 +277,22 @@ export type {
   PublishingCapabilityOutput,
   PublishingCapabilityPolicy,
 } from "./publishing/publishing-capability.js";
+
+// analytics capability
+export {
+  AnalyticsCapabilityExecutor,
+  ANALYTICS_CAPABILITY_ID,
+  ANALYTICS_PLATFORM,
+  createAnalyticsCapability,
+} from "./analytics/analytics-capability.js";
+export type {
+  AnalyticsPlatform,
+  AnalyticsStatus,
+  PerformanceMetrics,
+  AnalyticsFetchRequest,
+  AnalyticsProviderResponse,
+  AnalyticsProvider,
+  AnalyticsCapabilityInput,
+  AnalyticsCapabilityOutput,
+  AnalyticsCapabilityPolicy,
+} from "./analytics/analytics-capability.js";
