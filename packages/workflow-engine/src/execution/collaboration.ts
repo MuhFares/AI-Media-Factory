@@ -52,13 +52,13 @@ export class CollaborationRunner {
       if (artifact.kind !== stage.artifactKind || artifact.producerAgent !== stage.step.agent || artifact.workflowId !== context.workflowId || artifact.correlationId !== context.correlationId) {
         return { status: "failed", lineage, error: { message: `Invalid artifact identity for agent step: ${stage.step.agent}`, retryable: false } };
       }
+      lineage.push(artifact);
       if (artifact.status !== "proposed" && artifact.status !== "completed") {
         return { status: "failed", lineage, error: { message: `Agent produced a ${artifact.status} artifact: ${stage.step.agent}`, retryable: false } };
       }
       if (previous !== undefined && (artifact.parentArtifact === undefined || artifact.parentArtifact.artifactId !== previous.artifactId || artifact.parentArtifact.kind !== previous.kind)) {
         return { status: "failed", lineage, error: { message: `Artifact lineage mismatch for agent step: ${stage.step.agent}`, retryable: false } };
       }
-      lineage.push(artifact);
       previous = artifact;
       currentContext = {
         ...currentContext,

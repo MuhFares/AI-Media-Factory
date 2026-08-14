@@ -79,10 +79,11 @@ export class ArtifactProducingExecutor implements AgentExecutorPort {
     if (outcome.status !== "completed") return outcome;
 
     if (this.options.hasFatalCapability !== undefined && this.options.hasFatalCapability(outcome.output)) {
+      const spec = this.options.artifactFor(step, context, outcome.output);
       return {
-        status: "failed",
+        status: "completed",
         output: outcome.output,
-        error: { message: `${step.agent} step is blocked: a required capability did not succeed`, retryable: false },
+        artifact: this.buildArtifact(step, context, spec.kind, spec.artifactId, outcome.output, "blocked"),
       };
     }
 
@@ -97,7 +98,7 @@ export class ArtifactProducingExecutor implements AgentExecutorPort {
     return { ...context, data: { ...context.data, ...input } };
   }
 
-  private buildArtifact(step: AgentStep, context: WorkflowContext, kind: AgentArtifactKind, artifactId: string, payload: Json): CollaborationArtifact {
+  private buildArtifact(step: AgentStep, context: WorkflowContext, kind: AgentArtifactKind, artifactId: string, payload: Json, status: "proposed" | "completed" | "blocked" | "failed" = "completed"): CollaborationArtifact {
     const previous = isRecord(context.data.previousArtifact) ? context.data.previousArtifact : undefined;
     const artifact = {
       artifactId,
@@ -105,7 +106,7 @@ export class ArtifactProducingExecutor implements AgentExecutorPort {
       producerAgent: step.agent,
       workflowId: context.workflowId,
       correlationId: context.correlationId ?? "",
-      status: "completed",
+      status,
       payload,
       contentType: "application/json",
       schemaVersion: SCHEMA_VERSION,
