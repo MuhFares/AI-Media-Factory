@@ -178,6 +178,7 @@ Every citation sourceId must refer to an item in sources. Do not invent sources,
         summary: { type: "string" },
         sources: {
           type: "array",
+          minItems: 1,
           items: {
             type: "object",
             properties: {
