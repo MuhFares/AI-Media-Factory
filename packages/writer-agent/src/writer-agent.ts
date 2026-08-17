@@ -52,8 +52,20 @@ function isWriterAgentInput(value: unknown): value is WriterAgentInput {
   return isRecord(value) && typeof value.objective === "string" && value.objective.trim() !== "" && (value.previousArtifact === undefined || isResearchHandoff(value.previousArtifact));
 }
 
+/** Extracted research findings used to ground the article (never fabricated). */
+interface ResearchFindings {
+  summary: string;
+  evidence: readonly {
+    sourceId: number;
+    title: string;
+    url: string;
+    snippet?: string;
+  }[];
+  citations: readonly { sourceId: number; text: string }[];
+}
+
 /** Extract the required research report from a handoff, validating structure. */
-function parseResearch(handoff: ResearchArtifactHandoff): { artifactId: string; sources: WriterSourceReference[] } {
+function parseResearch(handoff: ResearchArtifactHandoff): { artifactId: string; sources: WriterSourceReference[]; findings: ResearchFindings } {
   if (handoff.kind !== "research_report") {
     throw new Error("Writer requires a research_report artifact, received: " + handoff.kind);
   }
@@ -62,6 +74,7 @@ function parseResearch(handoff: ResearchArtifactHandoff): { artifactId: string; 
     throw new Error("Writer received a malformed research artifact");
   }
   const sources: WriterSourceReference[] = [];
+  const evidence: { sourceId: number; title: string; url: string; snippet?: string }[] = [];
   const seen = new Set<number>();
   for (const item of payload.sources) {
     if (!isRecord(item) || typeof item.id !== "number" || typeof item.title !== "string" || typeof item.url !== "string") {
@@ -70,8 +83,20 @@ function parseResearch(handoff: ResearchArtifactHandoff): { artifactId: string; 
     if (seen.has(item.id)) continue;
     seen.add(item.id);
     sources.push({ sourceId: item.id, title: item.title, url: item.url });
+    evidence.push({ sourceId: item.id, title: item.title, url: item.url, snippet: typeof item.snippet === "string" ? item.snippet : undefined });
   }
-  return { artifactId: handoff.artifactId, sources };
+  const citations: { sourceId: number; text: string }[] = [];
+  if (Array.isArray(payload.citations)) {
+    for (const c of payload.citations) {
+      if (!isRecord(c) || typeof c.text !== "string" || typeof c.sourceId !== "number") continue;
+      citations.push({ sourceId: c.sourceId, text: c.text });
+    }
+  }
+  return {
+    artifactId: handoff.artifactId,
+    sources,
+    findings: { summary: payload.summary, evidence, citations },
+  };
 }
 
 /** Writer agent dependencies: LLM execution only, no capability port. */
@@ -109,7 +134,7 @@ export class WriterAgent extends BaseAgent {
     const research = parseResearch(writerInput.previousArtifact);
     const expectedTaskDescription = writerInput.task?.description ?? String((writerInput.previousArtifact.payload as JsonRecord).taskDescription ?? writerInput.objective);
 
-    const { report, response: executionResponse } = await this.createReport(writerInput, research.sources, expectedTaskDescription, input.context, signal);
+    const { report, response: executionResponse } = await this.createReport(writerInput, research.sources, research.findings, research.artifactId, expectedTaskDescription, input.context, signal);
     const output = this.toJson(report);
     const response: ExecutionResponse = { ...executionResponse, output, raw: JSON.stringify(report, null, 2) };
     return { output, response };
@@ -118,18 +143,20 @@ export class WriterAgent extends BaseAgent {
   private async createReport(
     input: WriterAgentInput,
     allowedSources: readonly WriterSourceReference[],
+    findings: ResearchFindings,
+    artifactId: string,
     expectedTaskDescription: string,
     context: ExecutionContext,
     signal: CancellationToken
   ): Promise<{ report: WriterReport; response: ExecutionResponse }> {
     signal?.throwIfCancelled();
-    const prompt = this.buildPrompt(input, allowedSources);
+    const prompt = this.buildPrompt(input, allowedSources, findings, artifactId);
     const request = this.buildExecutionRequest(prompt);
     const response = await this.runExecution(context, request, signal);
     return { report: this.parseWriterResponse(response.output, allowedSources, expectedTaskDescription), response };
   }
 
-  private buildPrompt(input: WriterAgentInput, allowedSources: readonly WriterSourceReference[]): string {
+  private buildPrompt(input: WriterAgentInput, allowedSources: readonly WriterSourceReference[], findings: ResearchFindings, artifactId: string): string {
     const reviewableSources = allowedSources.map((source) => `${source.sourceId}: ${source.title} — ${source.url}`);
     return `${this.writerConfig.systemPrompt}
 
@@ -142,7 +169,19 @@ ${input.task ? `${input.task.name}: ${input.task.description}` : "(none supplied
 Allowed source references (use ONLY these source ids):
 ${reviewableSources.join("\n") || "(none)"}
 
-Produce a valid WriterReport JSON with contentId (UUID), taskDescription (must equal the assigned task description), objective, title, content, summary, sourceReferences (only ids above), status, and metadata (createdAt, agentVersion, researchArtifactId). Do not include a source id that is not listed above.`;
+Produce a valid WriterReport JSON with contentId (UUID), taskDescription (must equal the assigned task description), objective, title, content, summary, sourceReferences (only ids above), status, and metadata (createdAt, agentVersion, researchArtifactId). Do not include a source id that is not listed above.
+
+RESEARCH FINDINGS (grounding evidence - write the article ONLY from these facts and claims; do not invent facts):
+Research summary:
+${findings.summary}
+
+Source evidence:
+${findings.evidence.map((s) => `- [source ${s.sourceId}] ${s.title} (${s.url})\n${s.snippet ? `  Evidence: ${s.snippet}` : ""}`).join("\n")}
+
+Cited claims to use and attribute:
+${findings.citations.map((c) => `- [source ${c.sourceId}] ${c.text}`).join("\n") || "(none)"}
+
+Guidance: keep every claim attributable to one of the source ids above. In the WriterReport, set "sourceReferences" to an array of OBJECTS, one per source id you actually used, each with the exact shape {"sourceId": <number>, "title": "<exact title>", "url": "<exact url>"} copied from the source evidence above (do NOT output bare numbers or strings). Set "metadata.researchArtifactId" to "${artifactId}". If the findings are insufficient to write the article, return status "blocked" rather than fabricating content.`;
   }
 
   private buildExecutionRequest(prompt: string): ExecutionRequest {

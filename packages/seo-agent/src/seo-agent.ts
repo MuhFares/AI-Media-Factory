@@ -60,8 +60,15 @@ function isSEOAgentInput(value: unknown): value is SEOAgentInput {
   return isRecord(value) && typeof value.objective === "string" && value.objective.trim() !== "" && (value.previousArtifact === undefined || isWriterHandoff(value.previousArtifact));
 }
 
+/** Extracted writer content used to ground the SEO report (never fabricated). */
+interface WriterFindings {
+  title: string;
+  summary: string;
+  content: string;
+}
+
 /** Extract the required writer report from a handoff, validating structure. */
-function parseWriter(handoff: WriterArtifactHandoff): { artifactId: string; sources: SEOSourceReference[] } {
+function parseWriter(handoff: WriterArtifactHandoff): { artifactId: string; sources: SEOSourceReference[]; findings: WriterFindings } {
   if (handoff.kind !== "writer_report") {
     throw new Error("SEO requires a writer_report artifact, received: " + handoff.kind);
   }
@@ -79,7 +86,11 @@ function parseWriter(handoff: WriterArtifactHandoff): { artifactId: string; sour
     seen.add(item.sourceId);
     sources.push({ sourceId: item.sourceId, title: item.title, url: item.url });
   }
-  return { artifactId: handoff.artifactId, sources };
+  return {
+    artifactId: handoff.artifactId,
+    sources,
+    findings: { title: payload.title, summary: typeof payload.summary === "string" ? payload.summary : "", content: payload.content },
+  };
 }
 
 /** SEO agent dependencies: LLM execution only, no capability port. */
@@ -117,7 +128,7 @@ export class SEOAgent extends BaseAgent {
     const writer = parseWriter(seoInput.previousArtifact);
     const expectedTaskDescription = seoInput.task?.description ?? String((seoInput.previousArtifact.payload as JsonRecord).taskDescription ?? seoInput.objective);
 
-    const { report, response: executionResponse } = await this.createReport(seoInput, writer.sources, expectedTaskDescription, input.context, signal);
+    const { report, response: executionResponse } = await this.createReport(seoInput, writer.sources, writer.findings, writer.artifactId, expectedTaskDescription, input.context, signal);
     const output = this.toJson(report);
     const response: ExecutionResponse = { ...executionResponse, output, raw: JSON.stringify(report, null, 2) };
     return { output, response };
@@ -126,18 +137,20 @@ export class SEOAgent extends BaseAgent {
   private async createReport(
     input: SEOAgentInput,
     allowedSources: readonly SEOSourceReference[],
+    findings: WriterFindings,
+    artifactId: string,
     expectedTaskDescription: string,
     context: ExecutionContext,
     signal: CancellationToken
   ): Promise<{ report: SEOReport; response: ExecutionResponse }> {
     signal?.throwIfCancelled();
-    const prompt = this.buildPrompt(input, allowedSources);
+    const prompt = this.buildPrompt(input, allowedSources, findings, artifactId, expectedTaskDescription);
     const request = this.buildExecutionRequest(prompt);
     const response = await this.runExecution(context, request, signal);
     return { report: this.parseSEOResponse(response.output, allowedSources, expectedTaskDescription), response };
   }
 
-  private buildPrompt(input: SEOAgentInput, allowedSources: readonly SEOSourceReference[]): string {
+  private buildPrompt(input: SEOAgentInput, allowedSources: readonly SEOSourceReference[], findings: WriterFindings, artifactId: string, expectedTaskDescription: string): string {
     const reviewableSources = allowedSources.map((source) => `${source.sourceId}: ${source.title} — ${source.url}`);
     return `${this.seoConfig.systemPrompt}
 
@@ -150,7 +163,26 @@ ${input.task ? `${input.task.name}: ${input.task.description}` : "(none supplied
 Allowed source references (use ONLY these source ids):
 ${reviewableSources.join("\n") || "(none)"}
 
-Produce a valid SEOReport JSON with reportId (UUID), taskDescription (must equal the assigned task description), objective, optimizedTitle, optimizedDescription, keywords, topics, searchIntent, contentStructure, sourceReferences (only ids above), status, and metadata (createdAt, agentVersion, writerArtifactId). Do not include a source id that is not listed above.`;
+Produce a valid SEOReport JSON with reportId (UUID), taskDescription (must equal the assigned task description), objective, optimizedTitle, optimizedDescription, keywords, topics, searchIntent, contentStructure, sourceReferences (only ids above), status, and metadata (createdAt, agentVersion, writerArtifactId). Do not include a source id that is not listed above.
+
+WRITER CONTENT (grounding evidence - produce SEO recommendations ONLY from this content; do not invent optimization targets):
+Writer title:
+${findings.title}
+
+Writer summary:
+${findings.summary}
+
+Writer full content:
+${findings.content}
+
+Allowed source references (use ONLY these source ids and attach the exact title and url):
+${allowedSources.map((source) => `- [source ${source.sourceId}] ${source.title} (${source.url})`).join("\n") || "(none)"}
+
+Guidance: set "optimizedTitle" and "optimizedDescription" to concrete, non-null strings based on the writer content above. Set "taskDescription" EXACTLY to "${expectedTaskDescription}" (verbatim, no prefix). Set "searchIntent" to EXACTLY one of the following enum values: "informational" | "commercial" | "transactional" | "navigational" (copy the exact lowercase token, no other text). Set "metadata.writerArtifactId" to "${artifactId}".
+
+Set "keywords" to an array of OBJECTS, each with the exact shape {"keyword": "<string>", "importance": "primary" | "secondary"}. Set "topics" to an array of OBJECTS, each with the exact shape {"topic": "<string>", "presentInContent": true | false}. Set "contentStructure" to an array of OBJECTS, each with the exact shape {"heading": "<string>", "purpose": "<string>"} — do NOT use bare strings for keywords or topics, do NOT rename the keys.
+
+In "sourceReferences", output an array of OBJECTS, one per source id you actually used, each with the exact shape {"sourceId": <number>, "title": "<exact title>", "url": "<exact url>"} copied from the source list above (do NOT output bare numbers or strings, do NOT invent source ids). If the writer content is insufficient to optimize safely, return status "blocked" rather than fabricating recommendations.`;
   }
 
   private buildExecutionRequest(prompt: string): ExecutionRequest {

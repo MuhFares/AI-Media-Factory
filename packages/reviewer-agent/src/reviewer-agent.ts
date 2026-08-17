@@ -215,7 +215,18 @@ Review request:
 Supplied review context:
 ${JSON.stringify(input.context ?? {}, null, 2)}${artifactBlock}
 
-Return a ReviewReport with summary, status, findings, recommendations, and metadata. Do not infer that any code was executed or changed. Refuse to approve an artifact that failed an upstream gate.`;
+Return a ReviewReport with summary, status, findings, recommendations, and metadata. Do not infer that any code was executed or changed. Refuse to approve an artifact that failed an upstream gate.
+
+REVIEW REPORT FORMAT (structured-output contract - the JSON below MUST satisfy these exact shapes):
+
+Set "reportId" to a UUID string. Set "taskDescription" EXACTLY to "${input.task.description}" (verbatim, no prefix, no suffix). Set "summary" to a concise string.
+Set "status" to EXACTLY one of: "approved" | "changes_requested" | "blocked" (copy the exact lowercase token; do NOT use any other value).
+
+Set "findings" to an array of OBJECTS, each with the exact shape {"id": "<string>", "severity": "critical" | "high" | "medium" | "low" | "info", "category": "correctness" | "architecture" | "bug" | "risk" | "security" | "maintainability", "title": "<string>", "description": "<string>", "recommendation": "<string>"}. "location" is optional (omit if not applicable).
+Set "recommendations" to an array of OBJECTS, each with the exact shape {"priority": "high" | "medium" | "low", "description": "<string>"}. "relatedFindingIds" is an optional array of finding id strings referencing findings in the report.
+Set "metadata" to an OBJECT with the exact shape {"createdAt": "<ISO string>", "agentVersion": "<string>"}.
+
+Output a single JSON object with ONLY the fields listed above (reportId, taskDescription, summary, status, findings, recommendations, metadata). Do not include explanatory text outside the JSON. Do not omit any required field.`;
   }
 
   private buildExecutionRequest(prompt: string): ExecutionRequest {

@@ -111,7 +111,43 @@ export class QAAgent extends BaseAgent {
     return { ...input, request: { ...input.request, suppliedEvidence: [...existing, ...derived] } };
   }
 
-  private buildPrompt(input: QAInput, context: ExecutionContext): string { return `${this.config.systemPrompt}\n\nQA objective: ${input.objective}\nRequest:\n${JSON.stringify(input.request, null, 2)}\nExecution context:\n${JSON.stringify(context, null, 2)}\nProduce a QAReport that distinguishes runtime evidence, supplied results, and not-executed tests.`; }
+  private buildPrompt(input: QAInput, context: ExecutionContext): string {
+    const base = `${this.config.systemPrompt}\n\nQA objective: ${input.objective}\nRequest:\n${JSON.stringify(input.request, null, 2)}\nExecution context:\n${JSON.stringify(context, null, 2)}\nProduce a QAReport that distinguishes runtime evidence, supplied results, and not-executed tests.`;
+    return `${base}\n\n${this.buildQaReportFormatBlock(input)}`;
+  }
+
+  private buildQaReportFormatBlock(input: QAInput): string {
+    const hasRuntimeEvidence = (input.request.suppliedEvidence ?? []).some((evidence) => evidence.executed === true && evidence.source === "runtime");
+    const lines: string[] = [
+      "QA REPORT FORMAT (structured-output contract - the JSON below MUST satisfy these exact shapes):",
+      "",
+      `Set "reportId" to a UUID string. Set "requestId" EXACTLY to "${input.requestId}" (verbatim, no prefix, no suffix). Set "objective" EXACTLY to "${input.objective}" (verbatim, no prefix, no suffix). Set "summary" to a concise string.`,
+      `Set "status" to EXACTLY one of: "passed" | "failed" | "blocked" | "not_executed" | "reviewed" (copy the exact lowercase token; do NOT use any other value).`,
+      "",
+    ];
+    if (hasRuntimeEvidence) {
+      lines.push(
+        'Set "testResults" to an array of OBJECTS, each with the exact shape {"testName": "<string>", "status": "passed" | "failed" | "skipped" | "not_executed", "executed": false, "source": "none" | "provided-result"}. A test with "executed": true MUST instead be backed by a matching supplied runtime evidence item (source "runtime" with non-empty "evidence") and then set "executed": true only for that item. For every other test keep "executed": false with "source" "none" (never run) or "provided-result" (supplied result; "status" may be "passed" or "failed"). Do NOT set "executed": true without matching supplied runtime evidence; do NOT set "source": "runtime" on an unexecuted test; do NOT include "evidence" or "durationMs" or "failure" on an unexecuted test. Omit optional fields when not applicable.',
+        'Set "findings" to an array of OBJECTS, each with the exact shape {"id": "<string>", "severity": "critical" | "high" | "medium" | "low" | "info", "category": "correctness" | "regression" | "coverage" | "reliability" | "performance" | "security" | "process", "description": "<string>"}. "evidence" and "recommendation" are optional strings (omit if not applicable).',
+        'Set "risks" to an array of OBJECTS, each with the exact shape {"id": "<string>", "description": "<string>", "severity": "critical" | "high" | "medium" | "low" | "info"}. "mitigation" is an optional string (omit if not applicable).',
+        'Set "recommendations" to an array of OBJECTS, each with the exact shape {"priority": "high" | "medium" | "low", "description": "<string>"}. "relatedFindingIds" is an optional array of finding id strings referencing findings in the report.',
+        'Set "metadata" to an OBJECT with the exact shape {"createdAt": "<ISO string>", "agentVersion": "<string>", "executionEvidencePresent": true | false}. "executionEvidencePresent" MUST be true exactly when at least one test has "executed": true with "source": "runtime", and false otherwise.',
+      );
+    } else {
+      lines.push(
+        'Set "testResults" to an array of OBJECTS, each with the exact shape {"testName": "<string>", "status": "passed" | "failed" | "skipped" | "not_executed", "executed": false, "source": "none" | "provided-result"}. CRITICAL: no tests were actually run and no runtime evidence is supplied, so every test must set "executed" to false and "source" must be "none" (or "provided-result" for a result that was supplied, in which case "status" may be "passed" or "failed"). Do NEVER set "executed": true, do NEVER set "source": "runtime", and do NOT include "evidence" or "durationMs" or "failure" on an unexecuted test. Omit optional fields when not applicable.',
+        'Set "findings" to an array of OBJECTS, each with the exact shape {"id": "<string>", "severity": "critical" | "high" | "medium" | "low" | "info", "category": "correctness" | "regression" | "coverage" | "reliability" | "performance" | "security" | "process", "description": "<string>"}. "evidence" and "recommendation" are optional strings (omit if not applicable).',
+        'Set "risks" to an array of OBJECTS, each with the exact shape {"id": "<string>", "description": "<string>", "severity": "critical" | "high" | "medium" | "low" | "info"}. "mitigation" is an optional string (omit if not applicable).',
+        'Set "recommendations" to an array of OBJECTS, each with the exact shape {"priority": "high" | "medium" | "low", "description": "<string>"}. "relatedFindingIds" is an optional array of finding id strings referencing findings in the report.',
+        'Set "metadata" to an OBJECT with the exact shape {"createdAt": "<ISO string>", "agentVersion": "<string>", "executionEvidencePresent": false}. "executionEvidencePresent" MUST be false because no test was executed.',
+      );
+    }
+    lines.push(
+      "",
+      "Output a single JSON object with ONLY the fields listed above (reportId, requestId, objective, status, summary, testResults, findings, risks, recommendations, metadata). Do not include explanatory text outside the JSON. Do not omit any required field.",
+    );
+    return lines.join("\n");
+  }
   private buildExecutionRequest(prompt: string): ExecutionRequest { return { model: this.config.model, system: this.config.systemPrompt, messages: [{ role: "system", content: this.config.systemPrompt }, { role: "user", content: prompt }], temperature: this.config.temperature, maxOutputTokens: this.config.maxOutputTokens, responseSchema: this.getResponseSchema() }; }
   private getResponseSchema(): JsonSchema {
     const test = { type: "object", properties: { testName: { type: "string" }, status: { type: "string", enum: testStatuses }, executed: { type: "boolean" }, evidence: { type: "string" }, source: { type: "string", enum: sources }, durationMs: { type: "number", minimum: 0 }, failure: { type: "string" }, recommendation: { type: "string" } }, required: ["testName", "status", "executed", "source"] };

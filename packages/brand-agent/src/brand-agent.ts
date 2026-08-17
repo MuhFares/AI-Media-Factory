@@ -127,13 +127,15 @@ export class BrandAgent extends BaseAgent {
 
   private buildPrompt(input: BrandAgentInput, seo: { artifactId: string; writerArtifactId: string }): string {
     const payload = input.previousArtifact !== undefined ? (input.previousArtifact.payload as JsonRecord) : {};
+    const assignedTask = input.task ? `${input.task.name}: ${input.task.description}` : "(none supplied)";
+    const expectedTaskDescription = input.task?.description ?? String(payload.taskDescription ?? input.objective);
     return `${this.brandConfig.systemPrompt}
 
 Brand gate objective:
 ${input.objective}
 
 Assigned task:
-${input.task ? `${input.task.name}: ${input.task.description}` : "(none supplied)"}
+${assignedTask}
 
 Supplied brand guidelines:
 ${input.brandConfig ?? "(none supplied — evaluate structural validity only)"}
@@ -141,7 +143,22 @@ ${input.brandConfig ?? "(none supplied — evaluate structural validity only)"}
 SEO artifact (id ${seo.artifactId}, writer lineage ${seo.writerArtifactId}):
 ${JSON.stringify({ optimizedTitle: payload.optimizedTitle, optimizedDescription: payload.optimizedDescription, keywords: payload.keywords, topics: payload.topics, contentStructure: payload.contentStructure }, null, 2)}
 
-Produce a valid BrandReviewReport JSON with reportId (UUID), taskDescription (must equal the assigned task description), objective, status, issues, passedChecks, failedChecks, recommendations, and metadata (createdAt, agentVersion, seoArtifactId).`;
+Produce a valid BrandReviewReport JSON with reportId (UUID), taskDescription (must equal the assigned task description), objective, status, issues, passedChecks, failedChecks, recommendations, and metadata (createdAt, agentVersion, seoArtifactId).
+
+BRAND REPORT FORMAT (structured-output contract - the JSON below MUST satisfy these exact shapes):
+
+Set "taskDescription" EXACTLY to "${expectedTaskDescription}" (verbatim, no prefix, no suffix).
+Set "status" to EXACTLY one of: "approved" | "needs_revision" | "rejected" (copy the exact lowercase token; do NOT use "blocked" or any other value).
+
+Set "issues", "passedChecks", and "failedChecks" to arrays of OBJECTS, each with the exact shape {"code": "<string>", "message": "<string>"}. Use empty arrays when none apply.
+Set "recommendations" to an array of OBJECTS, each with the exact shape {"priority": "high" | "medium" | "low", "description": "<string>"} — priority must be exactly "high", "medium", or "low".
+Set "metadata" to an OBJECT with the exact shape {"createdAt": "<ISO string>", "agentVersion": "<string>", "seoArtifactId": "${seo.artifactId}"} — metadata.seoArtifactId must equal the SEO artifact id verbatim.
+
+Gate invariants (must hold):
+- If "status" is "approved": failedChecks MUST be empty and passedChecks MUST contain at least one check.
+- If "status" is "needs_revision" or "rejected": failedChecks MUST contain at least one check.
+
+Use ONLY the supplied brand guidelines; do not invent brand rules or facts. Output a single JSON object with ONLY the fields listed above (reportId, taskDescription, objective, status, issues, passedChecks, failedChecks, recommendations, metadata). No explanatory text outside the JSON.`;
   }
 
   private buildExecutionRequest(prompt: string): ExecutionRequest {
