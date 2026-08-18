@@ -48,18 +48,28 @@ export class DefaultRecoveryManager implements RecoveryManager {
       return { ...s, status: "pending" as const, startedAt: null, finishedAt: null };
     });
 
-    // Restore the ready frontier. For sequential chains the engine advances one
-    // step at a time; only the earliest pending step is ready. (Parallel/branch
-    // frontier reconstruction is a later-phase enhancement — Phase 0 targets the
-    // sequential-content pipeline the mission's chaos test drives.)
-    const pendingSteps = steps.filter((s) => s.status === "pending").map((s) => s.stepId);
-    const ready = pendingSteps.length > 0 ? [pendingSteps[0]] : instance.ready;
+    // Restore the ready frontier from the persisted preparation order, keeping
+    // only steps that still need (re-)runs. `instance.ready` preserves the
+    // definition's traversal order, so we never fall back to the unstable
+    // storage order. (Parallel/branch frontier reconstruction is a later-phase
+    // enhancement — Phase 0 targets the sequential-content pipeline.)
+    const ready = instance.ready.filter((id) => {
+      const rec = steps.find((s) => s.stepId === id);
+      return rec && (rec.status === "pending" || rec.status === "failed");
+    });
+
+    // Safety net: if the stored frontier is empty but work remains, surface the
+    // first still-pending step so the workflow can always make progress.
+    const effectiveReady =
+      ready.length > 0 || !steps.some((s) => s.status === "pending")
+        ? ready
+        : [steps.find((s) => s.status === "pending")!.stepId];
 
     return {
       ...instance,
       state: parseWorkflowState(checkpoint.state),
       steps,
-      ready,
+      ready: effectiveReady,
     };
   }
 

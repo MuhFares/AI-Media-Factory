@@ -10,6 +10,8 @@
   },
   "workspaces": [
     "apps/web",
+    "apps/api",
+    "apps/worker",
     "packages/*"
   ],
   "scripts": {

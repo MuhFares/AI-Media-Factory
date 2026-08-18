@@ -9,6 +9,7 @@
 
 export { Orchestrator } from "./orchestrator.js";
 export type { OrchestratorDeps } from "./orchestrator.js";
+export { directiveToWorkflowDefinition } from "./definition.js";
 export { ArtifactProducingExecutor } from "./execution/artifact-producing-executor.js";
 export type { ArtifactProducingExecutorOptions, ArtifactSpec } from "./execution/artifact-producing-executor.js";
 export * from "./templates.js";

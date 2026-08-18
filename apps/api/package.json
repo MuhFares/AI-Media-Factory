@@ -1,8 +1,8 @@
 {
-  "name": "@ai-media-factory/database",
+  "name": "@ai-media-factory/api",
   "version": "0.1.0",
   "private": true,
-  "description": "PostgreSQL persistence adapter implementing the workflow PersistencePort.",
+  "description": "Async workflow submission API: enqueue durable jobs, query status/artifacts/lineage/executions.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -18,12 +18,15 @@
     "test": "node --test --test-concurrency=1"
   },
   "dependencies": {
+    "@ai-media-factory/database": "*",
+    "@ai-media-factory/orchestrator": "*",
     "@ai-media-factory/shared": "*",
     "@ai-media-factory/workflow-engine": "*",
     "pg": "^8.13.1"
   },
   "devDependencies": {
     "@types/pg": "^8.11.10",
+    "@types/node": "^20.0.0",
     "typescript": "^5.5.0"
   }
 }

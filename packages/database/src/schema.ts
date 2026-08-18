@@ -100,4 +100,40 @@ CREATE TABLE IF NOT EXISTS decisions (
   created_at     TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_decisions_workflow ON decisions (workflow_id);
+
+-- -----------------------------------------------------------------------------
+-- Phase 1: async workflow submission + job queue (Postgres-backed).
+--  - workflow_submissions: durable, idempotent submission record keyed by the
+--    caller's idempotency identity (submission_key). Re-submitting the same key
+--    never creates a second workflow.
+--  - workflow_jobs: at-least-once durable queue. A worker claims a queued job
+--    (running), acks it (succeeded/failed); orphaned running jobs are reclaimed
+--    after a worker crash so they can be re-processed idempotently.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS workflow_submissions (
+  submission_key TEXT PRIMARY KEY,
+  workflow_id    TEXT NOT NULL,
+  directive      TEXT NOT NULL,
+  correlation_id TEXT,
+  brand_id       TEXT,
+  definition     JSONB NOT NULL,
+  status         TEXT NOT NULL,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_submissions_workflow ON workflow_submissions (workflow_id);
+
+CREATE TABLE IF NOT EXISTS workflow_jobs (
+  job_id         BIGSERIAL PRIMARY KEY,
+  workflow_id    TEXT NOT NULL,
+  submission_key TEXT NOT NULL,
+  status         TEXT NOT NULL,          -- queued | running | succeeded | failed
+  attempts       INT  NOT NULL DEFAULT 0,
+  claimed_at     TEXT,
+  error          TEXT,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_jobs_status ON workflow_jobs (status);
+CREATE INDEX IF NOT EXISTS idx_workflow_jobs_workflow ON workflow_jobs (workflow_id);
 `;

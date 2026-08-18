@@ -17,6 +17,8 @@ export interface StartInput {
   trigger: Json;               // the triggering event/payload
   correlationId?: string;
   brandId?: string;
+  /** Pin the durable instance to an external id (e.g. a queue job's workflow id). */
+  workflowId?: Uuid;
 }
 
 export interface WorkflowEngine {

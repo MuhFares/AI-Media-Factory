@@ -53,7 +53,7 @@ export class DefaultWorkflowEngine implements WorkflowEngine {
   ) {}
 
   async start(input: StartInput): Promise<WorkflowInstance> {
-    const workflowId = this.generateId();
+    const workflowId = input.workflowId ?? this.generateId();
     const now = new Date().toISOString();
 
     const context: WorkflowContext = {
