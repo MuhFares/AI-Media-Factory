@@ -1,5 +1,10 @@
 /**
  * Default WorkflowEngine implementation.
+ *
+ * Phase 0: the engine persists its execution state through the PersistencePort
+ * so a workflow can be reconstructed and resumed after a process restart.
+ * When no persistence port is supplied the engine degrades to the original
+ * in-memory-only behaviour (used by legacy tests).
  */
 
 import type { Json, Uuid, Timestamp, StepId, WorkflowState } from "../core/common.js";
@@ -21,9 +26,12 @@ import type { AuditTrail } from "../observability/audit.js";
 import type { WorkflowLogger } from "../observability/logging.js";
 import type { WorkflowMetrics } from "../observability/metrics.js";
 import type { WorkflowEventBridge } from "../integration/events.js";
+import { WorkflowCrashError } from "../resilience/persistence.js";
+import type { PersistencePort } from "../resilience/persistence.js";
 
 export class DefaultWorkflowEngine implements WorkflowEngine {
   private instances = new Map<Uuid, WorkflowInstance>();
+  private definitions = new Map<Uuid, WorkflowDefinition>();
 
   constructor(
     private readonly stepExecutor: StepExecutor,
@@ -37,7 +45,11 @@ export class DefaultWorkflowEngine implements WorkflowEngine {
     private readonly auditTrail: AuditTrail,
     private readonly logger: WorkflowLogger,
     private readonly metrics: WorkflowMetrics,
-    private readonly eventBridge: WorkflowEventBridge
+    private readonly eventBridge: WorkflowEventBridge,
+    /** Optional durable backing store. When absent the engine is in-memory only. */
+    private readonly persistence?: PersistencePort,
+    /** Reloads a workflow definition by id+version (needed to resume a recovered instance). */
+    private readonly definitionLoader?: (definitionId: string, version: number) => Promise<WorkflowDefinition | null>
   ) {}
 
   async start(input: StartInput): Promise<WorkflowInstance> {
@@ -74,10 +86,13 @@ export class DefaultWorkflowEngine implements WorkflowEngine {
     };
 
     this.instances.set(workflowId, instance);
+    this.definitions.set(workflowId, input.definition);
 
     // Transition to RUNNING
     instance.state = this.stateMachine.next("PENDING", "start");
     instance.updatedAt = new Date().toISOString();
+
+    await this.persist(instance);
 
     await this.auditTrail.append({
       workflowId,
@@ -89,8 +104,11 @@ export class DefaultWorkflowEngine implements WorkflowEngine {
 
     await this.eventBridge.emit("WorkflowStarted", workflowId, { definitionId: input.definition.id });
 
-    // Start execution loop
-    this.executeLoop(instance);
+    // Start execution loop (fire-and-forget so callers can observe RUNNING).
+    void this.executeLoop(instance).catch((err) => {
+      if (err instanceof WorkflowCrashError) return;
+      this.logger.log("error", "Workflow loop terminated unexpectedly", { workflow_id: workflowId, error: String(err) });
+    });
 
     return instance;
   }
@@ -107,6 +125,7 @@ export class DefaultWorkflowEngine implements WorkflowEngine {
     instance.updatedAt = new Date().toISOString();
 
     await this.checkpointCoordinator.checkpoint(instance);
+    await this.persist(instance);
     await this.auditTrail.append({
       workflowId,
       kind: "paused",
@@ -120,11 +139,21 @@ export class DefaultWorkflowEngine implements WorkflowEngine {
     const instance = await this.recoveryManager.recover(workflowId);
     if (!instance) throw new Error(`Workflow not found: ${workflowId}`);
 
-    this.instances.set(workflowId, instance);
-
-    instance.state = this.stateMachine.next(instance.state, "resume");
+    // A crashed-in-flight workflow stays RUNNING; a paused one transitions back.
+    instance.state = this.stateMachine.can(instance.state, "resume")
+      ? this.stateMachine.next(instance.state, "resume")
+      : instance.state;
     instance.updatedAt = new Date().toISOString();
 
+    this.instances.set(workflowId, instance);
+
+    // Reload the definition so the recovered instance can keep executing steps.
+    if (this.definitionLoader) {
+      const def = await this.definitionLoader(instance.definitionId, instance.definitionVersion);
+      if (def) this.definitions.set(workflowId, def);
+    }
+
+    await this.persist(instance);
     await this.auditTrail.append({
       workflowId,
       kind: "resumed",
@@ -133,7 +162,10 @@ export class DefaultWorkflowEngine implements WorkflowEngine {
       at: instance.updatedAt,
     });
 
-    this.executeLoop(instance);
+    void this.executeLoop(instance).catch((err) => {
+      if (err instanceof WorkflowCrashError) return;
+      this.logger.log("error", "Workflow resume loop terminated unexpectedly", { workflow_id: workflowId, error: String(err) });
+    });
     return instance;
   }
 
@@ -169,6 +201,7 @@ export class DefaultWorkflowEngine implements WorkflowEngine {
     instance.state = "CANCELLED";
     instance.updatedAt = new Date().toISOString();
 
+    await this.persist(instance);
     await this.auditTrail.append({
       workflowId,
       kind: "cancelled",
@@ -196,7 +229,10 @@ export class DefaultWorkflowEngine implements WorkflowEngine {
   }
 
   async describe(workflowId: Uuid): Promise<WorkflowInstance | null> {
-    return this.instances.get(workflowId) ?? null;
+    const cached = this.instances.get(workflowId);
+    if (cached) return cached;
+    if (this.persistence) return this.persistence.loadWorkflow(workflowId);
+    return null;
   }
 
   private async executeLoop(instance: WorkflowInstance): Promise<void> {
@@ -214,34 +250,68 @@ export class DefaultWorkflowEngine implements WorkflowEngine {
       }
 
       // Execute ready steps (in parallel if multiple)
-      await Promise.all(
-        readySteps.map((stepId) => this.executeStep(instance, stepId))
-      );
+      try {
+        await Promise.all(
+          readySteps.map((stepId) => this.executeStep(instance, stepId))
+        );
+      } catch (error) {
+        // A crash interrupts the loop; remaining steps stay pending so recovery
+        // can re-run them idempotently. This is NOT a terminal workflow failure.
+        if (error instanceof WorkflowCrashError) throw error;
+        throw error;
+      }
     }
   }
 
   private async executeStep(instance: WorkflowInstance, stepId: StepId): Promise<void> {
     const stepRecord = instance.steps.find((s) => s.stepId === stepId);
-    if (!stepRecord || stepRecord.status !== "pending") return;
+    if (!stepRecord || (stepRecord.status !== "pending" && stepRecord.status !== "failed")) return;
 
-    // Find step definition
-    // This would need access to the workflow definition
-    // For now, we'll skip actual execution
+    const definition = this.definitions.get(instance.workflowId);
+    const stepDef = definition?.steps.find((s) => s.id === stepId);
 
     stepRecord.status = "running";
     stepRecord.startedAt = new Date().toISOString();
-    stepRecord.attempts++;
+    stepRecord.attempts += 1;
 
     try {
-      // Execute step via step executor
-      // const outcome = await this.stepExecutor.execute(stepDef, instance.context);
-      // For now, mock completion
-      stepRecord.status = "completed";
-      stepRecord.finishedAt = new Date().toISOString();
-
-      // Advance workflow
-      const nextSteps = this.scheduler.advance(instance, stepId);
-      instance.ready.push(...nextSteps);
+      if (stepDef === undefined) {
+        // No definition available (legacy stub path) — mark completed.
+        stepRecord.status = "completed";
+        stepRecord.finishedAt = new Date().toISOString();
+        this.advance(instance, stepDef ?? null, stepId);
+      } else {
+        const outcome = await this.stepExecutor.execute(stepDef, instance.context);
+        if (outcome.status === "awaiting_approval") {
+          instance.state = "AWAITING_APPROVAL";
+          stepRecord.status = "running";
+          await this.checkpointCoordinator.checkpoint(instance);
+          await this.persist(instance);
+          return;
+        }
+        if (outcome.status === "failed") {
+          stepRecord.status = "failed";
+          stepRecord.finishedAt = new Date().toISOString();
+          await this.auditTrail.append({
+            workflowId: instance.workflowId,
+            kind: "step_failed",
+            stepId,
+            detail: { error: outcome.error?.message ?? "step failed" },
+            at: stepRecord.finishedAt,
+          });
+          await this.checkpointCoordinator.checkpoint(instance);
+          await this.persist(instance);
+          return;
+        }
+        // completed
+        instance.context.outputs[stepId] = outcome.output;
+        if (outcome.artifact !== undefined && this.persistence) {
+          await this.persistence.saveArtifact(outcome.artifact);
+        }
+        stepRecord.status = "completed";
+        stepRecord.finishedAt = new Date().toISOString();
+        this.advance(instance, stepDef, stepId);
+      }
 
       await this.auditTrail.append({
         workflowId: instance.workflowId,
@@ -251,22 +321,40 @@ export class DefaultWorkflowEngine implements WorkflowEngine {
         at: stepRecord.finishedAt,
       });
 
-      // Checkpoint after each step
+      // Checkpoint + persist after each step (write-ahead durability).
       await this.checkpointCoordinator.checkpoint(instance);
+      await this.persist(instance);
     } catch (error) {
+      if (error instanceof WorkflowCrashError) {
+        // Process interrupted mid-step: leave step in-flight (running) so it is
+        // re-run idempotently after recovery. Persist the durable frontier.
+        await this.checkpointCoordinator.checkpoint(instance);
+        await this.persist(instance);
+        throw error;
+      }
       stepRecord.status = "failed";
       stepRecord.finishedAt = new Date().toISOString();
 
       await this.auditTrail.append({
         workflowId: instance.workflowId,
-        kind: "step_completed",
+        kind: "step_failed",
         stepId,
         detail: { error: String(error) },
         at: stepRecord.finishedAt,
       });
+      await this.checkpointCoordinator.checkpoint(instance);
+      await this.persist(instance);
+    }
+  }
 
-      // Handle retry or failure
-      // This is simplified
+  /** Engine-driven sequential advancement using the stored definition. */
+  private advance(instance: WorkflowInstance, stepDef: Step | null, completed: StepId): void {
+    if (!stepDef) return;
+    const next = stepDef.next;
+    if (next === undefined) return;
+    const nextSteps = Array.isArray(next) ? next : [next];
+    for (const id of nextSteps) {
+      if (!instance.ready.includes(id)) instance.ready.push(id);
     }
   }
 
@@ -289,6 +377,7 @@ export class DefaultWorkflowEngine implements WorkflowEngine {
     });
 
     await this.metrics.recordOutcome(instance.workflowId, "completed");
+    await this.persist(instance);
 
     await this.auditTrail.append({
       workflowId: instance.workflowId,
@@ -299,6 +388,11 @@ export class DefaultWorkflowEngine implements WorkflowEngine {
     });
 
     await this.eventBridge.emit("WorkflowSucceeded", instance.workflowId, {});
+  }
+
+  private async persist(instance: WorkflowInstance): Promise<void> {
+    if (!this.persistence) return;
+    await this.persistence.saveWorkflow(instance);
   }
 
   private generateId(): Uuid {

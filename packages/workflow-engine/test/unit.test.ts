@@ -52,27 +52,21 @@ class MockAgentRuntime {
   }
 }
 
-class MockCheckpointStore {
-  async save() { return { id: "checkpoint-1", version: 1 }; }
-  async retrieve() { return { records: [], totalConfidence: 0 }; }
-}
-
 function createMockDependencies() {
   const agentRuntime = new MockAgentRuntime();
-  const checkpointStore = new MockCheckpointStore();
   const stateMachine = new DefaultWorkflowStateMachine();
   const timeoutController = new DefaultTimeoutController();
   const retryPolicy = new DefaultWorkflowRetryPolicy();
   const scheduler = new DefaultScheduler();
   const branchRouter = new DefaultBranchRouter();
-  const checkpointCoordinator = new DefaultCheckpointCoordinator(() => checkpointStore);
+  const checkpointCoordinator = new DefaultCheckpointCoordinator();
   
   const instances = new Map<string, WorkflowInstance>();
   const getWorkflowInstance = async (workflowId: string) => instances.get(workflowId) ?? null;
   
   const recoveryManager = new DefaultRecoveryManager(
     checkpointCoordinator,
-    getWorkflowInstance,
+    { loadWorkflow: getWorkflowInstance },
     async () => null
   );
   

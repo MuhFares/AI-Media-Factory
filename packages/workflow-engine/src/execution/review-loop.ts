@@ -1,5 +1,6 @@
 import type { AgentExecutorPort } from "@ai-media-factory/runtime";
 import type { AgentStep, CollaborationArtifact, Json, WorkflowContext } from "@ai-media-factory/shared";
+import { payloadToJson } from "./collaboration.js";
 
 export interface ReviewerFeedbackLoopConfig {
   readonly codingStep: AgentStep;
@@ -24,7 +25,7 @@ function serializedArtifact(artifact: CollaborationArtifact): Json {
     workflowId: artifact.workflowId,
     correlationId: artifact.correlationId,
     status: artifact.status,
-    payload: { ...artifact.payload },
+    payload: payloadToJson(artifact.payload),
     contentType: artifact.contentType,
     schemaVersion: artifact.schemaVersion,
     createdAt: artifact.createdAt,

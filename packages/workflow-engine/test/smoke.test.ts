@@ -16,6 +16,7 @@ import {
   DefaultWorkflowLogger,
   DefaultWorkflowMetrics,
   DefaultWorkflowEventBridge,
+  WorkflowCrashError,
 } from "@ai-media-factory/workflow-engine";
 import type {
   WorkflowDefinition,
@@ -106,10 +107,13 @@ function createTestEngine() {
   const eventBridge = new DefaultWorkflowEventBridge(async () => {});
   
   const stepExecutor = {
-    execute: async (step: any, context: any) => ({
-      status: "completed",
-      output: { result: "ok" },
-    }),
+    // Simulate an in-flight workflow: a crash-stop leaves the workflow RUNNING
+    // with the current step ready, which is what the control-flow assertions
+    // (pause/cancel) rely on. Real durability is covered by the database
+    // package's restart/chaos integration tests.
+    execute: async (step: any, context: any): Promise<never> => {
+      throw new WorkflowCrashError("smoke: workflow kept running");
+    },
   };
   
   return new DefaultWorkflowEngine(

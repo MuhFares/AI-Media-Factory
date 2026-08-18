@@ -4,6 +4,12 @@ import type { AgentArtifactKind as SharedArtifactKind, AgentStep, CollaborationA
 type CollaborationArtifactType = SharedCollaborationArtifact;
 type ArtifactKind = SharedArtifactKind;
 
+/** Deep-copy any artifact payload into a Json-compatible value.
+ *  (Artifact payload types are structural and not always statically Json-assignable.) */
+export function payloadToJson(value: unknown): Json {
+  return JSON.parse(JSON.stringify(value)) as Json;
+}
+
 export interface CollaborationStage {
   readonly step: AgentStep;
   readonly artifactKind: ArtifactKind;
@@ -24,7 +30,7 @@ function artifactToJson(artifact: CollaborationArtifactType): Json {
     workflowId: artifact.workflowId,
     correlationId: artifact.correlationId,
     status: artifact.status,
-    payload: { ...artifact.payload },
+    payload: payloadToJson(artifact.payload),
     contentType: artifact.contentType,
     schemaVersion: artifact.schemaVersion,
     createdAt: artifact.createdAt,

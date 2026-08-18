@@ -13,6 +13,7 @@ import type { Json, StepId, Timestamp, Uuid } from "../core/common.js";
 export type AuditEventKind =
   | "workflow_started"
   | "step_completed"
+  | "step_failed"
   | "branch_taken"
   | "parallel_joined"
   | "approval_requested"

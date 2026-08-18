@@ -1,6 +1,6 @@
 import type { AgentExecutorPort } from "@ai-media-factory/runtime";
 import type { AgentStep, CollaborationArtifact, Json, WorkflowContext } from "@ai-media-factory/shared";
-import { CollaborationRunner, type CollaborationStage } from "./collaboration.js";
+import { CollaborationRunner, type CollaborationStage, payloadToJson } from "./collaboration.js";
 import { ReviewerFeedbackLoop, type ReviewerFeedbackLoopConfig } from "./review-loop.js";
 
 export interface QualityWorkflowConfig {
@@ -23,7 +23,7 @@ export interface QualityWorkflowResult {
 }
 
 function serializeArtifact(artifact: CollaborationArtifact): Json {
-  const value: { [key: string]: Json } = { artifactId: artifact.artifactId, kind: artifact.kind, producerAgent: artifact.producerAgent, workflowId: artifact.workflowId, correlationId: artifact.correlationId, status: artifact.status, payload: { ...artifact.payload }, contentType: artifact.contentType, schemaVersion: artifact.schemaVersion, createdAt: artifact.createdAt };
+  const value: { [key: string]: Json } = { artifactId: artifact.artifactId, kind: artifact.kind, producerAgent: artifact.producerAgent, workflowId: artifact.workflowId, correlationId: artifact.correlationId, status: artifact.status, payload: payloadToJson(artifact.payload), contentType: artifact.contentType, schemaVersion: artifact.schemaVersion, createdAt: artifact.createdAt };
   if (artifact.parentArtifact !== undefined) value.parentArtifact = { ...artifact.parentArtifact };
   return value;
 }

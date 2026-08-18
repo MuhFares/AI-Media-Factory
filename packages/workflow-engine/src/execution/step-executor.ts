@@ -9,11 +9,14 @@
 import type { Json } from "../core/common.js";
 import type { Step } from "../model/step.js";
 import type { WorkflowContext } from "../model/context.js";
+import type { CollaborationArtifact } from "@ai-media-factory/shared";
 
 export interface StepOutcome {
   status: "completed" | "failed" | "awaiting_approval";
   /** Output merged into WorkflowContext.outputs. */
   output: Json;
+  /** For agent steps, the produced collaboration artifact (if any). */
+  artifact?: CollaborationArtifact;
   /** For branch steps: the chosen next step id. */
   chosenNext?: string;
   error?: { message: string; retryable: boolean };

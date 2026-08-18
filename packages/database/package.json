@@ -1,0 +1,29 @@
+{
+  "name": "@ai-media-factory/database",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PostgreSQL persistence adapter implementing the workflow PersistencePort.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@ai-media-factory/shared": "*",
+    "@ai-media-factory/workflow-engine": "*",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.10",
+    "typescript": "^5.5.0"
+  }
+}
