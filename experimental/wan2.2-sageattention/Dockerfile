@@ -1,7 +1,7 @@
 # Experimental Wan2.2 + SageAttention — isolated from production ry49lc45y50ldy
 # Base MUST be the exact production image (visible in RunPod Console → Endpoint → Container Image)
 # Fallback to upstream worker-comfyui base if production image is not yet pushed to a registry.
-ARG BASE_IMAGE=runpod/worker-comfyui:5.8.7-base
+ARG BASE_IMAGE=runpod/worker-comfyui:5.8.6-base
 FROM ${BASE_IMAGE}
 
 # Keep the exact ComfyUI / CUDA / Python stack from production.
