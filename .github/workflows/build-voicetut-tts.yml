@@ -43,15 +43,14 @@ jobs:
         continue-on-error: true
         run: |
           docker run --rm ghcr.io/muhfares/voicetut-tts:latest python -u -c "
-          import sys, json, traceback
-          sys.path.insert(0, '/app')
-          import handler
-          try:
-              result = handler.handler({'input': {'text': 'اختبار سريع للصوت', 'voice': 'Mohamed'}})
-              out = dict(result)
-              if 'audio' in out:
-                  out['audio'] = out['audio'][:60] + '...'
-              print('HANDLER_RESULT:', json.dumps(out, ensure_ascii=False))
-          except Exception:
-              traceback.print_exc()
+          import sys; sys.path.insert(0, '/')
+          import handler, json
+          result = handler.handler({'input': {'text': 'اختبار سريع للصوت', 'voice': 'Mohamed'}})
+          out = dict(result)
+          if 'audio' in out: out['audio'] = out['audio'][:60] + '...'
+          print('HANDLER_RESULT:', out)
+          if 'audio' in result:
+              import base64
+              buf = base64.b64decode(result['audio'])
+              print('bytes', len(buf), 'header', buf[0:4])
           "
