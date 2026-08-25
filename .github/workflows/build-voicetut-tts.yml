@@ -33,6 +33,8 @@ jobs:
           context: docker/voicetut-tts
           file: docker/voicetut-tts/Dockerfile
           push: true
-          tags: ghcr.io/muhfares/voicetut-tts:latest
+          tags: |
+            ghcr.io/muhfares/voicetut-tts:latest
+            ghcr.io/muhfares/voicetut-tts:v2
           cache-from: type=gha
           cache-to: type=gha,mode=max
