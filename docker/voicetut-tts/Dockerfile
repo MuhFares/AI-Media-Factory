@@ -23,6 +23,12 @@ RUN pip install --no-cache-dir "git+https://github.com/k2-fsa/OmniVoice.git"
 # VoiceTuT-TTS (Egyptian fine-tune)
 RUN pip install --no-cache-dir voicetut-tts
 
+# Sanity check: torch must be importable with CUDA after all installs
+# (pip dependency resolution may replace the base image's torch — fail the
+#  build here rather than at request time if the stack is broken).
+RUN python -c "import torch; print('torch', torch.__version__, '| cuda:', torch.cuda.is_available())" && \
+    python -c "from voicetut_tts import VoiceTutTTS; print('voicetut_tts import OK')"
+
 # Pre-download the fine-tuned weights at build time (cold start without a 3GB download)
 RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('mohammedaly22/VoiceTut-TTS')"
 

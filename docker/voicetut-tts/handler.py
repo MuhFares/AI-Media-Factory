@@ -14,7 +14,11 @@ The model is pre-downloaded at image build time for fast cold starts.
 import base64
 import os
 import tempfile
+import traceback
 
+# torch MUST be imported before voicetut/omnivoice modules touch it — some
+# code paths in the stack reference torch without their own import.
+import torch  # noqa: F401
 import runpod
 
 MODEL_ID = os.getenv("VOICETUT_MODEL_ID", "mohammedaly22/VoiceTut-TTS")
@@ -57,8 +61,9 @@ def handler(job):
                 tts.synthesize(text, speaker=speaker, output=out_path)
             with open(out_path, "rb") as f:
                 audio = f.read()
-    except Exception as e:  # noqa: BLE001 — return the failure truthfully
-        return {"error": f"synthesis failed: {e}"}
+    except Exception as e:  # noqa: BLE001 — return the failure truthfully, with traceback for diagnosis
+        tb = traceback.format_exc().splitlines()[-6:]
+        return {"error": f"synthesis failed: {e}", "traceback": "\n".join(tb)}
 
     if len(audio) < 100:
         return {"error": "provider produced empty audio"}
