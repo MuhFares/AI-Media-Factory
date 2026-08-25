@@ -258,6 +258,21 @@ export type {
   VideoGenerationCapabilityPolicy,
 } from "./video-generation/video-generation-capability.js";
 
+// tts generation capability
+export {
+  TTSGenerationCapabilityExecutor,
+  TTS_GENERATION_CAPABILITY_ID,
+  createTTSGenerationCapability,
+} from "./tts/tts-capability.js";
+export type {
+  TTSGenerationRequest,
+  TTSGenerationProviderResponse,
+  TTSGenerationProvider,
+  TTSGenerationCapabilityInput,
+  TTSGenerationCapabilityOutput,
+  TTSGenerationCapabilityPolicy,
+} from "./tts/tts-capability.js";
+
 // publishing capability
 export {
   PublishingCapabilityExecutor,
