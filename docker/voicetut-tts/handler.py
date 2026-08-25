@@ -76,4 +76,9 @@ def handler(job):
     }
 
 
-runpod.serverless.start({"handler": handler})
+# Only start the RunPod serverless runtime when executed directly as the
+# container entrypoint (`python /handler.py`). Importing this module (e.g.
+# from the CI smoke test) must not boot the worker — outside the platform
+# the SDK exits immediately with "test_input.json not found".
+if __name__ == "__main__":
+    runpod.serverless.start({"handler": handler})

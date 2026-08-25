@@ -33,6 +33,11 @@ RUN pip install --no-cache-dir "git+https://github.com/k2-fsa/OmniVoice.git"
 # VoiceTuT-TTS (Egyptian fine-tune)
 RUN pip install --no-cache-dir voicetut-tts
 
+# omnivoice's dependency tree pulls an older tomlkit that breaks runpod's
+# SDK (config parsing). Re-pin it after all installs so the resolver
+# conflict cannot ship inside the image.
+RUN pip install --no-cache-dir "tomlkit>=0.15.1"
+
 # ---- HARD GATES (build fails if the runtime stack is broken) ----
 # Gate 1: torch importable with CUDA AND transformers actually sees it.
 RUN python -c "import torch, transformers; from transformers.utils import is_torch_available as t; assert t(), 'transformers disabled torch: version mismatch'; print('torch', torch.__version__, '| cuda:', torch.cuda.is_available(), '| transformers', transformers.__version__)" && \
