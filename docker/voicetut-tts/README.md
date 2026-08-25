@@ -18,13 +18,15 @@ Expected build time: 10-20 min (torch base + model pre-download).
 ## RunPod deployment
 
 1. `Serverless` → `New Endpoint` → `Deploy from a Docker image`
-2. Image: `ghcr.io/muhfares/voicetut-tts:latest`
+2. Image: `ghcr.io/muhfares/voicetut-tts:latest` (pin `:v3`+ for reproducibility)
    (if GHCR asks for auth: Container Registry Auth → username `muhfares`, password = a GitHub PAT with `read:packages`)
-3. GPU: **any** (model needs ~3GB VRAM — even a cheap GPU works; 4090 = fastest)
+3. GPU: **any** (model needs ~3GB VRAM — even a cheap GPU works; 4090 = fastest). Use **Secure** cloud, not Community/Spot — preempted workers re-pay cold start on every spin-up.
 4. Max workers: `1` — Active workers: `0` — Idle timeout: `300` — Execution timeout: `600`
 5. Container disk: `20GB` (model is baked into the image — no volume needed)
 6. No start command, no env vars required.
    Optional: `VOICETUT_DEFAULT_SPEAKER` (default `Mohamed`), `VOICETUT_MODEL_ID`.
+
+**Stack note:** base is torch 2.6.0 + transformers 5.x. transformers ≥5 requires torch ≥2.5 — do not downgrade the base image below 2.5 or transformers silently disables torch (`NameError: name 'torch'` in `tensor_parallel.py`). CI build gates enforce this.
 
 ## Contract
 

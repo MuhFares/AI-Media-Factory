@@ -1,6 +1,6 @@
 # VoiceTuT-TTS — Egyptian Arabic TTS on RunPod Serverless
 # Apache-2.0 stack: OmniVoice (k2-fsa) + VoiceTuT fine-tune (mohammedaly22).
-FROM pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime
+FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -17,17 +17,30 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir runpod
 
+# torchaudio MUST match the base image's torch exactly. If left to pip
+# resolution, a newer torchaudio can drag in a replacement torch build and
+# silently break the CUDA stack.
+RUN pip install --no-cache-dir "torchaudio==2.6.0"
+
+# transformers 5.x requires torch >= 2.5; on older torch it "disables" torch
+# and crashes with NameError inside integrations/tensor_parallel.py.
+# Pin the range explicitly so resolution cannot drift between builds.
+RUN pip install --no-cache-dir "transformers>=5.3,<6" "accelerate>=1.1"
+
 # OmniVoice backbone (not on PyPI — installed from GitHub)
 RUN pip install --no-cache-dir "git+https://github.com/k2-fsa/OmniVoice.git"
 
 # VoiceTuT-TTS (Egyptian fine-tune)
 RUN pip install --no-cache-dir voicetut-tts
 
-# Sanity check: torch must be importable with CUDA after all installs
-# (pip dependency resolution may replace the base image's torch — fail the
-#  build here rather than at request time if the stack is broken).
-RUN python -c "import torch; print('torch', torch.__version__, '| cuda:', torch.cuda.is_available())" && \
-    python -c "from voicetut_tts import VoiceTutTTS; print('voicetut_tts import OK')"
+# ---- HARD GATES (build fails if the runtime stack is broken) ----
+# Gate 1: torch importable with CUDA AND transformers actually sees it.
+RUN python -c "import torch, transformers; from transformers.utils import is_torch_available as t; assert t(), 'transformers disabled torch: version mismatch'; print('torch', torch.__version__, '| cuda:', torch.cuda.is_available(), '| transformers', transformers.__version__)" && \
+    python -c "import torchaudio; print('torchaudio', torchaudio.__version__)"
+# Gate 2: the exact module that produced NameError 'torch' in production.
+RUN python -c "import transformers.integrations.tensor_parallel; print('tensor_parallel import OK')"
+# Gate 3: full model load + real synthesis (exercises from_pretrained path).
+RUN python -c "from voicetut_tts import VoiceTutTTS; tts = VoiceTutTTS.from_pretrained('mohammedaly22/VoiceTut-TTS'); tts.synthesize('مرحبا', speaker='Mohamed', output='/tmp/gate.wav'); import os; assert os.path.getsize('/tmp/gate.wav') > 100, 'empty audio'; print('model load + synthesis OK')"
 
 # Pre-download the fine-tuned weights at build time (cold start without a 3GB download)
 RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('mohammedaly22/VoiceTut-TTS')"

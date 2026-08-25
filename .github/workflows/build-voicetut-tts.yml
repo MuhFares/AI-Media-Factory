@@ -35,22 +35,27 @@ jobs:
           push: true
           tags: |
             ghcr.io/muhfares/voicetut-tts:latest
-            ghcr.io/muhfares/voicetut-tts:v2
+            ghcr.io/muhfares/voicetut-tts:v3
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Smoke test handler on CPU (print real traceback)
-        continue-on-error: true
+      # HARD GATE: must produce audio or the build run fails.
+      # (continue-on-error was removed — a red X here means do NOT deploy.)
+      - name: Smoke test handler on CPU
         run: |
+          set -o pipefail
           docker run --rm ghcr.io/muhfares/voicetut-tts:latest python -u -c "
           import sys; sys.path.insert(0, '/')
           import handler, json
           result = handler.handler({'input': {'text': 'اختبار سريع للصوت', 'voice': 'Mohamed'}})
           out = dict(result)
           if 'audio' in out: out['audio'] = out['audio'][:60] + '...'
-          print('HANDLER_RESULT:', out)
-          if 'audio' in result:
-              import base64
-              buf = base64.b64decode(result['audio'])
-              print('bytes', len(buf), 'header', buf[0:4])
-          "
+          print('HANDLER_RESULT:', json.dumps(out, ensure_ascii=False))
+          if 'audio' not in result:
+              raise SystemExit('SMOKE FAILED: handler returned no audio: ' + json.dumps(out, ensure_ascii=False))
+          import base64
+          buf = base64.b64decode(result['audio'])
+          assert len(buf) > 1000, f'audio too small: {len(buf)} bytes'
+          print('SMOKE OK:', len(buf), 'bytes')
+          " 2>&1 | tee smoke.log
+          grep -q "SMOKE OK" smoke.log
