@@ -38,3 +38,20 @@ jobs:
             ghcr.io/muhfares/voicetut-tts:v2
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Smoke test handler on CPU (print real traceback)
+        continue-on-error: true
+        run: |
+          docker run --rm ghcr.io/muhfares/voicetut-tts:latest python -u -c "
+          import sys, json, traceback
+          sys.path.insert(0, '/app')
+          import handler
+          try:
+              result = handler.handler({'input': {'text': 'اختبار سريع للصوت', 'voice': 'Mohamed'}})
+              out = dict(result)
+              if 'audio' in out:
+                  out['audio'] = out['audio'][:60] + '...'
+              print('HANDLER_RESULT:', json.dumps(out, ensure_ascii=False))
+          except Exception:
+              traceback.print_exc()
+          "
