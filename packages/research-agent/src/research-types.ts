@@ -26,6 +26,12 @@ export interface ResearchAgentInput {
     stage: string;
   };
   /**
+   * Synthesis contract marker. When set (production two-phase research), the
+   * final report is validated against the post-retrieval synthesis contract
+   * (candidateStories/evidenceRisks/status plus the base report fields).
+   */
+  synthesisContract?: string;
+  /**
    * Canonical project context supplied by the caller (brand/strategy facts with
    * provenance). The agent includes it in its prompt; it never improvises
    * brand strategy when this is absent (see PROJECT_CONTEXT_INCOMPLETE gate).
@@ -123,6 +129,55 @@ export interface ResearchReport {
     /** Research agent version. */
     agentVersion: string;
   };
+  /** A candidate factual story (post-retrieval synthesis only). */
+  candidateStories?: ResearchCandidateStory[];
+  /** Known evidence risks/limitations (post-retrieval synthesis only). */
+  evidenceRisks?: string[];
+  /** Synthesis status (post-retrieval synthesis only). */
+  status?: string;
+  /** The pre-retrieval planning report (preserved as execution evidence). */
+  researchPlan?: ResearchPlan;
+  /** Per-call LLM usage for budget attribution (planning call). */
+  planningUsage?: ResearchCallUsage;
+  /** Per-call LLM usage for budget attribution (post-retrieval synthesis call). */
+  synthesisUsage?: ResearchCallUsage;
+}
+
+/** A pre-retrieval research plan (contract amf-research-plan-v1). */
+export interface ResearchPlan {
+  /** Stable contract identity echo. */
+  taskId: string;
+  /** Contract stage echo. */
+  stage: string;
+  /** Research objective. */
+  objective: string;
+  /** Planned search questions/queries. */
+  searchQueries: string[];
+  /** Research questions. */
+  researchQuestions: string[];
+  /** Plan status. */
+  status: string;
+  /** Plan summary. */
+  summary: string;
+}
+
+/** A candidate factual story from post-retrieval synthesis. */
+export interface ResearchCandidateStory {
+  /** Candidate topic/title. */
+  topic: string;
+  /** Factual angle. */
+  factualAngle?: string;
+  /** Source ids supporting this candidate. */
+  sourceIds?: number[];
+  /** Why it fits / visual/short-form potential notes. */
+  fitNote?: string;
+}
+
+/** Bounded per-call LLM usage for budget attribution. */
+export interface ResearchCallUsage {
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
 }
 
 export interface StrategyFinding {

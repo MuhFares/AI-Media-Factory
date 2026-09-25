@@ -2235,7 +2235,11 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
         context.data.previousArtifact = { artifactId: artifact.artifactId, kind: artifact.kind };
       }
       await this.persistCompletedAgentProvenance(step, context, execution.response, artifact.artifactId, status, input.input, provenanceStartedAt, Date.now() - provenanceStartedMs, lifecycle, modelBReview);
-      await this.reconcileProductionCalls(productionReservations, true, true, execution.response.usage?.costUsd, execution.response.provider === "openrouter" ? undefined : undefined);
+      if (step.agent === "research" && productionReservations.length === 3) {
+        await this.reconcileResearchCalls({ reservations: productionReservations, output, status, productionSubmissionStarted, lifecycleExecutionId: lifecycle?.executionId ?? null });
+      } else {
+        await this.reconcileProductionCalls(productionReservations, true, true, execution.response.usage?.costUsd, execution.response.provider === "openrouter" ? undefined : undefined);
+      }
       return { status: "completed", output, artifact,
         ...(modelBReview ? { reviewBusinessStatus: (reviewBusinessPayload as unknown as ReviewReport).status, reviewExecutionId: lifecycle?.executionId } : {}) };
     } catch (error) {
@@ -2243,7 +2247,13 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
       if (productionReservations.length > 0) {
         const failedUsage=safeRecord(safeRecord(lifecycle?.lastProviderResponse).usage);
         const failedCalculableCost=typeof failedUsage.cost==="number"?failedUsage.cost:undefined;
-        try { await this.reconcileProductionCalls(productionReservations, productionSubmissionStarted, false, failedCalculableCost, undefined); }
+        try {
+          if (step.agent === "research" && productionReservations.length === 3) {
+            await this.reconcileResearchCalls({ reservations: productionReservations, output: null, status: "failed", productionSubmissionStarted, failedCalculableCost, lifecycleExecutionId: lifecycle?.executionId ?? null });
+          } else {
+            await this.reconcileProductionCalls(productionReservations, productionSubmissionStarted, false, failedCalculableCost, undefined);
+          }
+        }
         catch (budgetError) { return { status: "failed", output: { stepId: step.id, agent: step.agent, error: message, budgetReconciliationFailure: budgetError instanceof Error ? budgetError.message : String(budgetError) }, error: { message, retryable: false } }; }
       }
       if (provenanceStartedAt !== null && (provenanceInput !== null || preparationInput !== null)) {
@@ -2275,17 +2285,24 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
     const route = safeRecord(routeOverride.canonicalRouting);
     const priceSnapshotId = typeof route.priceSnapshotId === "string" ? route.priceSnapshotId : null;
     if (priceSnapshotId === null) throw new Error("PRODUCTION_PRICE_SNAPSHOT_REQUIRED");
-    const kinds: Array<"research" | "text_agent"> = step.agent === "research" ? ["research", "text_agent"] : ["text_agent"];
     const recovery = safeRecord(data.recoveryExecution);
     const recoveryExecutionId = typeof recovery.recoveryExecutionId === "string"
       ? recovery.recoveryExecutionId
       : typeof recovery.recoveryOfExecutionId === "string" ? String(recovery.recoveryOfExecutionId) : null;
+    const recoverySuffix = recoveryExecutionId === null ? "" : `:recovery:${recoveryExecutionId}`;
+    // Research recovery consumes three governed calls: retrieval (research),
+    // planning LLM (text) and post-retrieval synthesis LLM (text). Each gets
+    // its own idempotency identity so reservation, transport and
+    // reconciliation stay independent per call. All other roles keep one.
+    const reservationSpecs: Array<{ callKind: "research" | "text_agent"; keySuffix: string }> = step.agent === "research"
+      ? [{ callKind: "research", keySuffix: "" }, { callKind: "text_agent", keySuffix: "" }, { callKind: "text_agent", keySuffix: ":synthesis" }]
+      : [{ callKind: "text_agent", keySuffix: "" }];
     const reservations: ProductionCallReservation[] = [];
     try {
-      for (const callKind of kinds) {
+      for (const spec of reservationSpecs) {
         reservations.push(await this.productionCallBudget.reserve({
-          projectId, workflowId: context.workflowId, phase: "PRE_MEDIA_PHASE", stage: step.id, role: step.agent, callKind,
-          idempotencyKey: `${context.workflowId}:${step.id}:${callKind}:v1${recoveryExecutionId === null ? "" : `:recovery:${recoveryExecutionId}`}`,
+          projectId, workflowId: context.workflowId, phase: "PRE_MEDIA_PHASE", stage: step.id, role: step.agent, callKind: spec.callKind,
+          idempotencyKey: `${context.workflowId}:${step.id}:${spec.callKind}:v1${recoverySuffix}${spec.keySuffix}`,
           routingVersionId: typeof route.routingVersionId === "string" ? route.routingVersionId : null,
           exactModelId: typeof safeRecord(safeRecord(data.controlAgentOverrides)[step.agent]).model === "string" ? String(safeRecord(safeRecord(data.controlAgentOverrides)[step.agent]).model) : null,
           priceSnapshotId,
@@ -2302,6 +2319,72 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
   private async reconcileProductionCalls(reservations: ProductionCallReservation[], submitted: boolean, success: boolean, calculableCostUsd?: number, providerBilledCostUsd?: number): Promise<void> {
     if (this.productionCallBudget === undefined) return;
     for (const reservation of reservations) await this.productionCallBudget.reconcile({ reservationId: reservation.reservationId, providerSubmissionStarted: submitted, success, calculableCostUsd: reservation.callKind === "text_agent" ? calculableCostUsd : undefined, providerBilledCostUsd, provenance: { reconciledBy: "production-executor", costSemantics: providerBilledCostUsd === undefined ? "PROVIDER_BILLED_UNKNOWN" : "PROVIDER_BILLED_KNOWN" } });
+  }
+
+  /**
+   * Research recovery consumes three governed calls (retrieval + planning LLM
+   * + synthesis LLM) with independent reservations. Reconcile each leg from
+   * its own evidence: retrieval from capability outcomes, planning/synthesis
+   * from per-call usage (output on success, lifecycle transport events on
+   * failure). A leg that provably never submitted is RELEASED, never
+   * consumed; uncertain legs keep the legacy coarse submitted flag so spend
+   * exposure is never under-counted.
+   */
+  private async reconcileResearchCalls(input: {
+    readonly reservations: ProductionCallReservation[];
+    readonly output: Json | null;
+    readonly status: "completed" | "failed" | "blocked";
+    readonly productionSubmissionStarted: boolean;
+    readonly failedCalculableCost?: number;
+    readonly lifecycleExecutionId?: string | null;
+  }): Promise<void> {
+    if (this.productionCallBudget === undefined) return;
+    const store = this.productionCallBudget;
+    const completed = input.status === "completed";
+    const provenance = { reconciledBy: "production-executor", costSemantics: "PROVIDER_BILLED_UNKNOWN" };
+    const record = safeRecord(input.output);
+    const executions = Array.isArray(record.capabilityExecutions) ? record.capabilityExecutions : [];
+    const planning = safeRecord(record.planningUsage);
+    const synthesis = safeRecord(record.synthesisUsage);
+    let retrievalSubmitted = input.output === null
+      ? input.productionSubmissionStarted
+      : executions.some((item) => {
+        const state = safeRecord(item).status;
+        return state === "success" || state === "failed";
+      });
+    let planSubmitted = input.output !== null;
+    let synthesisSubmitted = Object.keys(synthesis).length > 0;
+    let planCost = typeof planning.costUsd === "number" ? planning.costUsd as number : undefined;
+    let synthesisCost = typeof synthesis.costUsd === "number" ? synthesis.costUsd as number : undefined;
+    if (input.output === null && input.lifecycleExecutionId !== undefined && input.lifecycleExecutionId !== null
+      && this.persistence?.listExecutionLifecycleEvents !== undefined) {
+      try {
+        const transportUsages = (await this.persistence.listExecutionLifecycleEvents(input.lifecycleExecutionId))
+          .filter((event) => event.state === "PROVIDER_RESPONSE_RECEIVED")
+          .map((event) => safeRecord(safeRecord(event.metadata).usage));
+        if (transportUsages.length > 0) {
+          planSubmitted = true;
+          const first = transportUsages[0];
+          if (typeof first.cost === "number") planCost = first.cost as number;
+        }
+        if (transportUsages.length > 1) {
+          synthesisSubmitted = true;
+          const second = transportUsages[1];
+          if (typeof second.cost === "number") synthesisCost = second.cost as number;
+        }
+      } catch { /* fall back to coarse flags below */ }
+    }
+    if (input.output === null && !planSubmitted) {
+      planSubmitted = input.productionSubmissionStarted;
+      if (planCost === undefined) planCost = input.failedCalculableCost;
+    }
+    if (input.output === null && !synthesisSubmitted) {
+      synthesisSubmitted = input.productionSubmissionStarted;
+    }
+    const [researchRes, planRes, synthesisRes] = input.reservations;
+    if (researchRes !== undefined) await store.reconcile({ reservationId: researchRes.reservationId, providerSubmissionStarted: retrievalSubmitted, success: retrievalSubmitted && completed, calculableCostUsd: undefined, providerBilledCostUsd: undefined, provenance });
+    if (planRes !== undefined) await store.reconcile({ reservationId: planRes.reservationId, providerSubmissionStarted: planSubmitted, success: planSubmitted && completed, calculableCostUsd: planCost, providerBilledCostUsd: undefined, provenance });
+    if (synthesisRes !== undefined) await store.reconcile({ reservationId: synthesisRes.reservationId, providerSubmissionStarted: synthesisSubmitted, success: synthesisSubmitted && completed, calculableCostUsd: synthesisCost, providerBilledCostUsd: undefined, provenance });
   }
 
   private async withCanonicalModelRouting(step:AgentStep,context:WorkflowContext):Promise<WorkflowContext>{
@@ -2579,6 +2662,8 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
           // Stable machine contract identity (production pre-media path only;
           // strategy council keeps its legacy exact-description contract).
           ...(strategyMode ? {} : { contract: researchContract as unknown as Json }),
+          // Post-retrieval synthesis contract (production two-phase path only).
+          ...(strategyMode ? {} : { synthesisContract: "amf-research-synthesis-v1" }),
           ...(morrowayContext === null ? {} : {
             projectContext: morrowayContext as unknown as Json,
             projectContextProvenance: morrowayContextProvenance as unknown as Json,
@@ -2592,7 +2677,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
           ...(requestedModelOverride.length === 0 ? strategyModelOverride : { agentRouterModelOverride: requestedModelOverride }),
           capabilityRequests: strategyMode ? [] : [
             {
-              requestId: `web-search-${workflowId}-${step.id}`,
+              requestId: researchCapabilityRequestId(workflowId, step.id, context.data),
               capabilityId: "web.search",
               agentId: "research",
               workflowId,
@@ -3096,6 +3181,20 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
           payload: execution,
         });
       }
+      // Loud persistence verification: a silent ON CONFLICT skip must never be
+      // reported as successful persistence. Re-read our row; a missing row is
+      // a persistence failure, and a row holding DIFFERENT evidence under our
+      // identity is a cross-attempt conflict (both fail loudly with codes).
+      if (this.persistence.listCapabilityExecutions !== undefined) {
+        const stored = (await this.persistence.listCapabilityExecutions(context.workflowId))
+          .find((candidate) => candidate.resultId === String(execution.resultId ?? `cap-${context.workflowId}-${step.id}`));
+        if (stored === undefined) {
+          throw new Error(`CAPABILITY_EVIDENCE_PERSISTENCE_FAILED:${String(execution.capabilityId ?? "unknown")}`);
+        }
+        if (stored.evidenceId !== evidenceId || stableFingerprint(stored.payload) !== stableFingerprint(execution)) {
+          throw new Error(`CAPABILITY_EVIDENCE_CONFLICT:${String(execution.capabilityId ?? "unknown")}`);
+        }
+      }
     }
   }
 
@@ -3187,6 +3286,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
   }
 
   private withProviderSubmissionLifecycle(execute: ExecuteFn, lifecycle: GovernedLlmLifecycle): ExecuteFn {
+    let transportCount = 0;
     return async (executionContext, request, cancellation) => {
       // The SQL implementation is a compare-and-set, so concurrent workers
       // cannot both cross the provider boundary.  Legacy/in-memory adapters
@@ -3194,7 +3294,18 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
       if (this.persistence?.claimReadyExecutionProvenance === undefined) {
         throw new Error("EXECUTION_PROVIDER_CLAIM_REQUIRED");
       }
-      const claimed = await this.persistence.claimReadyExecutionProvenance(lifecycle.executionId, { maxTokens: request.maxOutputTokens });
+      transportCount += 1;
+      let claimed = await this.persistence.claimReadyExecutionProvenance(lifecycle.executionId, { maxTokens: request.maxOutputTokens });
+      if (!claimed && transportCount > 1) {
+        // Sequential multi-leg synthesis within ONE execution (planning LLM,
+        // then post-retrieval synthesis LLM): the prior leg completed, so
+        // re-arm the claim for the next leg. This runs strictly after the
+        // previous transport finished, so the concurrent-submission guard is
+        // unaffected; a crash between legs resumes the whole step under the
+        // existing reservation-idempotency rules.
+        await this.persistLifecycle(lifecycle, "READY_FOR_SUBMISSION", { providerSubmissionStarted: false, synthesisLeg: transportCount });
+        claimed = await this.persistence.claimReadyExecutionProvenance(lifecycle.executionId, { maxTokens: request.maxOutputTokens });
+      }
       if (!claimed) throw new Error(`EXECUTION_PROVIDER_CLAIM_NOT_ACQUIRED:${lifecycle.executionId}`);
       let response: Awaited<ReturnType<ExecuteFn>>;
       try {
@@ -3577,6 +3688,23 @@ export function requireMorrowayResearchProjectContext(resolved: unknown): Record
   if (!Array.isArray(record.prohibitions) || (record.prohibitions as unknown[]).length === 0) missing.push("prohibitions");
   if (missing.length > 0) throw new Error(`PROJECT_CONTEXT_INCOMPLETE:${missing.join(",")}`);
   return record as unknown as Record<string, Json>;
+}
+
+/**
+ * Capability request identity scoped by authorized recovery attempt.
+ * First runs keep the legacy workflow+step identity; each separately
+ * authorized recovery execution gets a distinct suffix, so a new attempt
+ * persists new evidence instead of colliding (ON CONFLICT DO NOTHING) with
+ * a prior attempt's row. Deterministic per recovery: same dispatch reuses
+ * the same identity (idempotent replay), a new dispatch gets a new one.
+ */
+export function researchCapabilityRequestId(workflowId: string, stepId: string, contextData: unknown): string {
+  const base = `web-search-${workflowId}-${stepId}`;
+  const recovery = safeRecord(safeRecord(contextData).recoveryExecution);
+  const attemptId = typeof recovery.recoveryExecutionId === "string" && recovery.recoveryExecutionId.trim() !== ""
+    ? recovery.recoveryExecutionId.trim()
+    : (typeof recovery.recoveryOfExecutionId === "string" ? recovery.recoveryOfExecutionId.trim() : "");
+  return attemptId === "" ? base : `${base}:recovery:${attemptId}`;
 }
 
 /** Deterministic educational-quiz detector for retrieved web.search results. */

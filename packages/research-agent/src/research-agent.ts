@@ -11,8 +11,10 @@ import type { CapabilityRequest } from "@ai-media-factory/tool-framework";
 import { isVisualResearchResult } from "@ai-media-factory/tool-framework";
 import type {
   ResearchAgentInput,
+  ResearchCallUsage,
   ResearchCitation,
   ResearchConfig,
+  ResearchPlan,
   ResearchReport,
   ResearchSource,
 } from "./research-types.js";
@@ -88,6 +90,34 @@ export interface ResearchCapabilityOutcome {
   readonly result: Json;
   readonly lifecycle: readonly ResearchCapabilityLifecycleState[];
   readonly reasonCode: ResearchCapabilityReasonCode;
+}
+
+/** Bounded per-call LLM usage for budget attribution (never negative/NaN). */
+function toCallUsage(usage: unknown): ResearchCallUsage {
+  const record = (usage ?? {}) as unknown as Record<string, unknown>;
+  const integer = (value: unknown): number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+  const cost = typeof record.costUsd === "number" && Number.isFinite(record.costUsd) && record.costUsd >= 0 ? record.costUsd : 0;
+  return { inputTokens: integer(record.inputTokens), outputTokens: integer(record.outputTokens), costUsd: cost };
+}
+
+/** Successfully retrieved web results across capability executions (evidence for synthesis). */
+function collectSuccessfulRetrievals(capabilityExecutions: readonly unknown[]): { providerId: string; results: { id?: unknown; title?: unknown; url?: unknown; snippet?: unknown; source?: unknown }[] }[] {
+  const collected: { providerId: string; results: { id?: unknown; title?: unknown; url?: unknown; snippet?: unknown; source?: unknown }[] }[] = [];
+  for (const item of capabilityExecutions) {
+    if (!isJsonRecord(item as Json)) continue;
+    const record = item as JsonRecord;
+    if (record.status !== "success") continue;
+    const output = record.output !== null && typeof record.output === "object" && !Array.isArray(record.output)
+      ? record.output as JsonRecord
+      : null;
+    const results = output !== null && Array.isArray(output.results) ? output.results : [];
+    if (results.length === 0) continue;
+    collected.push({
+      providerId: typeof output?.providerId === "string" ? output.providerId as string : "web.search",
+      results: (results as unknown[]).filter((row): row is { id?: unknown; title?: unknown; url?: unknown; snippet?: unknown; source?: unknown } => row !== null && typeof row === "object"),
+    });
+  }
+  return collected;
 }
 export const DEFAULT_RESEARCH_SYSTEM_PROMPT = `You are an expert research agent. Your job is to investigate a planned research task and produce a precise, source-backed research report.
 
@@ -416,29 +446,81 @@ export class ResearchAgent extends BaseAgent {
     }
 
     const researchInput = input.input;
-    const { report: baseReport, response: executionResponse } = await this.createReport(researchInput, input.context, signal);
+    // PHASE A — planning LLM: identifies questions/queries; needs no sources.
+    const { report: planReport, response: planResponse } = await this.createReport(researchInput, input.context, signal);
+    const planUsage = toCallUsage(planResponse.usage);
     const intelligence = researchInput.researchRequest === undefined
       ? undefined
       : await this.executeSourceRequest(researchInput.researchRequest);
-    const report = intelligence === undefined ? baseReport : { ...baseReport, intelligence };
+    const withIntelligence = intelligence === undefined ? planReport : { ...planReport, intelligence };
+    // PHASE B — governed retrieval with per-request lifecycle diagnostics.
     const governed = researchInput.capabilityRequests === undefined
       ? null
       : await this.runGovernedCapabilities(researchInput.capabilityRequests);
     const capabilityExecutions = governed === null ? [] : governed.map((outcome) => outcome.result);
+    // PHASE C — post-retrieval synthesis LLM (only with real retrieved
+    // evidence and an explicit synthesis contract; never on legacy/strategy
+    // inputs). The synthesis consumes actual retrieval results.
+    const synthesisInputs = collectSuccessfulRetrievals(capabilityExecutions);
+    const wantsSynthesis = typeof (researchInput as unknown as { synthesisContract?: unknown }).synthesisContract === "string"
+      && (researchInput as unknown as { strategyMode?: unknown }).strategyMode !== "PRE_PUBLICATION_STRATEGY"
+      && synthesisInputs.length > 0;
+    let report: ResearchReport = withIntelligence;
+    let synthesisUsage: ResearchCallUsage | null = null;
+    let response: ExecutionResponse = planResponse;
+    if (wantsSynthesis) {
+      const synthesis = await this.createSynthesisReport(researchInput, withIntelligence, synthesisInputs, input.context, signal);
+      synthesisUsage = toCallUsage(synthesis.response.usage);
+      report = synthesis.report;
+      response = synthesis.response;
+    }
     const baseOutput = this.toJson(report);
     const output: Json = capabilityExecutions.length > 0 && isJsonRecord(baseOutput)
-      ? { ...baseOutput, capabilityExecutions: JSON.parse(JSON.stringify(capabilityExecutions)) as Json[] }
+      ? {
+        ...baseOutput,
+        capabilityExecutions: JSON.parse(JSON.stringify(capabilityExecutions)) as Json[],
+        planningUsage: { ...planUsage },
+        ...(synthesisUsage === null ? {} : { synthesisUsage: { ...synthesisUsage } }),
+        researchPlan: { ...this.toJsonPlan(planReport) },
+      }
       : baseOutput;
 
     // Preserve provider execution metadata while returning normalized output.
-    const response: ExecutionResponse = {
-      ...executionResponse,
+    const combined: ExecutionResponse = {
+      ...response,
+      usage: {
+        inputTokens: planResponse.usage.inputTokens + (synthesisUsage?.inputTokens ?? 0),
+        outputTokens: planResponse.usage.outputTokens + (synthesisUsage?.outputTokens ?? 0),
+        costUsd: planResponse.usage.costUsd + (synthesisUsage?.costUsd ?? 0),
+      },
       output,
       raw: JSON.stringify(report, null, 2),
     };
 
     return {
       output,
+      response: combined,
+    };
+  }
+
+  /**
+   * Collect successfully retrieved web results across capability executions
+   * for post-retrieval synthesis. Only success results with real items count;
+   * empty/blocked/failed executions contribute nothing.
+   */
+  private async createSynthesisReport(
+    input: ResearchAgentInput,
+    plan: ResearchReport,
+    retrievals: { providerId: string; results: { id?: unknown; title?: unknown; url?: unknown; snippet?: unknown; source?: unknown }[] }[],
+    context: ExecutionContext,
+    signal: CancellationToken,
+  ): Promise<ResearchExecutionResult> {
+    signal?.throwIfCancelled();
+    const prompt = this.buildSynthesisPrompt(input, plan, retrievals);
+    const request = this.buildExecutionRequest(prompt);
+    const response = await this.runExecution(context, request, signal);
+    return {
+      report: this.parseSynthesisResponse(response.output, input),
       response,
     };
   }
@@ -695,6 +777,124 @@ Every citation sourceId must refer to an item in sources. Do not invent sources,
     };
   }
 
+  private toJsonPlan(report: ResearchReport): ResearchPlan {
+    const record = report as unknown as Record<string, unknown>;
+    return {
+      taskId: report.taskId ?? "",
+      stage: report.stage ?? "",
+      objective: report.taskDescription,
+      searchQueries: Array.isArray(record.searchQueries)
+        ? record.searchQueries.filter((query): query is string => typeof query === "string")
+        : [],
+      researchQuestions: [],
+      status: "planned",
+      summary: report.summary,
+    };
+  }
+
+  /**
+   * Post-retrieval synthesis prompt (contract amf-research-synthesis-v1).
+   * The model receives ONLY bounded retrieved evidence plus the plan and
+   * canonical project context. It must ground every candidate and citation in
+   * the supplied evidence: inventing source metadata or substituting internal
+   * knowledge is a contract violation.
+   */
+  private buildSynthesisPrompt(
+    input: ResearchAgentInput,
+    plan: ResearchReport,
+    retrievals: { providerId: string; results: { id?: unknown; title?: unknown; url?: unknown; snippet?: unknown; source?: unknown }[] }[],
+  ): string {
+    const { task } = input;
+    const contract = (input as unknown as { contract?: unknown }).contract as unknown as { taskId?: unknown; stage?: unknown } | undefined;
+    const projectContext = isJsonRecord((input as unknown as JsonRecord).projectContext)
+      ? (input as unknown as JsonRecord).projectContext
+      : null;
+    const evidence = retrievals.map((retrieval, retrievalIndex) => ({
+      retrievalId: retrievalIndex + 1,
+      providerId: retrieval.providerId,
+      results: retrieval.results.slice(0, 5).map((result, resultIndex) => ({
+        id: resultIndex + 1,
+        title: String(result.title ?? "").slice(0, 240),
+        url: String(result.url ?? "").slice(0, 500),
+        snippet: String(result.snippet ?? "").slice(0, 500),
+        source: String(result.source ?? "").slice(0, 120),
+      })),
+    }));
+    return `${this.researchConfig.systemPrompt}
+
+Post-retrieval synthesis (contract amf-research-synthesis-v1) for research task ${task.id}.
+Echo TASK_ID exactly into taskId (byte-for-byte, never paraphrased): ${JSON.stringify(typeof contract?.taskId === "string" ? contract.taskId : task.id)}
+Echo STAGE exactly into stage: ${JSON.stringify(typeof contract?.stage === "string" ? contract.stage : "research")}
+Describe the requested task in your own words into taskDescription (do NOT copy verbatim; keep it clearly about the requested task): ${JSON.stringify(task.description)}
+Planning summary to refine (not to repeat blindly): ${JSON.stringify(plan.summary).slice(0, 900)}
+${projectContext !== null ? `PROJECT CONTEXT (canonical brand/strategy facts — use these, never improvise brand strategy):\n${JSON.stringify(projectContext).slice(0, 2000)}\n` : ``}
+RETRIEVED EVIDENCE (the ONLY sources you may cite; every citation sourceId must equal a sources.id below):
+${JSON.stringify(evidence).slice(0, 6000)}
+Return one JSON ResearchReport with: reportId (UUID); taskId (exact echo); stage (exact echo); taskDescription; summary; candidateStories (array of {topic:string, factualAngle:string, sourceIds:number[], fitNote:string} — every sourceId must equal a sources.id); sources (array of {id:number,title:string,url:string,snippet:string} built ONLY from RETRIEVED EVIDENCE above); confidence (number 0..1 reflecting evidence quality, never inflated by retrieval count alone); citations (array of {sourceId:number,text:string}); evidenceRisks (array of strings: coverage gaps, source-quality limits); status (string, e.g. "grounded" or "insufficient_evidence"); metadata {createdAt:string,agentVersion:string}.
+Never claim media generation, publication, upload, or any production authority. Never invent source metadata. Do not include explanatory text outside the JSON.`;
+  }
+
+  /**
+   * Post-retrieval synthesis validation (contract amf-research-synthesis-v1):
+   * base report rules plus synthesis extras. Runs only when the caller set an
+   * explicit synthesisContract; legacy/strategy inputs keep prior behavior.
+   */
+  private parseSynthesisResponse(output: Json, input: ResearchAgentInput): ResearchReport {
+    const report = this.parseResearchResponse(output, input);
+    const record = isJsonRecord(output) ? output : null;
+    if (record === null) throw new ResearchStructuralValidationError(diagnoseResearchStructure(output, input));
+    if (!Array.isArray(record.candidateStories)) {
+      throw new ResearchStructuralValidationError({
+        validationKind: "STRUCTURAL",
+        issues: [{ path: "candidateStories", code: "missing_required", expected: "array" }],
+        shape: { topLevelKeys: [], strategyFindingKeys: [], truncated: false },
+        diagnosticsTruncated: false,
+      });
+    }
+    for (const [index, item] of (record.candidateStories as unknown[]).entries()) {
+      if (item === null || typeof item !== "object" || Array.isArray(item)
+        || typeof (item as Record<string, unknown>).topic !== "string"
+        || ((item as Record<string, unknown>).topic as string).trim().length === 0) {
+        throw new ResearchStructuralValidationError({
+          validationKind: "STRUCTURAL",
+          issues: [{ path: `candidateStories[${index}].topic`, code: "missing_required", expected: "string" }],
+          shape: { topLevelKeys: [], strategyFindingKeys: [], truncated: false },
+          diagnosticsTruncated: false,
+        });
+      }
+    }
+    if (!Array.isArray(record.evidenceRisks) || !record.evidenceRisks.every((risk): risk is string => typeof risk === "string")) {
+      throw new ResearchStructuralValidationError({
+        validationKind: "STRUCTURAL",
+        issues: [{ path: "evidenceRisks", code: "wrong_type", expected: "array of strings", actualType: Array.isArray(record.evidenceRisks) ? "array" : typeof record.evidenceRisks }],
+        shape: { topLevelKeys: [], strategyFindingKeys: [], truncated: false },
+        diagnosticsTruncated: false,
+      });
+    }
+    if (typeof record.status !== "string" || record.status.trim().length === 0) {
+      throw new ResearchStructuralValidationError({
+        validationKind: "STRUCTURAL",
+        issues: [{ path: "status", code: "missing_required", expected: "string" }],
+        shape: { topLevelKeys: [], strategyFindingKeys: [], truncated: false },
+        diagnosticsTruncated: false,
+      });
+    }
+    return {
+      ...report,
+      candidateStories: (record.candidateStories as unknown[]).map((item) => {
+        const candidate = item as Record<string, unknown>;
+        return {
+          topic: String(candidate.topic),
+          ...(typeof candidate.factualAngle === "string" ? { factualAngle: candidate.factualAngle } : {}),
+          ...(Array.isArray(candidate.sourceIds) ? { sourceIds: candidate.sourceIds.filter((id): id is number => typeof id === "number") } : {}),
+          ...(typeof candidate.fitNote === "string" ? { fitNote: candidate.fitNote } : {}),
+        };
+      }),
+      evidenceRisks: (record.evidenceRisks as unknown[]).filter((risk): risk is string => typeof risk === "string"),
+      status: String(record.status),
+    };
+  }
+
   private toJson(report: ResearchReport): Json {
     return {
       reportId: report.reportId,
@@ -702,6 +902,12 @@ Every citation sourceId must refer to an item in sources. Do not invent sources,
       ...(report.stage === undefined ? {} : { stage: report.stage }),
       taskDescription: report.taskDescription,
       summary: report.summary,
+      ...(report.candidateStories === undefined ? {} : { candidateStories: JSON.parse(JSON.stringify(report.candidateStories)) as Json }),
+      ...(report.evidenceRisks === undefined ? {} : { evidenceRisks: [...report.evidenceRisks] }),
+      ...(report.status === undefined ? {} : { status: report.status }),
+      ...(report.planningUsage === undefined ? {} : { planningUsage: { ...report.planningUsage } }),
+      ...(report.synthesisUsage === undefined ? {} : { synthesisUsage: { ...report.synthesisUsage } }),
+      ...(report.researchPlan === undefined ? {} : { researchPlan: JSON.parse(JSON.stringify(report.researchPlan)) as Json }),
       sources: report.sources.map((source) => ({
         id: source.id,
         title: source.title,
