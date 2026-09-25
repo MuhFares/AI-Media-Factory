@@ -830,7 +830,7 @@ Planning summary to refine (not to repeat blindly): ${JSON.stringify(plan.summar
 ${projectContext !== null ? `PROJECT CONTEXT (canonical brand/strategy facts — use these, never improvise brand strategy):\n${JSON.stringify(projectContext).slice(0, 2000)}\n` : ``}
 RETRIEVED EVIDENCE (the ONLY sources you may cite; every citation sourceId must equal a sources.id below):
 ${JSON.stringify(evidence).slice(0, 6000)}
-Return one JSON ResearchReport with: reportId (UUID); taskId (exact echo); stage (exact echo); taskDescription; summary; candidateStories (array of {topic:string, factualAngle:string, sourceIds:number[], fitNote:string} — every sourceId must equal a sources.id); sources (array of {id:number,title:string,url:string,snippet:string} built ONLY from RETRIEVED EVIDENCE above); confidence (number 0..1 reflecting evidence quality, never inflated by retrieval count alone); citations (array of {sourceId:number,text:string}); evidenceRisks (array of strings: coverage gaps, source-quality limits); status (string, e.g. "grounded" or "insufficient_evidence"); metadata {createdAt:string,agentVersion:string}.
+Return one JSON ResearchReport with: reportId (UUID); taskId (exact echo); stage (exact echo); taskDescription; summary; candidateStories (array, possibly empty when evidence is insufficient — an empty list is honest, never a failure — each entry {candidateId:string, topic:string, factualAngle:string, keyClaims:string[], sourceIds:number[], supportingEvidenceIds:number[], sourceQualitySummary:string, visualPotential:string, shortFormPotential:string, evidenceRisks:string[], verificationStatus:string} — every sourceId must equal a sources.id); sources (array of {id:number,title:string,url:string,snippet:string} built ONLY from RETRIEVED EVIDENCE above); confidence (number 0..1 reflecting evidence quality, never inflated by retrieval count alone); citations (array of {sourceId:number,text:string}); evidenceRisks (array of strings: coverage gaps, source-quality limits); status (string: "grounded" when candidates are supported, "insufficient_evidence" otherwise); metadata {createdAt:string,agentVersion:string}.
 Never claim media generation, publication, upload, or any production authority. Never invent source metadata. Do not include explanatory text outside the JSON.`;
   }
 
@@ -852,9 +852,26 @@ Never claim media generation, publication, upload, or any production authority. 
       });
     }
     for (const [index, item] of (record.candidateStories as unknown[]).entries()) {
-      if (item === null || typeof item !== "object" || Array.isArray(item)
-        || typeof (item as Record<string, unknown>).topic !== "string"
-        || ((item as Record<string, unknown>).topic as string).trim().length === 0) {
+      if (item === null || typeof item !== "object" || Array.isArray(item)) {
+        throw new ResearchStructuralValidationError({
+          validationKind: "STRUCTURAL",
+          issues: [{ path: `candidateStories[${index}]`, code: "wrong_type", expected: "object", actualType: Array.isArray(item) ? "array" : typeof item }],
+          shape: { topLevelKeys: [], strategyFindingKeys: [], truncated: false },
+          diagnosticsTruncated: false,
+        });
+      }
+      const candidate = item as Record<string, unknown>;
+      // An empty candidate list is an honest insufficient-evidence result, not
+      // a structural failure; non-empty entries need identity + topic.
+      if (typeof candidate.candidateId !== "string" || candidate.candidateId.trim().length === 0) {
+        throw new ResearchStructuralValidationError({
+          validationKind: "STRUCTURAL",
+          issues: [{ path: `candidateStories[${index}].candidateId`, code: "missing_required", expected: "string" }],
+          shape: { topLevelKeys: [], strategyFindingKeys: [], truncated: false },
+          diagnosticsTruncated: false,
+        });
+      }
+      if (typeof candidate.topic !== "string" || candidate.topic.trim().length === 0) {
         throw new ResearchStructuralValidationError({
           validationKind: "STRUCTURAL",
           issues: [{ path: `candidateStories[${index}].topic`, code: "missing_required", expected: "string" }],
@@ -883,11 +900,22 @@ Never claim media generation, publication, upload, or any production authority. 
       ...report,
       candidateStories: (record.candidateStories as unknown[]).map((item) => {
         const candidate = item as Record<string, unknown>;
+        const strings = (value: unknown): string[] | undefined => Array.isArray(value)
+          ? value.filter((entry): entry is string => typeof entry === "string")
+          : undefined;
         return {
+          candidateId: String(candidate.candidateId),
           topic: String(candidate.topic),
           ...(typeof candidate.factualAngle === "string" ? { factualAngle: candidate.factualAngle } : {}),
+          ...(strings(candidate.keyClaims) === undefined ? {} : { keyClaims: strings(candidate.keyClaims) }),
           ...(Array.isArray(candidate.sourceIds) ? { sourceIds: candidate.sourceIds.filter((id): id is number => typeof id === "number") } : {}),
+          ...(Array.isArray(candidate.supportingEvidenceIds) ? { supportingEvidenceIds: candidate.supportingEvidenceIds.filter((id): id is number => typeof id === "number") } : {}),
+          ...(typeof candidate.sourceQualitySummary === "string" ? { sourceQualitySummary: candidate.sourceQualitySummary } : {}),
+          ...(typeof candidate.visualPotential === "string" ? { visualPotential: candidate.visualPotential } : {}),
+          ...(typeof candidate.shortFormPotential === "string" ? { shortFormPotential: candidate.shortFormPotential } : {}),
           ...(typeof candidate.fitNote === "string" ? { fitNote: candidate.fitNote } : {}),
+          ...(Array.isArray(candidate.evidenceRisks) ? { evidenceRisks: candidate.evidenceRisks.filter((risk): risk is string => typeof risk === "string") } : {}),
+          ...(typeof candidate.verificationStatus === "string" ? { verificationStatus: candidate.verificationStatus } : {}),
         };
       }),
       evidenceRisks: (record.evidenceRisks as unknown[]).filter((risk): risk is string => typeof risk === "string"),

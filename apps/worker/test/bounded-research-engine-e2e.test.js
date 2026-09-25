@@ -53,8 +53,8 @@ const PLAN_COST = 0.00001;
 const SYNTHESIS_COST = 0.00002;
 
 const FACTUAL_RESULTS = [
-  { title: "Qanat: ancient Persian water tunnels still in use", url: "https://example.test/qanat-persia", snippet: "Archaeologists document qanat tunnels in Iran supplying villages for two millennia.", source: "example.test", rank: 1 },
-  { title: "Nubian vault: mud-brick roofing without timber", url: "https://example.test/nubian-vault", snippet: "Field survey records Nubian vault construction across Upper Egypt and Sudan.", source: "example.test", rank: 2 },
+  { title: "Qanat: Persian water management", url: "https://www.si.edu/spotlight/qanat-water", snippet: "Smithsonian survey of qanat tunnel systems in Iran with measured plans.", source: "si.edu", rank: 1 },
+  { title: "Qanat | irrigation | Britannica", url: "https://www.britannica.com/technology/qanat", snippet: "Qanat, ancient irrigation tunnel system of Iran with vertical shafts.", source: "britannica.com", rank: 2 },
   { title: "Stepwells of Gujarat: monsoon water architecture", url: "https://example.test/stepwells", snippet: "Conservation report lists dated stepwell inscriptions and measured depths.", source: "example.test", rank: 3 },
 ];
 
@@ -69,9 +69,12 @@ function synthesisPlan(stageId) {
     stage: stageId,
     taskDescription: RELEVANT_DESCRIPTION,
     summary: "Capability plan only: retrieve candidate factual stories, then verify claims and visual potential.",
+    candidateStories: [],
     sources: [],
     confidence: 0.12,
     citations: [],
+    evidenceRisks: [],
+    status: "insufficient_evidence",
     metadata: { createdAt: "2026-09-25T00:00:00.000Z", agentVersion: "research" },
   };
 }
@@ -83,7 +86,19 @@ function synthesisGrounded(stageId) {
     stage: stageId,
     taskDescription: RELEVANT_DESCRIPTION,
     summary: "Three dated water-engineering candidates with field-survey provenance.",
-    candidateStories: FACTUAL_RESULTS.map((result) => ({ topic: result.title, factualAngle: result.snippet.slice(0, 60), sourceIds: [], fitNote: "Short-form visual potential." })),
+    candidateStories: [{
+      candidateId: "candidate-1",
+      topic: "Qanat water tunnels of Persia",
+      factualAngle: "Two-millennia-old underground water engineering",
+      keyClaims: ["Qanat tunnels convey groundwater across arid Iran"],
+      sourceIds: [1, 2],
+      supportingEvidenceIds: [1, 2],
+      sourceQualitySummary: "Institutional survey plus reputable reference",
+      visualPotential: "Tunnel cross-sections and shaft grids",
+      shortFormPotential: "30-second reveal",
+      evidenceRisks: ["Dating precision varies by site"],
+      verificationStatus: "needs-verification",
+    }],
     sources: FACTUAL_RESULTS.map((result, index) => ({ id: index + 1, title: result.title, url: result.url, snippet: result.snippet })),
     confidence: 0.8,
     citations: FACTUAL_RESULTS.map((result, index) => ({ sourceId: index + 1, text: result.snippet.slice(0, 40) })),
@@ -340,8 +355,12 @@ test("USABLE research stops after research with artifact persisted and CEO at ze
     const report = artifacts.find((artifact) => artifact.kind === "research_report" && artifact.status === "completed");
     assert.ok(report, "expected a completed research_report");
     assert.equal(report.payload.sources.length, 3);
-    assert.equal(report.payload.candidateStories.length, 3);
+    assert.equal(report.payload.candidateStories.length, 1);
+    assert.equal(report.payload.candidateStories[0].candidateId, "candidate-1");
     assert.equal(report.payload.evidenceQuality.status, "USABLE");
+    assert.equal(report.payload.evidenceQuality.evidenceStatus, "USABLE");
+    assert.equal(report.payload.evidenceQuality.ceoEligible, true);
+    assert.equal(report.payload.evidenceQuality.viableCandidates, 1);
     assert.equal(report.payload.confidence, 0.8);
     assert.equal(report.payload.researchStatus, "USABLE");
     assert.ok(report.payload.planningUsage);

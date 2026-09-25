@@ -41,7 +41,12 @@ function synthesisOutput() {
     stage: "research",
     taskDescription: "Probe synthesis of Morroway factual candidates from retrieved evidence.",
     summary: "One dated candidate with field-survey provenance.",
-    candidateStories: [{ topic: "Qanat water tunnels", factualAngle: "Ancient Persian engineering", sourceIds: [1], fitNote: "Visual underground footage potential." }],
+    candidateStories: [{
+      candidateId: "candidate-1", topic: "Qanat water tunnels", factualAngle: "Ancient Persian engineering",
+      keyClaims: ["Qanat tunnels convey groundwater"], sourceIds: [1], supportingEvidenceIds: [1],
+      sourceQualitySummary: "Field survey", visualPotential: "Tunnel footage", shortFormPotential: "30-second reveal",
+      evidenceRisks: [], verificationStatus: "needs-verification",
+    }],
     sources: [{ id: 1, title: "Qanat tunnels", url: "https://example.test/qanat", snippet: "Documented water tunnels." }],
     confidence: 0.8,
     citations: [{ sourceId: 1, text: "Documented water tunnels." }],
@@ -125,6 +130,19 @@ describe("two-phase research synthesis", () => {
     const agent = createResearchAgent({ config: {}, execute: twoCallExecute(calls, () => bad), capabilityExecution: fakeBoundary() });
     await rejects(agent.execute({ context: {}, input: baseInput() }, signal), /invalid report structure/);
     strictEqual(calls.length, 2);
+  });
+
+  it("synthesis candidate without candidateId fails structurally, while empty candidates pass as honest", async () => {
+    const calls = [];
+    const bad = { ...synthesisOutput(), candidateStories: [{ topic: "No identity" }] };
+    const agent = createResearchAgent({ config: {}, execute: twoCallExecute(calls, () => bad), capabilityExecution: fakeBoundary() });
+    await rejects(agent.execute({ context: {}, input: baseInput() }, signal), /invalid report structure/);
+    const calls2 = [];
+    const honest = { ...synthesisOutput(), candidateStories: [], confidence: 0.05, status: "insufficient_evidence" };
+    const agent2 = createResearchAgent({ config: {}, execute: twoCallExecute(calls2, () => honest), capabilityExecution: fakeBoundary() });
+    const result = await agent2.execute({ context: {}, input: baseInput() }, signal);
+    strictEqual(calls2.length, 2);
+    strictEqual(result.output.candidateStories.length, 0);
   });
 
   it("synthesis prompt receives bounded retrieved evidence, never invented metadata", async () => {

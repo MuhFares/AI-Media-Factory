@@ -163,14 +163,30 @@ export interface ResearchPlan {
 
 /** A candidate factual story from post-retrieval synthesis. */
 export interface ResearchCandidateStory {
+  /** Stable candidate identity within this report (e.g. candidate-1). */
+  candidateId: string;
   /** Candidate topic/title. */
   topic: string;
   /** Factual angle. */
   factualAngle?: string;
+  /** Key factual claims requiring support. */
+  keyClaims?: string[];
   /** Source ids supporting this candidate. */
   sourceIds?: number[];
-  /** Why it fits / visual/short-form potential notes. */
+  /** Alternate evidence-id references (stable source/evidence IDs). */
+  supportingEvidenceIds?: number[];
+  /** Per-candidate source-quality summary. */
+  sourceQualitySummary?: string;
+  /** Visual potential note. */
+  visualPotential?: string;
+  /** Short-form potential note. */
+  shortFormPotential?: string;
+  /** Why it fits / fit note. */
   fitNote?: string;
+  /** Candidate-level evidence risks. */
+  evidenceRisks?: string[];
+  /** Verification status (e.g. verified, needs-verification, unverified). */
+  verificationStatus?: string;
 }
 
 /** Bounded per-call LLM usage for budget attribution. */

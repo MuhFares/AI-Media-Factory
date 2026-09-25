@@ -83,19 +83,37 @@ test("H: canonical Morroway context loads with provenance and drives a factual-c
   assert.doesNotMatch(query.toLowerCase(), /micro-story/);
 });
 
-test("I: off-topic quiz sources plus empty synthesis need a research retry", () => {
+test("I: off-topic quiz sources plus empty synthesis are INSUFFICIENT, never CEO-eligible", () => {
   const evaluation = evaluateResearchEvidenceQuality({ retrievalResults: QUIZ_RESULTS, synthesisSources: [], synthesisConfidence: 0, synthesisCitations: [] });
   assert.equal(evaluation.status, "NEEDS_RESEARCH_RETRY");
   assert.equal(evaluation.retrievalQuality, "OFF_TOPIC");
   const grounded = groundResearchReport(withSearch({ ...groundedSynthesis, sources: [], citations: [], confidence: 0, summary: "No evidence yet." }, QUIZ_RESULTS));
-  assert.equal(grounded.researchStatus, "NEEDS_RESEARCH_RETRY");
+  assert.equal(grounded.researchStatus, "INSUFFICIENT_EVIDENCE");
+  assert.equal(grounded.evidenceQuality.ceoEligible, false);
   assert.equal(grounded.confidence, 0);
 });
 
-test("J: relevant sources with grounded citations are USABLE for CEO consumption", () => {
-  const evaluation = evaluateResearchEvidenceQuality({ retrievalResults: FACTUAL_RESULTS, synthesisSources: groundedSynthesis.sources, synthesisConfidence: groundedSynthesis.confidence, synthesisCitations: groundedSynthesis.citations });
+test("J: viable candidates with authority make the result CEO-eligible", () => {
+  const viable = [
+    { id: 1, title: "Qanat: Persian water management", url: "https://www.si.edu/spotlight/qanat-water", snippet: "Smithsonian survey of qanat tunnel systems." },
+    { id: 2, title: "Qanat | irrigation | Britannica", url: "https://www.britannica.com/technology/qanat", snippet: "Ancient irrigation tunnel system of Iran." },
+  ];
+  const synthesis = {
+    ...groundedSynthesis,
+    candidateStories: [{
+      candidateId: "candidate-1", topic: "Qanat water tunnels of Persia", factualAngle: "Ancient water engineering",
+      keyClaims: ["Qanat tunnels convey groundwater"], sourceIds: [1, 2], supportingEvidenceIds: [1, 2],
+      sourceQualitySummary: "Institutional plus reputable reference", visualPotential: "Tunnel cross-sections",
+      shortFormPotential: "30-second reveal", evidenceRisks: [], verificationStatus: "needs-verification",
+    }],
+    sources: viable,
+    citations: [{ sourceId: 1, text: "Smithsonian survey" }, { sourceId: 2, text: "Britannica" }],
+    status: "grounded",
+  };
+  const evaluation = evaluateResearchEvidenceQuality({ retrievalResults: viable, synthesisSources: synthesis.sources, synthesisConfidence: synthesis.confidence, synthesisCitations: synthesis.citations });
   assert.equal(evaluation.status, "USABLE");
-  const grounded = groundResearchReport(withSearch(groundedSynthesis, FACTUAL_RESULTS));
+  const grounded = groundResearchReport(withSearch(synthesis, viable));
   assert.equal(grounded.researchStatus, "USABLE");
+  assert.equal(grounded.evidenceQuality.ceoEligible, true);
   assert.equal(grounded.confidence, 0.8);
 });

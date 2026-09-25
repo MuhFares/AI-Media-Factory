@@ -158,6 +158,35 @@ const groundedSynthesis = {
   metadata: { createdAt: "2026-09-25T00:00:00.000Z", agentVersion: "research" },
 };
 
+const viableSources = [
+  { id: 1, title: "Qanat: Persian water management", url: "https://www.si.edu/spotlight/qanat-water", snippet: "Smithsonian survey of qanat tunnel systems." },
+  { id: 2, title: "Qanat | irrigation | Britannica", url: "https://www.britannica.com/technology/qanat", snippet: "Ancient irrigation tunnel system of Iran." },
+];
+
+const viableSynthesis = {
+  reportId: "33333333-3333-4333-8333-333333333333",
+  taskDescription: "Production research for candidate stories",
+  summary: "One viable candidate with institutional and reputable sources.",
+  candidateStories: [{
+    candidateId: "candidate-1",
+    topic: "Qanat water tunnels of Persia",
+    factualAngle: "Two-millennia-old underground water engineering",
+    keyClaims: ["Qanat tunnels convey groundwater"],
+    sourceIds: [1, 2],
+    supportingEvidenceIds: [1, 2],
+    sourceQualitySummary: "Institutional plus reputable reference",
+    visualPotential: "Tunnel cross-sections",
+    shortFormPotential: "30-second reveal",
+    evidenceRisks: [],
+    verificationStatus: "needs-verification",
+  }],
+  sources: viableSources,
+  confidence: 0.8,
+  citations: [{ sourceId: 1, text: "Smithsonian survey" }, { sourceId: 2, text: "Britannica" }],
+  status: "grounded",
+  metadata: { createdAt: "2026-09-25T00:00:00.000Z", agentVersion: "research" },
+};
+
 const withSearch = (synthesis, results) => ({
   ...synthesis,
   capabilityExecutions: [{
@@ -172,8 +201,14 @@ test("A: relevant factual sources plus grounded synthesis pass the evidence gate
   const evaluation = evaluateResearchEvidenceQuality({ retrievalResults: goodResults, synthesisSources: groundedSynthesis.sources, synthesisConfidence: groundedSynthesis.confidence, synthesisCitations: groundedSynthesis.citations });
   assert.equal(evaluation.status, "USABLE");
   const grounded = groundResearchReport(withSearch(groundedSynthesis, goodResults));
-  assert.equal(grounded.researchStatus, "USABLE");
   assert.equal(grounded.confidence, 0.8);
+});
+
+test("A2: viable candidates with authority make the result CEO-eligible", () => {
+  const grounded = groundResearchReport(withSearch(viableSynthesis, viableSources));
+  assert.equal(grounded.researchStatus, "USABLE");
+  assert.equal(grounded.evidenceQuality.ceoEligible, true);
+  assert.equal(grounded.evidenceQuality.evidenceStatus, "USABLE");
 });
 
 test("B: five off-topic educational quiz results fail evidence quality", () => {
@@ -200,8 +235,9 @@ test("D: synthesis confidence zero is preserved and never becomes 0.75", () => {
   };
   const grounded = groundResearchReport(withSearch(synthesis, badResults));
   assert.equal(grounded.confidence, 0);
-  assert.equal(grounded.researchStatus, "NEEDS_RESEARCH_RETRY");
+  assert.equal(grounded.researchStatus, "INSUFFICIENT_EVIDENCE");
   assert.equal(grounded.evidenceQuality.status, "NEEDS_RESEARCH_RETRY");
+  assert.equal(grounded.evidenceQuality.ceoEligible, false);
 });
 
 test("current pilot bad research (5 off-topic plus confidence 0) is rejected", () => {
@@ -217,12 +253,13 @@ test("current pilot bad research (5 off-topic plus confidence 0) is rejected", (
   const grounded = groundResearchReport(withSearch(synthesis, badResults));
   assert.equal(grounded.confidence, 0);
   assert.notEqual(grounded.confidence, 0.75);
-  assert.equal(grounded.researchStatus, "NEEDS_RESEARCH_RETRY");
+  assert.equal(grounded.researchStatus, "INSUFFICIENT_EVIDENCE");
 });
 
 test("F: sufficient evidence is eligible for CEO consumption", () => {
   const evaluation = evaluateResearchEvidenceQuality({ retrievalResults: goodResults, synthesisSources: groundedSynthesis.sources, synthesisConfidence: groundedSynthesis.confidence, synthesisCitations: groundedSynthesis.citations });
   assert.equal(evaluation.status, "USABLE");
-  const grounded = groundResearchReport(withSearch(groundedSynthesis, goodResults));
+  const grounded = groundResearchReport(withSearch(viableSynthesis, viableSources));
   assert.equal(grounded.researchStatus, "USABLE");
+  assert.equal(grounded.evidenceQuality.ceoEligible, true);
 });

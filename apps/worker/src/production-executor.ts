@@ -2615,19 +2615,31 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
         const requestedModelOverride = typeof safeRecord(context.data).agentRouterModelOverride === "string"
           ? String(safeRecord(context.data).agentRouterModelOverride).trim()
           : "";
-        // Content-selection retrieval must seek candidate factual stories with
-        // explicit Morroway strategy intent — never a bare meta-task phrase
-        // such as "strongest evidence" / "textual evidence" / "micro-story".
-        const searchQuery = buildProductionResearchSearchQuery({
-          contentTopic: String(context.data.contentTopic ?? step.id),
-          objective: researchObjective,
+        // Discovery-first retrieval (Phase A): seek concrete named factual
+        // subjects (events, people, objects, discoveries, experiments) framed
+        // by the Historical POV pillar — never a bare meta-task phrase such
+        // as "strongest evidence" / "textual evidence" / "micro-story", and
+        // never generic fact-list intent ("amazing facts", "best stories").
+        // The primary discovery query is the governed single-retrieval query;
+        // verification queries are built per concrete candidate if needed.
+        const discoveryQueries = buildDiscoveryQueries({
           brandProject: String(safeRecord(context.data).productionBrief !== undefined
             ? safeRecord(safeRecord(context.data).productionBrief).brandProject ?? "morroway"
             : "morroway"),
           audience: String(safeRecord(context.data).audience ?? ""),
-          platform: String(safeRecord(context.data).platform ?? ""),
         });
-        const searchIntent = "content-selection: seek candidate factual stories/entities/events relevant to the Morroway strategy (surprising, well-sourced, visually feasible); not educational pages explaining evidence.";
+        const searchQuery = isResearchContentSelectionQuery(String(context.data.contentTopic ?? step.id), researchObjective)
+          ? discoveryQueries[0]
+          : buildProductionResearchSearchQuery({
+            contentTopic: String(context.data.contentTopic ?? step.id),
+            objective: researchObjective,
+            brandProject: String(safeRecord(context.data).productionBrief !== undefined
+              ? safeRecord(safeRecord(context.data).productionBrief).brandProject ?? "morroway"
+              : "morroway"),
+            audience: String(safeRecord(context.data).audience ?? ""),
+            platform: String(safeRecord(context.data).platform ?? ""),
+          });
+        const searchIntent = "discovery: seek concrete named factual candidates (events, people, objects, discoveries, experiments, historical incidents) with primary/institutional corroboration potential; then verify. Not educational pages explaining evidence; not generic fact-list compilations.";
         const searchContext = {
           contentTopic: String(context.data.contentTopic ?? step.id),
           objective: researchObjective,
@@ -3613,6 +3625,10 @@ function artifactStatusFor(agent: string, output: Json): "completed" | "blocked"
       if (searchStatus !== "success") return "blocked";
       const gate = safeRecord(record.evidenceQuality);
       if (gate.status === "NEEDS_RESEARCH_RETRY") return "blocked";
+      // Business sufficiency: a structurally valid report is still blocked
+      // unless the evidence is CEO-eligible (viable candidates above the
+      // authority threshold). Missing sufficiency data fails closed.
+      if (gate.ceoEligible !== true) return "blocked";
       // Reports produced before the evidenceQuality marker carry the historic
       // confidence-inflation risk: a synthesis that returned no sources or zero
       // confidence must not count as completed merely because retrieval exists.
@@ -3671,6 +3687,58 @@ export function buildProductionResearchSearchQuery(input: {
 }
 
 /**
+ * Generic fact-list intent detector. Discovery queries aimed at concrete
+ * named candidates (events, people, objects, discoveries, experiments,
+ * incidents) retrieve verifiable evidence; queries aimed at "interesting /
+ * amazing / mind-blowing facts" or "best stories" retrieve compilation
+ * content. The detector is deterministic lexical matching, not a model call.
+ */
+const GENERIC_FACT_LIST_INTENT = /\b(interesting|amazing|mind[\s-]?blow(ing)?|jaw[\s-]?drop(ping)?|best|viral|shocking|unbelievable|incredible)\s+(facts?|stories)\b|\btop\s+\d+\s+facts?\b|\bstrongest\s+evidence\b|\btextual\s+evidence\b|\bevidence[-\s]?grounded\s+micro-story\b/i;
+
+export function isGenericFactListQuery(query: unknown): boolean {
+  return typeof query === "string" && GENERIC_FACT_LIST_INTENT.test(query);
+}
+
+/**
+ * Phase A — candidate discovery queries (contract: discovery intent, no
+ * hardcoded topic). Several focused searches for concrete named factual
+ * subjects (events, people, objects, discoveries, experiments, historical
+ * incidents, documented unusual facts) framed by the Historical POV pillar:
+ * real people, civilizations, documented events, source-supported settings.
+ * The primary (first) query is the governed single-retrieval query.
+ */
+export function buildDiscoveryQueries(input: {
+  readonly brandProject?: string;
+  readonly audience?: string;
+}): string[] {
+  // brandProject names whose strategy this discovery serves; the queries
+  // themselves seek real-world subjects, never the brand as subject.
+  const audience = (input.audience ?? "").trim();
+  const audienceSuffix = audience.length > 0 ? ` ${audience}` : "";
+  const queries = [
+    `documented historical event discovery archive museum verified${audienceSuffix}`,
+    `unusual documented historical incident people civilization primary sources${audienceSuffix}`,
+    `scientific discovery innovation experiment documented evidence history${audienceSuffix}`,
+    `historical object artifact discovery museum collection story${audienceSuffix}`,
+  ];
+  return queries.map((query) => query.slice(0, 160)).filter((query) => !isGenericFactListQuery(query));
+}
+
+/**
+ * Phase B — candidate verification query for one concrete named candidate.
+ * Seeks higher-authority corroboration (museum, university, archive, official
+ * institution, reputable reference). The candidate name comes from retrieval,
+ * never hardcoded here.
+ */
+export function buildVerificationQuery(candidateName: string): string {
+  const name = candidateName.trim().replace(/\s+/g, " ").slice(0, 80);
+  if (name.length === 0) throw new Error("VERIFICATION_CANDIDATE_REQUIRED");
+  const query = `${name} museum OR university OR archive OR official institution OR reputable reference`;
+  if (isGenericFactListQuery(query)) throw new Error("VERIFICATION_QUERY_FACT_LIST_INTENT");
+  return query.slice(0, 160);
+}
+
+/**
  * Canonical Morroway research context gate. Fails closed with
  * PROJECT_CONTEXT_INCOMPLETE when the resolved approved context lacks the
  * governing identity (brand, both content pillars, positioning, prohibitions).
@@ -3705,6 +3773,226 @@ export function researchCapabilityRequestId(workflowId: string, stepId: string, 
     ? recovery.recoveryExecutionId.trim()
     : (typeof recovery.recoveryOfExecutionId === "string" ? recovery.recoveryOfExecutionId.trim() : "");
   return attemptId === "" ? base : `${base}:recovery:${attemptId}`;
+}
+
+/**
+ * Deterministic source-authority heuristic for research gating
+ * (contract amf-evidence-sufficiency-v1). This classifies PROVENANCE TIER,
+ * never truth: a primary source can still be wrong, and an unknown source can
+ * still be right. Tiers only decide production eligibility thresholds.
+ */
+export type SourceAuthorityClass =
+  | "PRIMARY_OR_INSTITUTIONAL"
+  | "REPUTABLE_SECONDARY"
+  | "GENERAL_MEDIA"
+  | "COMMUNITY"
+  | "AGGREGATOR_OR_COMPILATION"
+  | "UNKNOWN";
+
+const EDUCATIONAL_AGGREGATOR_HOSTS = new Set([
+  "quizlet.com", "quiz-tree.com", "coursehero.com", "brainly.com", "piqosity.com",
+  "chegg.com", "studocu.com", "khanacademy.org",
+]);
+
+const REPUTABLE_SECONDARY_HOSTS = new Set([
+  "wikipedia.org", "britannica.com", "reuters.com", "apnews.com",
+  "bbc.co.uk", "bbc.com", "nationalgeographic.com", "history.com",
+  "smithsonianmag.com", "archaeology.org", "arxiv.org", "jstor.org",
+  "nytimes.com", "theguardian.com", "washingtonpost.com", "cnn.com",
+]);
+
+const GENERAL_MEDIA_HOSTS = new Set([
+  "youtube.com", "youtu.be", "vimeo.com", "dailymotion.com", "ted.com",
+]);
+
+const COMMUNITY_HOSTS = new Set([
+  "reddit.com", "quora.com", "facebook.com", "twitter.com", "x.com",
+  "tiktok.com", "instagram.com", "threads.net", "stackoverflow.com",
+  "stackexchange.com",
+]);
+
+const PRIMARY_PUBLISHER_HOSTS = new Set([
+  "nature.com", "science.org", "pnas.org", "nejm.org", "thelancet.com",
+  "unesco.org", "who.int",
+]);
+
+const FACT_LIST_SIGNALS = /\b(top\s+\d+|amazing\s+facts?|mind[-\s]?blow(ing)?|facts?\s+(that\s+)?will\s+blow|jaw[-\s]?drop(ping)?|you\s+won'?t\s+believe|compilation|best\s+stories|viral\s+facts?|shocking\s+facts?)\b/i;
+
+function effectiveHostname(value: unknown): string {
+  const record = safeRecord(value);
+  const candidates = [record.url, record.source].map((item) => typeof item === "string" ? item.trim() : "");
+  for (const candidate of candidates) {
+    if (candidate === "") continue;
+    const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(candidate) ? candidate : `https://${candidate}`;
+    try {
+      const host = new URL(withScheme).hostname.toLowerCase().replace(/^www\./, "");
+      if (host.includes(".")) return host;
+    } catch { /* try next candidate */ }
+  }
+  return "";
+}
+
+function registrableHost(host: string): string {
+  return host;
+}
+
+/** Classify one retrieved result into a source-authority tier (deterministic). */
+export function classifySourceAuthority(result: unknown): { authorityClass: SourceAuthorityClass; reason: string } {
+  const record = safeRecord(result);
+  const title = typeof record.title === "string" ? record.title : "";
+  const snippet = typeof record.snippet === "string" ? record.snippet : "";
+  const host = effectiveHostname(result);
+  if (FACT_LIST_SIGNALS.test(`${title} ${snippet}`)) {
+    return { authorityClass: "AGGREGATOR_OR_COMPILATION", reason: "fact-list/compilation signals in title or snippet" };
+  }
+  if (host === "") return { authorityClass: "UNKNOWN", reason: "no parseable host" };
+  const domain = registrableHost(host);
+  if (EDUCATIONAL_AGGREGATOR_HOSTS.has(domain)) return { authorityClass: "AGGREGATOR_OR_COMPILATION", reason: "educational aggregator host" };
+  if (COMMUNITY_HOSTS.has(domain)) return { authorityClass: "COMMUNITY", reason: "community/discussion host" };
+  if (PRIMARY_PUBLISHER_HOSTS.has(domain)
+    || domain.endsWith(".gov") || domain.endsWith(".edu") || /\.ac\.[a-z]{2}$/.test(domain)
+    || /(^|\.)museum($|\.)/.test(domain) || /(^|\.)archives?($|\.)/.test(domain)) {
+    return { authorityClass: "PRIMARY_OR_INSTITUTIONAL", reason: "institutional host or suffix" };
+  }
+  if (REPUTABLE_SECONDARY_HOSTS.has(domain) || /(^|\.)(museum|archive)($|\.)/.test(`${title} ${snippet}`.toLowerCase())) {
+    return { authorityClass: "REPUTABLE_SECONDARY", reason: "reputable secondary host or museum/archive evidence" };
+  }
+  if (GENERAL_MEDIA_HOSTS.has(domain)) return { authorityClass: "GENERAL_MEDIA", reason: "general media platform host" };
+  return { authorityClass: "UNKNOWN", reason: "no authority rule matched" };
+}
+
+/** Authority rank for threshold comparisons (higher = stronger provenance tier). */
+export function sourceAuthorityRank(authorityClass: SourceAuthorityClass): number {
+  switch (authorityClass) {
+    case "PRIMARY_OR_INSTITUTIONAL": return 5;
+    case "REPUTABLE_SECONDARY": return 4;
+    case "GENERAL_MEDIA": return 3;
+    case "UNKNOWN": return 2;
+    case "AGGREGATOR_OR_COMPILATION": return 1;
+    case "COMMUNITY": return 0;
+  }
+}
+
+/** Business evidence status: execution success and evidence sufficiency are distinct. */
+export type ResearchEvidenceStatus =
+  | "USABLE"
+  | "NEEDS_VERIFICATION"
+  | "INSUFFICIENT_EVIDENCE"
+  | "OFF_TOPIC"
+  | "FAILED";
+
+export interface ResearchEvidenceSufficiency {
+  readonly retrievalCount: number;
+  readonly authorityBreakdown: Record<SourceAuthorityClass, number>;
+  readonly candidateCount: number;
+  readonly viableCandidates: number;
+  readonly status: ResearchEvidenceStatus;
+  readonly ceoEligible: boolean;
+  readonly reasons: readonly string[];
+}
+
+const ABOVE_LOW_AUTHORITY: ReadonlySet<SourceAuthorityClass> = new Set([
+  "PRIMARY_OR_INSTITUTIONAL", "REPUTABLE_SECONDARY", "GENERAL_MEDIA",
+]);
+
+function distinctDomains(results: readonly unknown[]): Set<string> {
+  const domains = new Set<string>();
+  for (const result of results) {
+    const host = effectiveHostname(result);
+    if (host !== "") domains.add(host);
+  }
+  return domains;
+}
+
+/**
+ * Conservative production eligibility (contract amf-evidence-sufficiency-v1).
+ * A candidate is viable only with: a concrete topic, ≥2 independent
+ * (distinct-domain) supporting sources, ≥1 source above the low
+ * (community/compilation/unknown) tier, and ≥1 citation tied to its sources.
+ * model-declared insufficiency caps the verdict at NEEDS_VERIFICATION even
+ * when candidates look viable (human/model disagreement goes to verification).
+ * This is a production threshold, never a guarantee of factual truth.
+ */
+export function evaluateResearchEvidenceSufficiency(input: {
+  readonly retrievalResults: readonly unknown[];
+  readonly synthesisSources: readonly unknown[];
+  readonly synthesisConfidence: unknown;
+  readonly synthesisCitations?: readonly unknown[];
+  readonly candidateStories?: readonly unknown[];
+  readonly synthesisStatus?: unknown;
+}): ResearchEvidenceSufficiency {
+  const reasons: string[] = [];
+  const retrievalCount = input.retrievalResults.length;
+  const authorityBreakdown: Record<SourceAuthorityClass, number> = {
+    PRIMARY_OR_INSTITUTIONAL: 0, REPUTABLE_SECONDARY: 0, GENERAL_MEDIA: 0,
+    COMMUNITY: 0, AGGREGATOR_OR_COMPILATION: 0, UNKNOWN: 0,
+  };
+  const classes = input.retrievalResults.map(classifySourceAuthority);
+  for (const classified of classes) authorityBreakdown[classified.authorityClass] += 1;
+  if (retrievalCount === 0) {
+    return { retrievalCount, authorityBreakdown, candidateCount: 0, viableCandidates: 0, status: "FAILED", ceoEligible: false, reasons: ["RETRIEVAL_EMPTY"] };
+  }
+  const offTopicCount = input.retrievalResults.filter(isOffTopicEducationalSearchResult).length;
+  const offTopicMajority = offTopicCount * 2 >= retrievalCount;
+  if (offTopicMajority) reasons.push("RETRIEVAL_OFF_TOPIC_EDUCATIONAL");
+  const sourceById = new Map<number, unknown>();
+  for (const source of input.synthesisSources) {
+    const id = safeRecord(source).id;
+    if (typeof id === "number") sourceById.set(id, source);
+  }
+  const citations = Array.isArray(input.synthesisCitations) ? input.synthesisCitations : [];
+  const citedIds = new Set<number>();
+  for (const citation of citations) {
+    const id = safeRecord(citation).sourceId;
+    if (typeof id === "number") citedIds.add(id);
+  }
+  const candidates = Array.isArray(input.candidateStories) ? input.candidateStories : [];
+  let viableCandidates = 0;
+  for (const candidate of candidates) {
+    const record = safeRecord(candidate);
+    if (typeof record.topic !== "string" || record.topic.trim().length === 0) { reasons.push("CANDIDATE_WITHOUT_TOPIC"); continue; }
+    const claimedIds = Array.isArray(record.sourceIds) ? record.sourceIds.filter((id): id is number => typeof id === "number") : [];
+    const evidenceIds = Array.isArray(record.supportingEvidenceIds) ? record.supportingEvidenceIds.filter((id): id is number => typeof id === "number") : [];
+    const linkedIds = [...new Set([...claimedIds, ...evidenceIds])].filter((id) => sourceById.has(id));
+    if (linkedIds.length === 0) { reasons.push("CANDIDATE_WITHOUT_EVIDENCE"); continue; }
+    const linkedSources = linkedIds.map((id) => sourceById.get(id)).filter((source): source is unknown => source !== undefined);
+    const domains = distinctDomains(linkedSources);
+    if (domains.size < 2) { reasons.push("CANDIDATE_SINGLE_DOMAIN"); continue; }
+    const best = Math.max(...linkedSources.map((source) => sourceAuthorityRank(classifySourceAuthority(source).authorityClass)));
+    if (!ABOVE_LOW_AUTHORITY.has(rankToClass(best))) { reasons.push("CANDIDATE_LOW_AUTHORITY_ONLY"); continue; }
+    const cited = linkedIds.some((id) => citedIds.has(id));
+    if (!cited) { reasons.push("CANDIDATE_UNCITED"); continue; }
+    viableCandidates += 1;
+  }
+  const synthesisConfidence = typeof input.synthesisConfidence === "number" && Number.isFinite(input.synthesisConfidence)
+    ? input.synthesisConfidence
+    : null;
+  const modelInsufficient = typeof input.synthesisStatus === "string" && input.synthesisStatus.trim().toLowerCase() === "insufficient_evidence";
+  if (candidates.length === 0) {
+    if (synthesisConfidence === 0) reasons.push("SYNTHESIS_CONFIDENCE_ZERO");
+    reasons.push("NO_CANDIDATE_STORIES");
+    return { retrievalCount, authorityBreakdown, candidateCount: 0, viableCandidates: 0, status: "INSUFFICIENT_EVIDENCE", ceoEligible: false, reasons };
+  }
+  if (viableCandidates > 0 && !modelInsufficient && !offTopicMajority) {
+    return { retrievalCount, authorityBreakdown, candidateCount: candidates.length, viableCandidates, status: "USABLE", ceoEligible: true, reasons };
+  }
+  if (viableCandidates > 0 && !modelInsufficient && offTopicMajority) {
+    return { retrievalCount, authorityBreakdown, candidateCount: candidates.length, viableCandidates, status: "OFF_TOPIC", ceoEligible: false, reasons };
+  }
+  if (synthesisConfidence === 0) reasons.push("SYNTHESIS_CONFIDENCE_ZERO");
+  if (modelInsufficient) reasons.push("MODEL_DECLARED_INSUFFICIENT");
+  // Candidates exist but none clear the bar (or the model disagrees with a
+  // passing gate): targeted verification could still complete the evidence.
+  return { retrievalCount, authorityBreakdown, candidateCount: candidates.length, viableCandidates, status: "NEEDS_VERIFICATION", ceoEligible: false, reasons };
+}
+
+function rankToClass(rank: number): SourceAuthorityClass {
+  if (rank >= 5) return "PRIMARY_OR_INSTITUTIONAL";
+  if (rank === 4) return "REPUTABLE_SECONDARY";
+  if (rank === 3) return "GENERAL_MEDIA";
+  if (rank === 2) return "UNKNOWN";
+  if (rank === 1) return "AGGREGATOR_OR_COMPILATION";
+  return "COMMUNITY";
 }
 
 /** Deterministic educational-quiz detector for retrieved web.search results. */
@@ -3765,6 +4053,63 @@ export function evaluateResearchEvidenceQuality(input: {
   return { retrievalCount, retrievalQuality, synthesisConfidence, synthesisSourceCount, status, reasons };
 }
 
+/** Business research status derived from sufficiency (never rewrites history). */
+export type ResearchBusinessStatus =
+  | "USABLE"
+  | "NEEDS_RESEARCH_RETRY"
+  | "NEEDS_VERIFICATION"
+  | "INSUFFICIENT_EVIDENCE";
+
+export function researchStatusForSufficiency(sufficiency: { readonly status: ResearchEvidenceStatus; readonly ceoEligible: boolean }): ResearchBusinessStatus {
+  if (sufficiency.ceoEligible) return "USABLE";
+  switch (sufficiency.status) {
+    case "NEEDS_VERIFICATION": return "NEEDS_VERIFICATION";
+    case "INSUFFICIENT_EVIDENCE": return "INSUFFICIENT_EVIDENCE";
+    default: return "NEEDS_RESEARCH_RETRY";
+  }
+}
+
+export interface ReclassifiedResearchEvidence {
+  readonly executionStatus: string;
+  readonly evidenceStatus: ResearchEvidenceStatus;
+  readonly ceoEligible: boolean;
+  readonly candidateCount: number;
+  readonly viableCandidates: number;
+  readonly authorityBreakdown: Record<SourceAuthorityClass, number>;
+  readonly reasons: readonly string[];
+  readonly gateVersion: string;
+}
+
+/**
+ * Re-derive corrected quality status for an already-persisted research
+ * artifact WITHOUT rewriting it (contract amf-evidence-sufficiency-v1).
+ * The persisted retrieval-derived sources double as the retrieval results
+ * (titles/urls/snippets preserved); the synthesis fields come from the
+ * artifact itself.
+ */
+export function reclassifyResearchEvidence(artifactPayload: unknown): ReclassifiedResearchEvidence {
+  const payload = safeRecord(artifactPayload);
+  const sources = Array.isArray(payload.sources) ? payload.sources : [];
+  const sufficiency = evaluateResearchEvidenceSufficiency({
+    retrievalResults: sources,
+    synthesisSources: sources,
+    synthesisConfidence: payload.confidence,
+    synthesisCitations: Array.isArray(payload.citations) ? payload.citations : [],
+    candidateStories: Array.isArray(payload.candidateStories) ? payload.candidateStories : [],
+    synthesisStatus: typeof payload.status === "string" ? payload.status : undefined,
+  });
+  return {
+    executionStatus: "COMPLETED",
+    evidenceStatus: sufficiency.status,
+    ceoEligible: sufficiency.ceoEligible,
+    candidateCount: sufficiency.candidateCount,
+    viableCandidates: sufficiency.viableCandidates,
+    authorityBreakdown: sufficiency.authorityBreakdown,
+    reasons: sufficiency.reasons,
+    gateVersion: "amf-evidence-sufficiency-v1",
+  };
+}
+
 /**
  * Ground the research report in the real web.search capability outcome.
  * Retrieval presence is NOT evidence quality: the synthesis confidence is
@@ -3792,10 +4137,13 @@ export function groundResearchReport(output: Json): Json {
   const synthesisConfidence = typeof record.confidence === "number" ? record.confidence : null;
   const synthesisSources = Array.isArray(record.sources) ? record.sources : [];
   const synthesisCitations = Array.isArray(record.citations) ? record.citations : [];
+  const candidateStories = Array.isArray(record.candidateStories) ? record.candidateStories : [];
+  const synthesisStatus = typeof record.status === "string" ? record.status : undefined;
   if (results.length === 0) {
     // The provider succeeded but returned zero results: report it as such and
     // never fall back to fabricated placeholder sources or invented confidence.
     const evaluation = evaluateResearchEvidenceQuality({ retrievalResults: results, synthesisSources, synthesisConfidence, synthesisCitations });
+    const sufficiency = evaluateResearchEvidenceSufficiency({ retrievalResults: results, synthesisSources, synthesisConfidence, synthesisCitations, candidateStories, synthesisStatus });
     return {
       ...record,
       summary: "Research completed but the web.search provider returned zero results; no sources to cite.",
@@ -3803,11 +4151,21 @@ export function groundResearchReport(output: Json): Json {
       citations: [],
       confidence: synthesisConfidence ?? 0,
       metadata: { ...safeRecord(record.metadata), providerInfo },
-      evidenceQuality: { ...evaluation, synthesisConfidence: synthesisConfidence ?? evaluation.synthesisConfidence } as unknown as Json,
-      researchStatus: "NEEDS_RESEARCH_RETRY",
+      evidenceQuality: {
+        ...evaluation,
+        synthesisConfidence: synthesisConfidence ?? evaluation.synthesisConfidence,
+        evidenceStatus: sufficiency.status,
+        ceoEligible: sufficiency.ceoEligible,
+        authorityBreakdown: sufficiency.authorityBreakdown,
+        candidateCount: sufficiency.candidateCount,
+        viableCandidates: sufficiency.viableCandidates,
+        sufficiencyReasons: sufficiency.reasons,
+      } as unknown as Json,
+      researchStatus: researchStatusForSufficiency(sufficiency),
     };
   }
   const evaluation = evaluateResearchEvidenceQuality({ retrievalResults: results, synthesisSources, synthesisConfidence, synthesisCitations });
+  const sufficiency = evaluateResearchEvidenceSufficiency({ retrievalResults: results, synthesisSources, synthesisConfidence, synthesisCitations, candidateStories, synthesisStatus });
   const sources = results.map((row, index) => {
     const result = safeRecord(row);
     return {
@@ -3831,8 +4189,16 @@ export function groundResearchReport(output: Json): Json {
     // a synthesis confidence of 0 (or missing) to 0.75.
     confidence: synthesisConfidence ?? 0,
     metadata: { ...safeRecord(record.metadata), providerInfo },
-    evidenceQuality: { ...evaluation } as unknown as Json,
-    researchStatus: evaluation.status === "USABLE" ? "USABLE" : "NEEDS_RESEARCH_RETRY",
+    evidenceQuality: {
+      ...evaluation,
+      evidenceStatus: sufficiency.status,
+      ceoEligible: sufficiency.ceoEligible,
+      authorityBreakdown: sufficiency.authorityBreakdown,
+      candidateCount: sufficiency.candidateCount,
+      viableCandidates: sufficiency.viableCandidates,
+      sufficiencyReasons: sufficiency.reasons,
+    } as unknown as Json,
+    researchStatus: researchStatusForSufficiency(sufficiency),
   };
 }
 

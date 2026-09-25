@@ -7,7 +7,7 @@ export type { WorkflowWorkerDeps } from "./worker.js";
 export { buildDefaultEngine, waitForTerminal } from "./engine.js";
 export type { BuildEngineDeps, WorkflowTerminalState } from "./engine.js";
 export { createDeterministicAgentExecutor } from "./executor.js";
-export { createProductionAgentExecutor, ProductionAgentExecutor, executeGovernedAgentRouterVisibleJson, executeGovernedVisibleJson, buildProviderBoundary, probeProductionOpenRouterTransport, sanitizedFailureMessage } from "./production-executor.js";
+export { createProductionAgentExecutor, ProductionAgentExecutor, executeGovernedAgentRouterVisibleJson, executeGovernedVisibleJson, buildProviderBoundary, probeProductionOpenRouterTransport, sanitizedFailureMessage, researchCapabilityRequestId, classifySourceAuthority, sourceAuthorityRank, evaluateResearchEvidenceSufficiency, researchStatusForSufficiency, reclassifyResearchEvidence, buildDiscoveryQueries, buildVerificationQuery, isGenericFactListQuery } from "./production-executor.js";
 export { GovernedAgentRuntime } from "./governed-agent-runtime.js";
 export { resolveApprovedProjectContext, assertMorrowayHistoricalContext } from "./project-context.js";
 export type { GovernedAgentRequest, GovernedAgentResult, EffectiveRuntimeConfig, GovernedProvider, CommandExecutionStatus } from "./governed-agent-runtime.js";
