@@ -23,6 +23,9 @@ export { normalizeSocialEvidence, parseSocialReferenceUrl, socialReferenceFallba
 
 export type {
   ResearchContractIdentity,
+  ResearchCapabilityReasonCode,
+  ResearchCapabilityLifecycleState,
+  ResearchCapabilityOutcome,
 } from "./research-agent.js";
 export {
   ResearchAgent,
@@ -34,4 +37,5 @@ export {
   assertResearchAuthorityBoundary,
   isRelevantResearchDescription,
   validateResearchContractIdentity,
+  classifyResearchCapabilityError,
 } from "./research-agent.js";

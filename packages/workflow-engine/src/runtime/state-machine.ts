@@ -12,6 +12,7 @@ const TRANSITIONS: StateTransition[] = [
 
   // From RUNNING
   { from: "RUNNING", to: "PAUSED", on: "pause" },
+  { from: "RUNNING", to: "PAUSED", on: "bounded_stop" },
   { from: "RUNNING", to: "AWAITING_APPROVAL", on: "await_approval" },
   { from: "RUNNING", to: "RETRYING", on: "retry" },
   { from: "RUNNING", to: "COMPENSATING", on: "compensate" },
@@ -19,6 +20,8 @@ const TRANSITIONS: StateTransition[] = [
   { from: "RUNNING", to: "FAILED", on: "fail" },
   { from: "RUNNING", to: "CANCELLED", on: "cancel" },
   { from: "RUNNING", to: "ESCALATED", on: "escalate" },
+  { from: "RUNNING", to: "REVISION_REQUIRED", on: "review_changes_requested" },
+  { from: "RUNNING", to: "BUSINESS_BLOCKED", on: "review_blocked" },
 
   // From PAUSED
   { from: "PAUSED", to: "RUNNING", on: "resume" },
@@ -65,6 +68,6 @@ export class DefaultWorkflowStateMachine implements WorkflowStateMachine {
   }
 
   isTerminal(state: WorkflowState): boolean {
-    return ["COMPLETED", "FAILED", "CANCELLED", "ESCALATED"].includes(state);
+    return ["COMPLETED", "FAILED", "CANCELLED", "ESCALATED", "REVISION_REQUIRED", "BUSINESS_BLOCKED"].includes(state);
   }
 }

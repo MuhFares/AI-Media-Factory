@@ -7,6 +7,7 @@ import type { AgentId, Json } from "@ai-media-factory/runtime";
 import type { ExecutionContext, ExecutionResponse, CancellationToken } from "@ai-media-factory/runtime";
 import { BaseAgent, type BaseAgentDependencies, type AgentExecutionInput, type AgentExecutionOutput } from "@ai-media-factory/runtime";
 import type { ExecutionRequest } from "@ai-media-factory/runtime";
+import type { CapabilityRequest } from "@ai-media-factory/tool-framework";
 import { isVisualResearchResult } from "@ai-media-factory/tool-framework";
 import type {
   ResearchAgentInput,
@@ -55,7 +56,39 @@ function isResearchAgentInput(value: Json): value is JsonRecord & ResearchAgentI
         && isJsonRecord(request.input)));
 }
 
-/** Default research system prompt. */
+/** Deterministic reason codes for research capability lifecycle outcomes. Never silent. */
+export type ResearchCapabilityReasonCode =
+  | "CAPABILITY_COMPLETED"
+  | "MISSING_PROVIDER_BOUNDARY"
+  | "CAPABILITY_NOT_REGISTERED"
+  | "CAPABILITY_NOT_AUTHORIZED"
+  | "CAPABILITY_TRANSPORT_FAILED"
+  | "CAPABILITY_EXECUTION_FAILED";
+
+/** Lifecycle states for a requested research capability. */
+export type ResearchCapabilityLifecycleState =
+  | "REQUESTED"
+  | "AUTHORIZED"
+  | "EXECUTING"
+  | "COMPLETED"
+  | "BLOCKED"
+  | "FAILED";
+
+/** Map a thrown capability error to a deterministic, secret-free reason code. */
+export function classifyResearchCapabilityError(error: unknown): ResearchCapabilityReasonCode {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/NOT_REGISTERED|not registered|unknown capability|unsupported capability/i.test(message)) return "CAPABILITY_NOT_REGISTERED";
+  if (/NOT_AUTHORIZED|not authorized|forbidden|grant/i.test(message)) return "CAPABILITY_NOT_AUTHORIZED";
+  if (/timeout|network|transport|fetch|ECONN|ENOTFOUND|EACCES|503|502|500|429/i.test(message)) return "CAPABILITY_TRANSPORT_FAILED";
+  return "CAPABILITY_EXECUTION_FAILED";
+}
+
+/** Capability result with an explicit lifecycle trail and reason code (no silent skips). */
+export interface ResearchCapabilityOutcome {
+  readonly result: Json;
+  readonly lifecycle: readonly ResearchCapabilityLifecycleState[];
+  readonly reasonCode: ResearchCapabilityReasonCode;
+}
 export const DEFAULT_RESEARCH_SYSTEM_PROMPT = `You are an expert research agent. Your job is to investigate a planned research task and produce a precise, source-backed research report.
 
 Given a task, you must:
@@ -308,6 +341,73 @@ export class ResearchAgent extends BaseAgent {
     return this.sourceRouter.execute(request);
   }
 
+  /**
+   * Governed capability execution: every DECLARED request yields exactly one
+   * result carrying an explicit lifecycle trail and reason code. Declared
+   * capabilities can never silently disappear: a missing boundary produces a
+   * BLOCKED/MISSING_PROVIDER_BOUNDARY result, and a throwing transport
+   * produces a FAILED result with a classified secret-free reason code.
+   */
+  private async runGovernedCapabilities(requests: readonly CapabilityRequest[]): Promise<ResearchCapabilityOutcome[]> {
+    const outcomes: ResearchCapabilityOutcome[] = [];
+    for (const request of requests) {
+      const lifecycle: ResearchCapabilityLifecycleState[] = ["REQUESTED", "AUTHORIZED"];
+      if (this.deps.capabilityExecution === undefined) {
+        lifecycle.push("BLOCKED");
+        outcomes.push({
+          result: {
+            status: "blocked",
+            resultId: `agent-capability-result-${request.requestId}`,
+            capabilityId: request.capabilityId,
+            reason: "Capability execution is not configured",
+            reasonCode: "MISSING_PROVIDER_BOUNDARY",
+            lifecycle: [...lifecycle],
+          } as unknown as Json,
+          lifecycle: [...lifecycle],
+          reasonCode: "MISSING_PROVIDER_BOUNDARY",
+        });
+        continue;
+      }
+      lifecycle.push("EXECUTING");
+      try {
+        const raw = await this.deps.capabilityExecution.executeCapability(request);
+        const record = (raw ?? {}) as unknown as Record<string, unknown>;
+        const status = record.status === "success" ? "COMPLETED" : record.status === "blocked" ? "BLOCKED" : "FAILED";
+        const reasonCode: ResearchCapabilityReasonCode = status === "COMPLETED"
+          ? "CAPABILITY_COMPLETED"
+          : this.classifyBlockedResult(record);
+        lifecycle.push(status);
+        outcomes.push({
+          result: { ...(record as unknown as JsonRecord), lifecycle: [...lifecycle], reasonCode } as unknown as Json,
+          lifecycle: [...lifecycle],
+          reasonCode,
+        });
+      } catch (error) {
+        const reasonCode = classifyResearchCapabilityError(error);
+        lifecycle.push("FAILED");
+        outcomes.push({
+          result: {
+            status: "failed",
+            resultId: `agent-capability-result-${request.requestId}`,
+            capabilityId: request.capabilityId,
+            error: { code: reasonCode, message: (error instanceof Error ? error.message : String(error)).slice(0, 300), retryable: false },
+            reasonCode,
+            lifecycle: [...lifecycle],
+          } as unknown as Json,
+          lifecycle: [...lifecycle],
+          reasonCode,
+        });
+      }
+    }
+    return outcomes;
+  }
+
+  private classifyBlockedResult(record: Record<string, unknown>): ResearchCapabilityReasonCode {
+    const message = typeof record.reason === "string" ? record.reason : typeof record.error === "string" ? record.error : JSON.stringify(record.error ?? "").slice(0, 200);
+    if (/NOT_REGISTERED|not registered|unknown capability|unsupported capability/i.test(message)) return "CAPABILITY_NOT_REGISTERED";
+    return "CAPABILITY_NOT_AUTHORIZED";
+  }
+
   async execute(input: AgentExecutionInput, signal: CancellationToken): Promise<AgentExecutionOutput> {
     signal?.throwIfCancelled();
 
@@ -321,9 +421,10 @@ export class ResearchAgent extends BaseAgent {
       ? undefined
       : await this.executeSourceRequest(researchInput.researchRequest);
     const report = intelligence === undefined ? baseReport : { ...baseReport, intelligence };
-    const capabilityExecutions = researchInput.capabilityRequests === undefined
-      ? []
-      : await this.runCapabilities(researchInput.capabilityRequests);
+    const governed = researchInput.capabilityRequests === undefined
+      ? null
+      : await this.runGovernedCapabilities(researchInput.capabilityRequests);
+    const capabilityExecutions = governed === null ? [] : governed.map((outcome) => outcome.result);
     const baseOutput = this.toJson(report);
     const output: Json = capabilityExecutions.length > 0 && isJsonRecord(baseOutput)
       ? { ...baseOutput, capabilityExecutions: JSON.parse(JSON.stringify(capabilityExecutions)) as Json[] }

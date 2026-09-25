@@ -21,6 +21,7 @@ export type AuditEventKind =
   | "retry"
   | "compensation"
   | "paused"
+  | "bounded_stop"
   | "resumed"
   | "cancelled"
   | "dead_lettered"

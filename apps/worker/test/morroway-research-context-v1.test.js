@@ -6,6 +6,7 @@ import {
   evaluateResearchEvidenceQuality,
   groundResearchReport,
   requireMorrowayResearchProjectContext,
+  sanitizedFailureMessage,
 } from "../dist/production-executor.js";
 import { resolveApprovedProjectContext } from "../dist/project-context.js";
 
@@ -43,6 +44,13 @@ const withSearch = (synthesis, results) => ({
     output: { results },
     evidence: { providerId: "serper", evidenceId: "evidence-1", succeeded: true, executedAt: "2026-09-25T00:00:00.000Z" },
   }],
+});
+
+test("failure messages persist bounded and secret-safe for diagnoseless failures", () => {
+  assert.equal(sanitizedFailureMessage(new Error("Research requires the initial content plan artifact")), "Research requires the initial content plan artifact");
+  assert.equal(sanitizedFailureMessage(new Error("x".repeat(900))).length, 500);
+  assert.match(sanitizedFailureMessage(new Error("denied: api_key=supersecretvalue123")), /\[REDACTED\]/);
+  assert.doesNotMatch(sanitizedFailureMessage(new Error("denied: api_key=supersecretvalue123")), /supersecretvalue123/);
 });
 
 test("G: missing Morroway context fails closed with PROJECT_CONTEXT_INCOMPLETE", async () => {

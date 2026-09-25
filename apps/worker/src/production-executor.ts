@@ -586,9 +586,21 @@ function deepFreezeJson<T extends Json>(value: T): T {
   return value;
 }
 
+/**
+ * Bounded, secret-safe failure message for durable terminal evidence.
+ * Diagnostics-only errors (parse/structural/semantic/transport) intentionally
+ * omit the message; without this field a failure with empty diagnostics
+ * leaves no actionable reason at all.
+ */
+export function sanitizedFailureMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message
+    .replace(/((?:api[_-]?key|authorization|bearer|password|secret|token|signature|sig)\s*[:=]\s*)([^\s;,}"]+)/gi, "$1[REDACTED]")
+    .slice(0, 500);
+}
+
 /** Drop arbitrary thrown-error data; only persist bounded structural metadata. */
-export function safeValidationDiagnostics(error: unknown): Record<string, unknown> {
-  const seen = new Set<unknown>();
+export function safeValidationDiagnostics(error: unknown): Record<string, unknown> {  const seen = new Set<unknown>();
   let current: unknown = error;
   let raw: Record<string, unknown> = {};
   for (let depth = 0; depth < 8 && current instanceof Error && !seen.has(current); depth++) {
@@ -3279,7 +3291,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
     if (lifecycle !== null) {
       try {
         if (this.persistence.appendExecutionLifecycleEvent === undefined) throw new Error("FAILED_LIFECYCLE_WRITER_UNAVAILABLE");
-        await this.persistence.appendExecutionLifecycleEvent({ executionId: lifecycle.executionId, workflowId: lifecycle.workflowId, stage: lifecycle.stage, state: "FAILED", occurredAt: nowIso(), attemptNumber: 1, metadata: { errorClassification: lifecycleFailureState(details, message), ...safeRecord(details) } });
+        await this.persistence.appendExecutionLifecycleEvent({ executionId: lifecycle.executionId, workflowId: lifecycle.workflowId, stage: lifecycle.stage, state: "FAILED", occurredAt: nowIso(), attemptNumber: 1, metadata: { errorClassification: lifecycleFailureState(details, message), failureMessage: sanitizedFailureMessage(error), ...safeRecord(details) } });
         durableTerminalEvidence = true;
       } catch (terminalError) {
         const safeCode = (value: unknown): string | null => typeof value === "string" && /^[A-Z][A-Z0-9_]{0,119}$/.test(value) ? value : null;
@@ -3338,7 +3350,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
         artifactIds: [], parentExecutionIds: recoveryParentExecutionIds(configuration), attemptNumber: 1,
         providerRequestId: typeof details.providerRequestId === "string" ? details.providerRequestId : null, providerJobId: null,
         errorClassification: lifecycleFailureState(details, message),
-        configuration: { ...safeRecord(configuration), ...(lifecycle === null || model === null ? {} : { lifecycleState: lifecycleFailureState(details, message), providerSubmissionStarted: true, protocol: protocolForFailed, requestedModel: model, resolvedTimeoutMs: timeoutForFailed, inputArtifactIds: referencedArtifactIds(configuration), requestFingerprint: stableFingerprint(configuration), providerResponse: lifecycle.lastProviderResponse ?? {} }), providerFailure: details },
+        configuration: { ...safeRecord(configuration), ...(lifecycle === null || model === null ? {} : { lifecycleState: lifecycleFailureState(details, message), providerSubmissionStarted: true, protocol: protocolForFailed, requestedModel: model, resolvedTimeoutMs: timeoutForFailed, inputArtifactIds: referencedArtifactIds(configuration), requestFingerprint: stableFingerprint(configuration), providerResponse: lifecycle.lastProviderResponse ?? {} }), providerFailure: details, failureMessage: sanitizedFailureMessage(error) },
       }));
     } catch (persistenceError) {
       // Preserve the business error, but make a diagnostic write failure visible
