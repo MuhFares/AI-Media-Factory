@@ -6,13 +6,35 @@ import type { Uuid } from "@ai-media-factory/runtime";
 import type { ExecutionContext, ExecutionResponse } from "@ai-media-factory/runtime";
 import type { CapabilityRequest } from "@ai-media-factory/runtime";
 import type { PlanTask } from "@ai-media-factory/planner-agent";
+import type { VisualEvidence, VisualMode, ReferenceStrategy } from "@ai-media-factory/tool-framework";
+import type { ContentIntelligenceResult, ResearchRequest } from "./content-intelligence.js";
 
 /** Input to the research agent: a research task from the planner. */
 export interface ResearchAgentInput {
   /** The task to research. */
   task: PlanTask;
+  /**
+   * Stable machine contract identity. When present, the report is validated
+   * deterministically against taskId/stage exact equality, and taskDescription
+   * is treated as descriptive prose (non-empty + relevant) rather than a
+   * byte-for-byte echo. Absent = legacy path (exact description match).
+   */
+  contract?: {
+    /** Stable contract identity; must equal the echoed report taskId exactly. */
+    taskId: string;
+    /** Contract stage; must equal the echoed report stage exactly. */
+    stage: string;
+  };
+  /**
+   * Canonical project context supplied by the caller (brand/strategy facts with
+   * provenance). The agent includes it in its prompt; it never improvises
+   * brand strategy when this is absent (see PROJECT_CONTEXT_INCOMPLETE gate).
+   */
+  projectContext?: Record<string, unknown>;
   /** Optional authorized capability requests (e.g. web search) to execute through the runtime boundary. */
   capabilityRequests?: readonly CapabilityRequest[];
+  /** Optional backward-compatible intelligence/source request. */
+  researchRequest?: ResearchRequest;
 }
 
 /** A single source in the research report. */
@@ -43,6 +65,16 @@ export interface ResearchCitation {
 export interface ResearchReport {
   /** Unique report identifier. */
   reportId: Uuid;
+  /**
+   * Stable contract identity echo. Required when the input carries a contract;
+   * must equal the contract taskId byte-for-byte (deterministic, no fuzzy match).
+   */
+  taskId?: string;
+  /**
+   * Contract stage echo. Required when the input carries a contract; must equal
+   * the contract stage byte-for-byte.
+   */
+  stage?: string;
   /** The original research task description. */
   taskDescription: string;
   /** Summary of the research findings. */
@@ -53,6 +85,37 @@ export interface ResearchReport {
   confidence: number;
   /** Citations referencing the sources. */
   citations: ResearchCitation[];
+  /** Compact strategy findings required only for PRE_PUBLICATION_STRATEGY research. */
+  strategyFindings?: {
+    referencePatterns: StrategyFinding[];
+    audienceOpportunities: StrategyFinding[];
+    contentTerritories: StrategyFinding[];
+    platformFindings: PlatformFinding[];
+    differentiationOpportunities: StrategyFinding[];
+    productionImplications: StrategyFinding[];
+    risks: StrategyFinding[];
+    assumptions: StrategyFinding[];
+    unknowns: StrategyFinding[];
+  };
+  /** Optional normalized intelligence result; absent for legacy reports. */
+  intelligence?: ContentIntelligenceResult;
+  /** Optional provider-agnostic visual research, present when the topic needs imagery. */
+  visual?: {
+    topic: string;
+    visualMode: VisualMode;
+    referenceStrategy: ReferenceStrategy;
+    imageRefs: VisualEvidence[];
+    sourceRefs: VisualEvidence[];
+    observations: string[];
+    people?: { description: string; wardrobe?: string[] }[];
+    environment?: string[];
+    location?: string[];
+    objects?: string[];
+    styleCues?: string[];
+    avoidCues?: string[];
+    sceneRelevance?: string;
+    provenance: "none" | "local" | "web" | "mixed";
+  };
   /** Metadata about the report. */
   metadata: {
     /** When the report was created. */
@@ -60,6 +123,16 @@ export interface ResearchReport {
     /** Research agent version. */
     agentVersion: string;
   };
+}
+
+export interface StrategyFinding {
+  label: string;
+  rationale: string;
+  certainty: "KNOWN" | "OBSERVED" | "INFERRED" | "ASSUMED" | "UNKNOWN";
+}
+
+export interface PlatformFinding extends StrategyFinding {
+  platform: "Instagram Reels" | "YouTube Shorts" | "TikTok";
 }
 
 /** Research agent configuration. */
