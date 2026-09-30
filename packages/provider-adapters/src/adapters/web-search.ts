@@ -79,6 +79,7 @@ export class BraveSearchAdapter implements WebSearchProvider {
         timeoutMs: this.timeoutMs,
         maxRetries: this.maxRetries,
         onOperation: this.onOperation,
+        onFetchInvocationStarted: request.onExternalProviderInvocationStarted,
       },
     );
 
@@ -218,6 +219,7 @@ export class TavilySearchAdapter implements WebSearchProvider {
         timeoutMs: this.timeoutMs,
         maxRetries: this.maxRetries,
         onOperation: this.onOperation,
+        onFetchInvocationStarted: request.onExternalProviderInvocationStarted,
       },
     );
 
@@ -337,6 +339,7 @@ export class SerperSearchAdapter implements WebSearchProvider {
         timeoutMs: this.timeoutMs,
         maxRetries: this.maxRetries,
         onOperation: this.onOperation,
+        onFetchInvocationStarted: request.onExternalProviderInvocationStarted,
       },
     );
 
@@ -456,6 +459,7 @@ export class ExaSearchAdapter implements WebSearchProvider {
         timeoutMs: this.timeoutMs,
         maxRetries: this.maxRetries,
         onOperation: this.onOperation,
+        onFetchInvocationStarted: request.onExternalProviderInvocationStarted,
       },
     );
 

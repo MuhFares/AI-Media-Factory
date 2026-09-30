@@ -18,7 +18,9 @@
     "test": "node --test"
   },
   "dependencies": {
-    "@ai-media-factory/memory-engine": "*"
+    "@ai-media-factory/memory-engine": "*",
+    "ffmpeg-static": "^5.2.0",
+    "ffprobe-static": "^3.1.0"
   },
   "devDependencies": {
     "typescript": "^5.5.0"

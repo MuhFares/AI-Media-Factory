@@ -15,7 +15,7 @@
 
 import type { AgentId, Json } from "@ai-media-factory/runtime";
 import type { CancellationToken, ExecutionContext, ExecutionRequest, ExecutionResponse } from "@ai-media-factory/runtime";
-import { BaseAgent, type AgentExecutionInput, type AgentExecutionOutput } from "@ai-media-factory/runtime";
+import { BaseAgent, BoundedStructuralValidationError, boundedStructuralDiagnostics, type AgentExecutionInput, type AgentExecutionOutput } from "@ai-media-factory/runtime";
 import type {
   SEOAgentInput,
   SEOConfig,
@@ -147,7 +147,7 @@ export class SEOAgent extends BaseAgent {
     const prompt = this.buildPrompt(input, allowedSources, findings, artifactId, expectedTaskDescription);
     const request = this.buildExecutionRequest(prompt);
     const response = await this.runExecution(context, request, signal);
-    return { report: this.parseSEOResponse(response.output, allowedSources, expectedTaskDescription), response };
+    return { report: this.parseSEOResponse(response.output, allowedSources, artifactId, expectedTaskDescription), response };
   }
 
   private buildPrompt(input: SEOAgentInput, allowedSources: readonly SEOSourceReference[], findings: WriterFindings, artifactId: string, expectedTaskDescription: string): string {
@@ -178,7 +178,7 @@ ${findings.content}
 Allowed source references (use ONLY these source ids and attach the exact title and url):
 ${allowedSources.map((source) => `- [source ${source.sourceId}] ${source.title} (${source.url})`).join("\n") || "(none)"}
 
-Guidance: set "optimizedTitle" and "optimizedDescription" to concrete, non-null strings based on the writer content above. Set "taskDescription" EXACTLY to "${expectedTaskDescription}" (verbatim, no prefix). Set "searchIntent" to EXACTLY one of the following enum values: "informational" | "commercial" | "transactional" | "navigational" (copy the exact lowercase token, no other text). Set "metadata.writerArtifactId" to "${artifactId}".
+Guidance: set "optimizedTitle" and "optimizedDescription" to concrete, non-null strings based on the writer content above. Set "taskDescription" EXACTLY to "${expectedTaskDescription}" (verbatim, no prefix). Set "searchIntent" to EXACTLY one of the following enum values: "informational" | "commercial" | "transactional" | "navigational" (copy the exact lowercase token, no other text). Set "metadata.writerArtifactId" to "${artifactId}" exactly; never omit it, leave it empty, or substitute another id.
 
 Set "keywords" to an array of OBJECTS, each with the exact shape {"keyword": "<string>", "importance": "primary" | "secondary"}. Set "topics" to an array of OBJECTS, each with the exact shape {"topic": "<string>", "presentInContent": true | false}. Set "contentStructure" to an array of OBJECTS, each with the exact shape {"heading": "<string>", "purpose": "<string>"} — do NOT use bare strings for keywords or topics, do NOT rename the keys.
 
@@ -236,12 +236,15 @@ In "sourceReferences", output an array of OBJECTS, one per source id you actuall
     };
   }
 
-  private parseSEOResponse(output: Json, allowedSources: readonly SEOSourceReference[], expectedTaskDescription: string): SEOReport {
+  private parseSEOResponse(output: Json, allowedSources: readonly SEOSourceReference[], artifactId: string, expectedTaskDescription: string): SEOReport {
     if (!isRecord(output) || typeof output.reportId !== "string" || typeof output.taskDescription !== "string" || typeof output.objective !== "string" || typeof output.optimizedTitle !== "string" || typeof output.optimizedDescription !== "string" || typeof output.searchIntent !== "string" || !INTENTS.includes(output.searchIntent as SEOSearchIntent) || typeof output.status !== "string" || !STATUSES.includes(output.status as SEOStatus) || !Array.isArray(output.keywords) || !Array.isArray(output.topics) || !Array.isArray(output.contentStructure) || !Array.isArray(output.sourceReferences) || !isRecord(output.metadata) || typeof output.metadata.createdAt !== "string" || typeof output.metadata.agentVersion !== "string" || typeof output.metadata.writerArtifactId !== "string") {
-      throw new Error("Invalid SEO response: invalid report structure");
+      throw new BoundedStructuralValidationError("Invalid SEO response: invalid report structure", boundedStructuralDiagnostics("seo", "SEOReport", output, [{ path:"$", code:"missing_or_wrong_type", expected:"SEOReport" }], ["metadata","keywords","topics","contentStructure"]));
     }
     if (output.taskDescription !== expectedTaskDescription) {
       throw new Error("Invalid SEO response: task description does not match the assigned task");
+    }
+    if (output.metadata.writerArtifactId !== artifactId) {
+      throw new Error("Invalid SEO response: writer lineage does not match the handed-off writer artifact");
     }
 
     const allowedById = new Map<number, SEOSourceReference>(allowedSources.map((source) => [source.sourceId, source]));
@@ -337,7 +340,7 @@ export function createSEOAgent(deps: { config: SEOConfig; execute: (context: Exe
     ...deps.config,
     model: deps.config?.model ?? "openrouter/auto",
     temperature: deps.config?.temperature ?? 0.3,
-    maxOutputTokens: deps.config?.maxOutputTokens ?? 4096,
+    maxOutputTokens: deps.config?.maxOutputTokens ?? 16384,
     systemPrompt: deps.config?.systemPrompt ?? DEFAULT_SEO_SYSTEM_PROMPT,
     includeReasoning: deps.config?.includeReasoning ?? false,
   };

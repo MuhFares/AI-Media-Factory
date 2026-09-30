@@ -4,6 +4,11 @@
 
 export type {
   PlannerInput,
+  PlannerStage,
+  InitialContentPlan,
+  ResearchResultForSynthesis,
+  EvidenceBackedClaim,
+  EvidenceBackedContentBrief,
   PlannerConstraints,
   PlannerContext,
   AgentCapability,
@@ -19,4 +24,7 @@ export {
   PlannerAgent,
   createPlannerAgent,
   DEFAULT_PLANNER_SYSTEM_PROMPT,
+  diagnosePlannerSynthesisStructure,
+  StructuredOutputValidationError,
+  plannerSynthesisContractInstructions,
 } from "./planner-agent.js";

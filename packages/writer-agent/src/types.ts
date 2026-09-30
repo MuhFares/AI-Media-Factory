@@ -18,6 +18,10 @@ export interface ResearchArtifactHandoff {
   readonly payload: Json;
 }
 
+export interface EvidenceBackedBriefHandoff extends ResearchArtifactHandoff {
+  readonly kind: "evidence_backed_content_brief";
+}
+
 /** Input to the writer: the writing objective plus the research handoff. */
 export interface WriterAgentInput {
   /** The content-production objective given to the writer. */
@@ -30,6 +34,30 @@ export interface WriterAgentInput {
    * a valid research report.
    */
   readonly previousArtifact?: ResearchArtifactHandoff;
+  /** Normalized evidence context; provider-native payloads are not accepted here. */
+  readonly researchEvidence?: readonly Json[];
+  /** Production wiring sets this to prevent the legacy direct research handoff. */
+  readonly requireSynthesis?: boolean;
+  /**
+   * Revision Cycle directive: when present, the writer REVISES the prior
+   * content per the authoritative Review findings instead of writing from
+   * scratch. The durable revision lineage travels with the request.
+   */
+  readonly revision?: WriterRevisionDirective;
+}
+
+/** Authoritative revision instruction sourced from a persisted Review artifact. */
+export interface WriterRevisionDirective {
+  readonly revisionTaskId: string;
+  readonly revisionVersion: number;
+  readonly reviewArtifactId: string;
+  readonly reviewExecutionId: string;
+  readonly priorWriterArtifactId: string;
+  readonly summary: string;
+  readonly findings: readonly Json[];
+  readonly recommendations: readonly Json[];
+  readonly priorTitle: string;
+  readonly priorContent: string;
 }
 
 /** A source reference in the produced content, restricted to research sources. */

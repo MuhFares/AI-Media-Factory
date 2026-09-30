@@ -13,6 +13,7 @@ export type {
   Json,
   AgentState,
   Capability,
+  AgentExecutionDescriptor,
   AgentMetadata,
   AgentConfigSchema,
   AgentRegistration,
@@ -23,6 +24,8 @@ export type {
   AgentRegistry,
   AgentLoader,
 } from "./core/types.js";
+
+export { AgentInvocationContractError } from "./core/types.js";
 
 // core implementation
 export {

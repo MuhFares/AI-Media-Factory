@@ -15,7 +15,7 @@
 
 import type { AgentId, Json } from "@ai-media-factory/runtime";
 import type { CancellationToken, ExecutionContext, ExecutionRequest, ExecutionResponse } from "@ai-media-factory/runtime";
-import { BaseAgent, type AgentExecutionInput, type AgentExecutionOutput } from "@ai-media-factory/runtime";
+import { BaseAgent, BoundedStructuralValidationError, boundedStructuralDiagnostics, type AgentExecutionInput, type AgentExecutionOutput } from "@ai-media-factory/runtime";
 import type {
   BrandAgentInput,
   BrandCheck,
@@ -202,7 +202,7 @@ Use ONLY the supplied brand guidelines; do not invent brand rules or facts. Outp
 
   private parseBrandResponse(output: Json, seoArtifactId: string, expectedTaskDescription: string): BrandReviewReport {
     if (!isRecord(output) || typeof output.reportId !== "string" || typeof output.taskDescription !== "string" || typeof output.objective !== "string" || typeof output.status !== "string" || !STATUSES.includes(output.status as BrandStatus) || !Array.isArray(output.issues) || !Array.isArray(output.passedChecks) || !Array.isArray(output.failedChecks) || !Array.isArray(output.recommendations) || !isRecord(output.metadata) || typeof output.metadata.createdAt !== "string" || typeof output.metadata.agentVersion !== "string" || typeof output.metadata.seoArtifactId !== "string") {
-      throw new Error("Invalid brand response: invalid report structure");
+      throw new BoundedStructuralValidationError("Invalid brand response: invalid report structure", boundedStructuralDiagnostics("brand", "BrandReviewReport", output, [{ path:"$", code:"missing_or_wrong_type", expected:"BrandReviewReport" }], ["metadata","issues","passedChecks","failedChecks","recommendations"]));
     }
     if (output.taskDescription !== expectedTaskDescription) {
       throw new Error("Invalid brand response: task description does not match the assigned task");
@@ -279,7 +279,7 @@ export function createBrandAgent(deps: { config: BrandConfig; execute: (context:
     ...deps.config,
     model: deps.config?.model ?? "openrouter/auto",
     temperature: deps.config?.temperature ?? 0.2,
-    maxOutputTokens: deps.config?.maxOutputTokens ?? 4096,
+    maxOutputTokens: deps.config?.maxOutputTokens ?? 16384,
     systemPrompt: deps.config?.systemPrompt ?? DEFAULT_BRAND_SYSTEM_PROMPT,
     includeReasoning: deps.config?.includeReasoning ?? false,
   };

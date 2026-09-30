@@ -1,0 +1,17 @@
+{
+  "version": "visual-provider-pricing-v1",
+  "entries": [
+    {
+      "provider": "self-hosted-image",
+      "runtime": "RunPod Serverless ComfyUI 5.8.7",
+      "model": "FLUX.1-dev-fp8",
+      "gpu_class": "24GB Pro",
+      "usd_per_gpu_hour": 1.1,
+      "pricing_source": "USER_CONFIRMED_INFRASTRUCTURE_RATE",
+      "effective_from": "2026-08-31",
+      "effective_to": null,
+      "billing_model": "GPU_TIME_PER_SECOND",
+      "notes": "Current deployment rate supplied by the user. This is a pricing input, not proof of per-request billable GPU seconds."
+    }
+  ]
+}

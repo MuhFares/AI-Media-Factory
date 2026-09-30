@@ -3,8 +3,8 @@
  */
 
 import { describe, it, beforeEach } from "node:test";
-import { strictEqual, ok, rejects } from "node:assert";
-import { PlannerAgent, createPlannerAgent } from "@ai-media-factory/planner-agent";
+import { strictEqual, deepStrictEqual, ok, rejects } from "node:assert";
+import { PlannerAgent, createPlannerAgent, diagnosePlannerSynthesisStructure } from "@ai-media-factory/planner-agent";
 import type { PlannerAgentDependencies, PlannerConfig, PlannerInput, ExecutionPlan } from "@ai-media-factory/planner-agent";
 import type { ExecutionContext, ExecutionResponse, CancellationToken, AgentExecutionInput } from "@ai-media-factory/runtime";
 import type { Json } from "@ai-media-factory/runtime";
@@ -376,5 +376,44 @@ describe("PlannerAgent Smoke Tests", () => {
       () => agent.execute(input, cancelledToken),
       /Cancelled/
     );
+  });
+});
+
+describe("Planner production synthesis stages", () => {
+  const initial = { planId: "initial", tasks: [], stage: "INITIAL_CONTENT_PLAN" as const, objective: "Research rooftop gardens", topic: "rooftop gardens", audience: "social audience", platform: "short video", toneConstraints: [], researchQuestions: [], researchObjectives: [], knownRestrictions: [], desiredDeliverables: ["script"], factualClaims: [] };
+  const validBrief = { briefId: "brief", stage: "POST_RESEARCH_SYNTHESIS", objective: "Research rooftop gardens", finalAngle: "angle", keyPoints: [], claims: [], uncertainties: [], evidenceRefs: [], hookDirection: "hook", messageProgression: [], audienceFraming: "audience", toneConstraints: [], writerInstructions: [], originalityConstraints: [], platformConstraints: [], researchSources: [], warnings: [], status: "completed" };
+
+  it("emits bounded safe diagnostics for the enforced synthesis contract", () => {
+    const missing = diagnosePlannerSynthesisStructure({ ...validBrief, summary: "not a contract key", objective: undefined }, initial);
+    ok(missing.issues.some((issue) => issue.path === "objective" && issue.code === "missing_required"));
+    const wrong = diagnosePlannerSynthesisStructure({ ...validBrief, claims: "not-array", status: "other" }, initial);
+    ok(wrong.issues.some((issue) => issue.path === "claims" && issue.code === "wrong_type"));
+    ok(wrong.issues.some((issue) => issue.path === "status" && issue.code === "invalid_enum"));
+    const mismatch = diagnosePlannerSynthesisStructure({ ...validBrief, objective: "different" }, initial);
+    ok(mismatch.issues.some((issue) => issue.path === "objective" && issue.code === "value_mismatch"));
+    const valid = diagnosePlannerSynthesisStructure(validBrief, initial);
+    strictEqual(valid.issues.length, 0);
+    ok(!JSON.stringify(wrong).includes("not-array"));
+  });
+
+  it("creates a claim-free initial content plan", async () => {
+    const agent = createPlannerAgent(createSmokeDeps());
+    const result = await agent.execute({ context: createTestContext(), input: { requestId: "initial-plan", objective: "Research rooftop gardens", stage: "INITIAL_CONTENT_PLAN", topic: "rooftop gardens" } as PlannerInput }, createCancellationToken());
+    const plan = result.output as unknown as Record<string, unknown>;
+    strictEqual(plan.stage, "INITIAL_CONTENT_PLAN");
+    deepStrictEqual(plan.factualClaims, []);
+  });
+
+  it("synthesizes supported and uncertain claims from normalized research", async () => {
+    const agent = createPlannerAgent(createSmokeDeps());
+    const result = await agent.execute({ context: createTestContext(), input: { requestId: "synthesis", objective: "Research rooftop gardens", stage: "POST_RESEARCH_SYNTHESIS", initialPlan: { planId: "initial", tasks: [], stage: "INITIAL_CONTENT_PLAN", objective: "Research rooftop gardens", topic: "rooftop gardens", audience: "social audience", platform: "short video", toneConstraints: [], researchQuestions: [], researchObjectives: [], knownRestrictions: [], desiredDeliverables: ["script"], factualClaims: [] }, researchResult: { reportId: "research", summary: "Evidence", sources: [{ id: 1, title: "Garden source", url: "https://example.com/garden", snippet: "Small gardens can fit urban rooftops." }] } } as PlannerInput }, createCancellationToken());
+    const brief = result.output as unknown as Record<string, unknown>;
+    strictEqual(brief.stage, "POST_RESEARCH_SYNTHESIS");
+    strictEqual((brief.claims as Array<Record<string, unknown>>)[0].status, "SUPPORTED");
+  });
+
+  it("fails closed when synthesis dependencies are missing", async () => {
+    const agent = createPlannerAgent(createSmokeDeps());
+    await rejects(() => agent.execute({ context: createTestContext(), input: { requestId: "synthesis", objective: "Research", stage: "POST_RESEARCH_SYNTHESIS" } as PlannerInput }, createCancellationToken()), /requires the initial content plan/);
   });
 });

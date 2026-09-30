@@ -26,7 +26,7 @@ import type {
 import type { OperationSink } from "../core/observability.js";
 import { providerConfigError, ProviderConfigurationError } from "../core/errors.js";
 import { groqTTSAdapterFromEnv } from "../adapters/groq-tts.js";
-import { voicetutTTSAdapterFromEnv } from "../adapters/voicetut-tts.js";
+import { voicetutTTSAdapterFromEnv, type VoicetutSubmissionLifecycle } from "../adapters/voicetut-tts.js";
 
 export type TTSProviderImplementation = TTSGenerationProvider & { readonly providerId: string };
 
@@ -97,14 +97,15 @@ export class TTSProviderRegistry implements TTSGenerationProvider {
 export interface TTSAdapterEnvOptions {
   preferredId?: string;
   onOperation?: OperationSink;
+  submissionLifecycle?: VoicetutSubmissionLifecycle;
 }
 
-function buildTTSAdapter(id: string, onOperation?: OperationSink): TTSProviderImplementation {
+function buildTTSAdapter(id: string, onOperation?: OperationSink, submissionLifecycle?: VoicetutSubmissionLifecycle): TTSProviderImplementation {
   switch (id) {
     case "groq":
       return groqTTSAdapterFromEnv(onOperation);
     case "voicetut":
-      return voicetutTTSAdapterFromEnv(onOperation);
+      return voicetutTTSAdapterFromEnv(onOperation, submissionLifecycle);
     default:
       throw providerConfigError("tts.generate", `Unknown TTS provider id '${id}'.`);
   }
@@ -114,7 +115,7 @@ export function ttsAdapterFromEnv(options: TTSAdapterEnvOptions = {}): TTSProvid
   const registry = new TTSProviderRegistry();
   for (const id of TTS_PROVIDER_ORDER) {
     try {
-      registry.register(buildTTSAdapter(id, options.onOperation));
+      registry.register(buildTTSAdapter(id, options.onOperation, options.submissionLifecycle));
     } catch (error) {
       if (!(error instanceof ProviderConfigurationError)) throw error;
     }

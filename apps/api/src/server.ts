@@ -6,8 +6,10 @@
  */
 
 import { createServer } from "node:http";
-import { createPool, migrate, PostgresPersistence, PostgresQueue } from "@ai-media-factory/database";
+import { createPool, migrate, PostgresPersistence, PostgresQueue, ControlPlaneStore, PostgresRevisionDispatcher, PostgresReviewResumeDispatcher, PostgresMediaResumeDispatcher, StrategicStore, LifecycleStore, ApprovalActionabilityStore, LearningLoopStore, ContentStore, SubjectStore, ChannelStore, AutomationStore, ModelIntelligenceStore, ModelBenchmarkRuntimeStore, ProductionCallBudgetStore, ProductionModelRoutingStore, OwnerAutonomyStore } from "@ai-media-factory/database";
+import { buildProviderBoundary } from "@ai-media-factory/worker";
 import { createWorkflowApiHandler } from "./handler.js";
+import { ProductionCredentialHealthVerifier } from "./credential-health-verifier.js";
 
 const DATABASE_URL = process.env.DATABASE_URL ?? "postgresql://postgres@127.0.0.1:5432/ai_media_factory";
 const HOST = process.env.HOST ?? "0.0.0.0";
@@ -19,7 +21,32 @@ export async function startServer(opts: { host?: string; port?: number } = {}): 
 
   const persistence = new PostgresPersistence(pool);
   const queue = new PostgresQueue(pool);
-  const handler = createWorkflowApiHandler({ persistence, queue });
+  const handler = createWorkflowApiHandler({
+    persistence,
+    queue,
+    control: new ControlPlaneStore(pool),
+    strategic: new StrategicStore(pool),
+    lifecycle: new LifecycleStore(pool),
+    actionability: new ApprovalActionabilityStore(pool),
+    learning: new LearningLoopStore(pool),
+    content: new ContentStore(pool),
+    subjects: new SubjectStore(pool),
+    channels: new ChannelStore(pool),
+    automation: new AutomationStore(pool),
+    modelIntelligence: new ModelIntelligenceStore(pool),
+    modelBenchmarkRuntime: new ModelBenchmarkRuntimeStore(pool),
+    productionModelRouting: new ProductionModelRoutingStore(pool),
+    productionCallBudgets: new ProductionCallBudgetStore(pool),
+    ownerAutonomy: new OwnerAutonomyStore(pool),
+    credentialHealthVerifier: new ProductionCredentialHealthVerifier(),
+    revisions: new PostgresRevisionDispatcher(pool, persistence),
+    reviewResumes: new PostgresReviewResumeDispatcher(pool, persistence),
+    // MEDIA CAPABILITY PREFLIGHT V1: the dispatcher is wired with the REAL
+    // production capability boundary (the same exported builder the worker
+    // uses; construction performs no provider I/O), so the authorization
+    // preflight sees exactly what the live runtime would execute.
+    mediaResumes: new PostgresMediaResumeDispatcher(pool, persistence, buildProviderBoundary({ persistence })),
+  });
 
   const server = createServer((req, res) => {
     void handler(req, res);

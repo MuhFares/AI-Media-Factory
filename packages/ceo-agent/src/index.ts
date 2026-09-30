@@ -6,8 +6,9 @@
  * capabilities, or tools, and imports no concrete agents.
  */
 
-export { CEOAgent, createCEOAgent, deriveId } from "./ceo-agent.js";
-export type { CEOAgentOptions } from "./types.js";
+export { CEOAgent, createCEOAgent, deriveId, DEFAULT_CEO_SYSTEM_PROMPT } from "./ceo-agent.js";
+export type { CEOAgentOptions, StrategyCouncilSynthesisV2 } from "./types.js";
+export { diagnoseStrategyCouncilSynthesisV2, validateStrategyCouncilSynthesisV2, validateStrategyCouncilV2Manifest, StrategyCouncilV2StructuralError, STRATEGY_COUNCIL_V2_OUTPUT_INSTRUCTIONS, STRATEGY_COUNCIL_V2_SYSTEM_PROMPT, STRATEGY_COUNCIL_V2_RESPONSE_SCHEMA, STRATEGY_COUNCIL_V2_EXAMPLE, STRATEGY_COUNCIL_V2_SPECIALISTS } from "./strategy-council-v2.js";
 export type {
   DecisionEvidence,
   ExecutiveConstraints,

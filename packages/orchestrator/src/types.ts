@@ -5,7 +5,7 @@
  * collaboration plan. Directives are finite and canonical — the orchestrator
  * rejects any value outside this set rather than guessing.
  */
-export type OrchestratorDirective = "plan" | "research" | "implement" | "verify" | "ship";
+export type OrchestratorDirective = "plan" | "research" | "implement" | "verify" | "ship" | "produce" | "produce-pre-media";
 
 /** A single expected downstream output produced by a plan stage. */
 export interface OrchestratorOutput {

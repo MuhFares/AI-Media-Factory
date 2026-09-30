@@ -1,18 +1,22 @@
-# Configs / Models
+# Configs / Models — NON_AUTHORITATIVE / DOCUMENTATION_ONLY
 
-The model catalog. This folder is the single source of truth for the models the platform can use and how requests are routed among them. It backs the AgentRouter, which selects a model per request based on capability, cost, and latency requirements.
+This directory is not a production runtime authority. For branded production,
+the active `production_model_routing_versions` / `production_model_routing_entries`
+rows are the sole route authority, and `provider_model_catalog` plus immutable
+price snapshots are the preflight evidence. Files here may document or seed
+development configuration only; they must never override an active DB route.
 
 ## What belongs here
 
 - Providers: the model providers the platform integrates with.
 - Model IDs: canonical identifiers for each available model.
-- Routing rules: how the AgentRouter maps a request to a model or tier.
+- Non-production examples of routing concepts and tiers.
 - Cost and latency tiers: classification of models by price and response-time characteristics.
 
 ## What does not belong here
 
 - Provider API keys or credentials. These are referenced by name and sourced from the `environments` profiles.
-- Agent-specific model bindings, which reference this catalog from `configs/agents`.
+- Authoritative branded-project model bindings or availability truth.
 
 ## Naming conventions
 

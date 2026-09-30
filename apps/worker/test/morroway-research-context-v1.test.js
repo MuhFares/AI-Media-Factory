@@ -7,6 +7,7 @@ import {
   groundResearchReport,
   requireMorrowayResearchProjectContext,
   sanitizedFailureMessage,
+  buildResearchIntelligenceV2Contract,
 } from "../dist/production-executor.js";
 import { resolveApprovedProjectContext } from "../dist/project-context.js";
 
@@ -116,4 +117,19 @@ test("J: viable candidates with authority make the result CEO-eligible", () => {
   assert.equal(grounded.researchStatus, "USABLE");
   assert.equal(grounded.evidenceQuality.ceoEligible, true);
   assert.equal(grounded.confidence, 0.8);
+});
+
+test("K: V2 production contract carries objective dimensions and the real capability inventory", () => {
+  const contract = buildResearchIntelligenceV2Contract({
+    projectId: "morroway", objective: "Find Egyptian Arabic historical opportunities",
+    platform: "YouTube Shorts", contentPillar: "Historical POV", contentMode: "HISTORICAL_POV",
+    market: "Egypt", geography: "Egypt", language: "Arabic", audience: "Egyptian Arabic audience",
+  });
+  assert.equal(contract.synthesisContract, "amf-research-intelligence-v2");
+  assert.equal(contract.researchObjective.market, "Egypt");
+  assert.equal(contract.researchObjective.geography, "Egypt");
+  assert.equal(contract.researchObjective.factualMode, "HISTORICAL_POV");
+  const instagram = contract.capabilityInventory.find((item) => item.sourceType === "INSTAGRAM_DISCOVERY");
+  assert.equal(instagram.status, "UNSUPPORTED");
+  assert.deepEqual(instagram.via, []);
 });

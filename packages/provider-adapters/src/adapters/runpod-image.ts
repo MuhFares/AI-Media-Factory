@@ -26,6 +26,7 @@ import type {
   ImageGenerationProviderResponse,
   ImageGenerationRequest,
 } from "@ai-media-factory/tool-framework";
+import { IMAGE_PROMPT_MAX_CHARS, IMAGE_NEGATIVE_PROMPT_MAX_CHARS } from "@ai-media-factory/tool-framework";
 import { sendHttp, sendHttpWithRetry } from "../core/http.js";
 import { providerConfigError, providerValidationError } from "../core/errors.js";
 import { assertPositive, envNumber, optionalEnv } from "../core/config.js";
@@ -69,9 +70,22 @@ function dimensionsFor(request: ImageGenerationRequest): { width: number; height
 }
 
 function buildFluxWorkflow(request: ImageGenerationRequest): Record<string, unknown> {
-  const prompt = request.prompt.trim().slice(0, 1000);
+  // Fail-closed prompt budget (reconciliation fix): the historical
+  // `.slice(0, 1000)` silently truncated creative prompts. Over-budget
+  // prompts now throw BEFORE provider contact; the capability policy
+  // enforces the same bound upstream. Budget: measured canonical max 2345
+  // + headroom = 3000 (AMF policy, not a provider claim).
+  const prompt = request.prompt.trim();
+  if (prompt.length === 0) throw providerValidationError("self-hosted-image", "prompt", "Image prompt must not be empty");
+  if (prompt.length > IMAGE_PROMPT_MAX_CHARS) {
+    throw providerValidationError("self-hosted-image", "prompt", `Image prompt exceeds the ${IMAGE_PROMPT_MAX_CHARS}-character AMF budget (${prompt.length}); refusing silent truncation`);
+  }
+  const negativePrompt = request.negativePrompt?.trim() ?? "";
+  if (negativePrompt.length > IMAGE_NEGATIVE_PROMPT_MAX_CHARS) {
+    throw providerValidationError("self-hosted-image", "negativePrompt", `Negative prompt exceeds the ${IMAGE_NEGATIVE_PROMPT_MAX_CHARS}-character AMF budget; refusing silent truncation`);
+  }
   const { width, height } = dimensionsFor(request);
-  const seed = Math.floor(Math.random() * 1_000_000_000);
+  const seed = request.seed ?? Math.floor(Math.random() * 1_000_000_000);
 
   // Minimal FLUX.1-dev-fp8 API workflow
   return {
@@ -84,11 +98,11 @@ function buildFluxWorkflow(request: ImageGenerationRequest): Record<string, unkn
       class_type: "CLIPTextEncode",
     },
     "7": {
-      inputs: { text: "", clip: ["30", 1] },
+      inputs: { text: negativePrompt, clip: ["30", 1] },
       class_type: "CLIPTextEncode",
     },
     "33": {
-      inputs: { guidance: 3.5, conditioning: ["6", 0] },
+      inputs: { guidance: request.guidance ?? 3.5, conditioning: ["6", 0] },
       class_type: "FluxGuidance",
     },
     "27": {
@@ -98,11 +112,11 @@ function buildFluxWorkflow(request: ImageGenerationRequest): Record<string, unkn
     "13": {
       inputs: {
         seed,
-        steps: 20,
-        cfg: 1,
-        sampler_name: "euler",
-        scheduler: "simple",
-        denoise: 1,
+        steps: request.steps ?? 20,
+        cfg: request.cfg ?? 1,
+        sampler_name: request.sampler ?? "euler",
+        scheduler: request.scheduler ?? "simple",
+        denoise: request.denoise ?? 1,
         model: ["30", 0],
         positive: ["33", 0],
         negative: ["7", 0],
@@ -248,6 +262,12 @@ export class RunPodComfyUIImageAdapter implements ImageGenerationProvider {
       title: request.prompt.trim().slice(0, 80),
       url,
       parameters: { prompt: request.prompt.trim() },
+      metadata: {
+        model: "FLUX.1-dev-fp8",
+        checkpoint: "flux1-dev-fp8.safetensors",
+        runtime: "RunPod Serverless ComfyUI",
+        endpointId: this.endpointId,
+      },
     };
   }
 

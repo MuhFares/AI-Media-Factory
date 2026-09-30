@@ -1,0 +1,25 @@
+{
+  "catalogVersion": "1.0.0",
+  "retrievedAt": "2026-09-01",
+  "voicetut": {
+    "provider": "voicetut",
+    "model": "mohammedaly22/VoiceTut-TTS",
+    "language": "arz",
+    "locale": "ar-EG",
+    "voices": [
+      {"providerVoiceId":"Abdelrahman","gender":"MALE"},{"providerVoiceId":"Abdullah","gender":"MALE"},{"providerVoiceId":"Kamal","gender":"MALE"},{"providerVoiceId":"Hossam","gender":"MALE"},{"providerVoiceId":"Mohamed","gender":"MALE"},{"providerVoiceId":"Omar","gender":"MALE"},{"providerVoiceId":"Sayed","gender":"MALE"},{"providerVoiceId":"Zaki","gender":"MALE"},{"providerVoiceId":"Aly","gender":"MALE"},{"providerVoiceId":"Essam","gender":"MALE"},{"providerVoiceId":"Ahmed","gender":"MALE"},{"providerVoiceId":"Asmaa","gender":"FEMALE"},{"providerVoiceId":"Esraa","gender":"FEMALE"},{"providerVoiceId":"Hanan","gender":"FEMALE"},{"providerVoiceId":"Sarah","gender":"FEMALE"},{"providerVoiceId":"Yasmin","gender":"FEMALE"},{"providerVoiceId":"Omnia","gender":"FEMALE"}
+    ],
+    "availabilityStatus": "MODEL_DOCUMENTED_RUNTIME_INVENTORY_UNVERIFIED",
+    "source": "https://huggingface.co/mohammedaly22/VoiceTut-TTS"
+  },
+  "groq": {
+    "provider": "groq",
+    "model": "canopylabs/orpheus-v1-english",
+    "language": "en",
+    "voices": [
+      {"providerVoiceId":"autumn","gender":"FEMALE"},{"providerVoiceId":"diana","gender":"FEMALE"},{"providerVoiceId":"hannah","gender":"FEMALE"},{"providerVoiceId":"austin","gender":"MALE"},{"providerVoiceId":"daniel","gender":"MALE"},{"providerVoiceId":"troy","gender":"MALE"}
+    ],
+    "source": "https://console.groq.com/docs/text-to-speech/orpheus"
+  },
+  "projectEvaluation": {"Mohamed":"PROJECT_VERIFIED_HISTORICAL_TECHNICAL_EVIDENCE","troy":"PROJECT_VERIFIED_TECHNICAL_EVIDENCE_HUMAN_NOT_PREFERRED_FOR_CURRENT_SCENE","Yasmin":"OFFICIAL_FEMALE_DOCUMENTED_RUNTIME_SYNTHESIS_PASS_HUMAN_PENDING","hannah":"HUMAN_PASS_LIFESTYLE_SOCIAL_SCENE"}
+}

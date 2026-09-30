@@ -33,7 +33,7 @@ export interface QARequest {
 export type QAContentKind = "research_report" | "writer_report" | "seo_report" | "brand_report" | "review_report" | "thumbnail_report" | "video_report" | "published_report";
 
 /** QA domain, derived from whether the input carries a content artifact chain. */
-export type QAMode = "engineering" | "content";
+export type QAMode = "engineering" | "content" | "final_media";
 
 /** A serialized upstream artifact in the normal content collaboration chain. */
 export interface QAContentArtifact {
@@ -56,6 +56,24 @@ export interface QAInput {
   capabilityRequests?: readonly CapabilityRequest[];
   /** Present → content QA mode; QA validates the upstream content chain structurally. */
   validatedArtifacts?: readonly QAContentArtifact[];
+  /** Explicit canonical final-media request. This avoids treating arbitrary media-chain artifacts as content QA inputs. */
+  finalMedia?: FinalMediaQAInput;
+}
+
+export interface FinalMediaQAInput {
+  workflowId: string;
+  finalMediaArtifactId: string;
+  path: string;
+  integrity?: string;
+  durationMs: number;
+  width?: number;
+  height?: number;
+  container?: string;
+  videoCodec?: string;
+  audioCodec?: string;
+  timelineArtifactId: string;
+  narrationArtifactId: string;
+  sceneClipArtifactIds: string[];
 }
 
 export interface QATestResult extends QAExecutionEvidence { recommendation?: string; }
@@ -85,6 +103,7 @@ export interface QAReport {
   metadata: { createdAt: string; agentVersion: string; executionEvidencePresent: boolean };
   /** Content QA echoes the validated chain (engineering QA omits it). */
   validatedArtifacts?: readonly QAContentArtifact[];
+  finalMedia?: FinalMediaQAInput;
 }
 
 export interface QAConfig { model: string; temperature: number; maxOutputTokens: number; systemPrompt: string; includeReasoning?: boolean; }

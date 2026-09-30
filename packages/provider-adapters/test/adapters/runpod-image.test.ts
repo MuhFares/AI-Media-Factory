@@ -55,6 +55,16 @@ describe("RunPodComfyUIImageAdapter", () => {
     strictEqual(latent.width, 1344);
     strictEqual(latent.height, 768);
   });
+  it("maps 9:16 to exactly 768x1344 (approved batch dimensions)", async (t) => {
+    const mock = await createRunPodMock();
+    t.after(() => mock.close());
+    const adapter = adapterFor(mock.url);
+    await adapter.generate({ prompt: "p", aspectRatio: "9:16" });
+    const wf = mock.state.lastRunBody.input.workflow as Record<string, unknown>;
+    const latent = (wf["27"] as Record<string, unknown>).inputs as Record<string, unknown>;
+    strictEqual(latent.width, 768);
+    strictEqual(latent.height, 1344);
+  });
 
   it("throws a classified authorization error on 401", async (t) => {
     const mock = await createRunPodMock();
@@ -132,5 +142,29 @@ describe("RunPodComfyUIImageAdapter config", () => {
   it("builds deterministic workflow for given request", () => {
     const wf = RunPodComfyUIImageAdapter.buildWorkflowForTest({ prompt: "test", aspectRatio: "1:1" });
     ok(wf["6"] && wf["30"] && wf["27"]);
+  });
+});
+
+describe("RunPodComfyUIImageAdapter prompt budget (fail-closed, never silent truncation)", () => {  it("passes prompts within budget through byte-exactly", () => {
+    const prompt = `scene ${"x".repeat(2490)}`;
+    strictEqual(prompt.length > 1000, true);
+    const wf = RunPodComfyUIImageAdapter.buildWorkflowForTest({ prompt, aspectRatio: "1:1" });
+    strictEqual(((wf["6"] as Record<string, unknown>).inputs as Record<string, unknown>).text, prompt.trim());
+  });
+  it("rejects over-budget positive prompts before provider contact", () => {
+    try {
+      RunPodComfyUIImageAdapter.buildWorkflowForTest({ prompt: `p${"y".repeat(3100)}`, aspectRatio: "1:1" });
+      ok(false);
+    } catch (e) { match(String(e), /exceeds the 3000-character/); }
+  });
+  it("rejects over-budget negative prompts before provider contact", () => {
+    try {
+      RunPodComfyUIImageAdapter.buildWorkflowForTest({ prompt: "p", negativePrompt: `n${"z".repeat(1100)}`, aspectRatio: "1:1" });
+      ok(false);
+    } catch (e) { match(String(e), /Negative prompt exceeds/); }
+  });
+  it("routes the negative prompt to the negative CLIP-conditioning node", () => {
+    const wf = RunPodComfyUIImageAdapter.buildWorkflowForTest({ prompt: "p", negativePrompt: "no text, no screens", aspectRatio: "1:1" });
+    strictEqual(((wf["7"] as Record<string, unknown>).inputs as Record<string, unknown>).text, "no text, no screens");
   });
 });

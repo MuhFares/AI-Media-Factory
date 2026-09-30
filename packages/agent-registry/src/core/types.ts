@@ -42,6 +42,28 @@ export type Capability =
   | "workflow-orchestration"
   | string;
 
+/**
+ * Describes how an agent may be invoked without pretending that every agent
+ * accepts an arbitrary one-shot JSON payload.  Stage-only agents are resolved
+ * by the registry but must be run by their owning workflow/executor, which
+ * supplies their validated upstream artifact chain.
+ */
+export interface AgentExecutionDescriptor {
+  readonly mode: "direct" | "workflow-stage" | "decision";
+  readonly requiredArtifactKinds?: readonly string[];
+  readonly outputArtifactKind?: string;
+  readonly providerKind: "llm" | "deterministic" | "hybrid" | "decision";
+}
+
+/** Raised when a caller tries to bypass an agent's declared input contract. */
+export class AgentInvocationContractError extends Error {
+  readonly code = "AGENT_INVOCATION_CONTRACT_VIOLATION";
+  constructor(readonly agentId: AgentId, readonly mode: AgentExecutionDescriptor["mode"], message?: string) {
+    super(message ?? `Agent ${agentId} must be invoked through its ${mode} contract`);
+    this.name = "AgentInvocationContractError";
+  }
+}
+
 /** Agent metadata. */
 export interface AgentMetadata {
   id: AgentId;
@@ -55,6 +77,7 @@ export interface AgentMetadata {
   license?: string;
   createdAt: Timestamp;
   updatedAt: Timestamp;
+  execution?: AgentExecutionDescriptor;
 }
 
 /** Agent configuration schema. */

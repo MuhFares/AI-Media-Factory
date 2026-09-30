@@ -32,6 +32,8 @@ export * from "./resilience/timeout.js";
 export * from "./resilience/checkpoint.js";
 export * from "./resilience/recovery.js";
 export * from "./resilience/persistence.js";
+export * from "./resilience/production-policy-enforcement.js";
+export * from "./resilience/execution-provenance.js";
 export * from "./resilience/dead-letter.js";
 // integration
 export * from "./integration/events.js";

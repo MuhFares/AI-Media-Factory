@@ -8,6 +8,7 @@ export type {
 
 export type {
   ResearchArtifactHandoff,
+  EvidenceBackedBriefHandoff,
   WriterAgentInput,
   WriterSourceReference,
   WriterStatus,

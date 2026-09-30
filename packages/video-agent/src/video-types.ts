@@ -4,6 +4,7 @@
 
 import type { BaseAgentDependencies, ExecutionContext, ExecutionResponse, Json, Uuid } from "@ai-media-factory/runtime";
 import type { CapabilityRequest, CapabilityResult } from "@ai-media-factory/runtime";
+import type { GeneratedVisualArtifact, WanAuthorization } from "@ai-media-factory/tool-framework";
 
 /** A serialized upstream artifact in the content collaboration chain. */
 export interface VideoSourceArtifact {
@@ -27,6 +28,9 @@ export interface VideoAgentInput {
   instructions?: string;
   /** Present → video validates the content chain before requesting generation. */
   validatedArtifacts?: readonly VideoSourceArtifact[];
+  /** Exact generated scene visual and authorization required before Wan. */
+  visualArtifact?: GeneratedVisualArtifact;
+  wanAuthorization?: WanAuthorization;
 }
 
 export type VideoReportStatus = "completed" | "blocked" | "failed";

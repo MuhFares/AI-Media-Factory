@@ -114,6 +114,8 @@ export interface GrowthConfig {
   model: string;
   systemPrompt: string;
   includeReasoning?: boolean;
+  temperature?: number;
+  maxOutputTokens?: number;
   thresholds?: Partial<GrowthThresholds>;
 }
 

@@ -1,0 +1,19 @@
+{
+  "name": "@ai-media-factory/timeline-executor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test --test-concurrency=1 test/*.test.js"
+  },
+  "dependencies": {
+    "@ai-media-factory/database": "*",
+    "@ai-media-factory/runtime": "*",
+    "@ai-media-factory/shared": "*",
+    "@ai-media-factory/tool-framework": "*",
+    "@ai-media-factory/workflow-engine": "*"
+  }
+}

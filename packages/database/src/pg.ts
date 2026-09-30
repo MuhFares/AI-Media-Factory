@@ -10,15 +10,58 @@ export interface PostgresConfig {
   max?: number;
 }
 
+/**
+ * Historical scripts under work/ are evidence and diagnostics, not supported
+ * production entry points.  Fail closed before they can open a production DB;
+ * an explicit override is accepted only for an unmistakably test-scoped DB.
+ */
+export function assertLegacyWorkRunnerDatabaseTarget(
+  entrypoint: string | undefined,
+  connectionString: string,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (!entrypoint || !/(?:^|[\\/])work[\\/]/i.test(entrypoint)) return;
+  if (env.AMF_ALLOW_LEGACY_UNSAFE_RUNNER !== "YES") {
+    throw new Error("LEGACY_WORK_RUNNER_QUARANTINED:USE_CANONICAL_RUNTIME");
+  }
+  let database: string;
+  try { database = new URL(connectionString).pathname.replace(/^\//, ""); }
+  catch { throw new Error("LEGACY_WORK_RUNNER_DATABASE_INVALID"); }
+  if (!/(^|[_-])test($|[_-])/i.test(database)) {
+    throw new Error("LEGACY_WORK_RUNNER_PRODUCTION_DATABASE_FORBIDDEN");
+  }
+}
+
 /** Create a connection pool. Call `close()` when done. */
 export function createPool(config: PostgresConfig): pg.Pool {
+  assertLegacyWorkRunnerDatabaseTarget(process.argv[1], config.connectionString);
   return new Pool({
     connectionString: config.connectionString,
     max: config.max ?? 10,
   });
 }
 
-/** Apply the Phase 0 schema (idempotent CREATE TABLE IF NOT EXISTS). */
+/** Cross-session advisory lock id serializing concurrent schema migrations. */
+const SCHEMA_MIGRATION_LOCK_ID = 4187321042;
+
+/**
+ * Apply the Phase 0 schema (idempotent CREATE TABLE IF NOT EXISTS).
+ *
+ * The DDL is serialized with a session-scoped advisory lock: concurrent
+ * migrations (e.g. parallel test files, or the API and worker starting
+ * together) otherwise race on catalog locks during CREATE TABLE IF NOT
+ * EXISTS / ALTER TABLE IF NOT EXISTS and can deadlock.
+ */
 export async function migrate(pool: pg.Pool): Promise<void> {
-  await pool.query(SCHEMA_DDL);
+  const client = await pool.connect();
+  try {
+    await client.query("SELECT pg_advisory_lock($1)", [SCHEMA_MIGRATION_LOCK_ID]);
+    try {
+      await client.query(SCHEMA_DDL);
+    } finally {
+      await client.query("SELECT pg_advisory_unlock($1)", [SCHEMA_MIGRATION_LOCK_ID]);
+    }
+  } finally {
+    client.release();
+  }
 }

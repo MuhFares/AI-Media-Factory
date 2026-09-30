@@ -19,15 +19,20 @@ import {
   createAnalyticsCapability,
   createCapabilityRegistry,
   createImageGenerationCapability,
+  createMediaComposeCapability,
   createPublishingCapability,
+  createTimelinePlanCapability,
   createTTSGenerationCapability,
   createVideoGenerationCapability,
   IMAGE_GENERATION_CAPABILITY_ID,
+  MEDIA_COMPOSE_CAPABILITY_ID,
   PUBLISH_CAPABILITY_ID,
+  TIMELINE_PLAN_CAPABILITY_ID,
   TTS_GENERATION_CAPABILITY_ID,
   VIDEO_GENERATION_CAPABILITY_ID,
   WebSearchCapabilityExecutor,
   WEB_SEARCH_CAPABILITY_ID,
+  WEB_SEARCH_MAX_QUERY_LENGTH,
 } from "@ai-media-factory/tool-framework";
 import type {
   AnalyticsCapabilityPolicy,
@@ -51,6 +56,7 @@ import type {
   WebSearchProvider,
 } from "@ai-media-factory/tool-framework";
 import type { Json } from "@ai-media-factory/tool-framework";
+import { IMAGE_PROMPT_MAX_CHARS, IMAGE_NEGATIVE_PROMPT_MAX_CHARS } from "@ai-media-factory/tool-framework";
 import { RuntimeCapabilityExecutor } from "@ai-media-factory/runtime";
 import type { PublishSessionStore } from "@ai-media-factory/database";
 import { DEFAULT_PROVIDER_GRANTS, PROVIDER_CAPABILITIES } from "./registry.js";
@@ -67,6 +73,7 @@ import { youTubeAnalyticsAdapterFromEnv, YouTubeAnalyticsAdapter } from "../adap
 import { groqTTSAdapterFromEnv, GroqTTSAdapter } from "../adapters/groq-tts.js";
 import { BraveSearchAdapter } from "../adapters/web-search.js";
 import type { OperationSink } from "../core/observability.js";
+import type { VoicetutSubmissionLifecycle } from "../adapters/voicetut-tts.js";
 
 export interface ProviderAdapters {
   webSearch: WebSearchProvider;
@@ -85,6 +92,8 @@ export interface ProviderCapabilityPolicies {
   publishing?: Partial<PublishingCapabilityPolicy>;
   analytics?: Partial<AnalyticsCapabilityPolicy>;
   ttsGeneration?: Partial<TTSGenerationCapabilityPolicy>;
+  mediaCompose?: Partial<import("@ai-media-factory/tool-framework").MediaComposeCapabilityPolicy>;
+  timelinePlan?: Partial<import("@ai-media-factory/tool-framework").TimelinePlanCapabilityPolicy>;
 }
 
 export interface ProviderCapabilityBoundaryOptions {
@@ -99,21 +108,69 @@ export interface ProviderCapabilityBoundaryOptions {
 export interface ProviderCapabilityBoundary {
   boundary: RuntimeCapabilityExecutor;
   resolver: CapabilityRegistry;
+  /**
+   * MEDIA CAPABILITY PREFLIGHT V1: the ids of the provider-backed (and
+   * deterministic) capabilities actually REGISTERED in this boundary's
+   * routing executor. Constructed from the same wiring the live worker
+   * uses — no provider is constructed or contacted by reading this.
+   */
+  readonly registeredCapabilityIds: readonly string[];
+  readonly resolvedProviderIds: Readonly<Record<string, string>>;
+  /** Safe launcher classification supplied by the production composition root. */
+  readonly workerExecutionEnvironment?: {
+    readonly status: "SUPPORTED" | "UNSUPPORTED";
+    readonly mediaLiveExecutionAllowed: boolean;
+    readonly reasonCode: string | null;
+  };
+  /**
+   * Safe worker runtime identity supplied by the production composition root
+   * (mode/launcher/instance/node — no secrets). Reported verbatim by the
+   * zero-network media capability preflight so future live authorizations can
+   * prove WORKER_RUNTIME_MODE = PERSISTENT_PRODUCTION_WORKER.
+   */
+  readonly workerRuntime?: {
+    readonly mode: string;
+    readonly launcherClassification: string;
+    readonly instanceId: string;
+    readonly nodeVersion: string;
+  };
+  /**
+   * Safe media execution-configuration derivations supplied by the production
+   * composition root (endpoint identity hash + base hostname — never raw
+   * endpoint IDs, keys, or credentials). Feeds the governed v2 configuration
+   * fingerprint so endpoint swaps change the fingerprint.
+   */
+  readonly mediaConfiguration?: {
+    readonly ttsEndpointIdentityHash: string | null;
+    readonly ttsBaseHost: string | null;
+  };
 }
 
 const DEFAULT_WEB_SEARCH_POLICY: WebSearchCapabilityPolicy = {
   maxResults: 10,
-  maxQueryLength: 200,
+  maxQueryLength: WEB_SEARCH_MAX_QUERY_LENGTH,
 };
 const DEFAULT_IMAGE_POLICY: ImageGenerationCapabilityPolicy = {
-  maxPromptLength: 1000,
-  maxNegativePromptLength: 1000,
+  maxPromptLength: IMAGE_PROMPT_MAX_CHARS,
+  maxNegativePromptLength: IMAGE_NEGATIVE_PROMPT_MAX_CHARS,
   maxWidth: 2048,
   maxHeight: 2048,
   allowedAspectRatios: ["16:9", "9:16", "4:3", "3:4", "1:1"],
 };
+const DEFAULT_RUNPOD_ZIMAGE_PROMPT_LENGTH = 4000;
+const MAX_RUNPOD_ZIMAGE_PROMPT_LENGTH = 8192;
+
+function runpodZImagePromptLength(): number {
+  const raw = process.env.RUNPOD_ZIMAGE_MAX_PROMPT_LENGTH?.trim();
+  if (!raw) return DEFAULT_RUNPOD_ZIMAGE_PROMPT_LENGTH;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1000 || value > MAX_RUNPOD_ZIMAGE_PROMPT_LENGTH) {
+    throw new Error(`RUNPOD_ZIMAGE_MAX_PROMPT_LENGTH must be an integer between 1000 and ${MAX_RUNPOD_ZIMAGE_PROMPT_LENGTH}`);
+  }
+  return value;
+}
 const DEFAULT_VIDEO_POLICY: VideoGenerationCapabilityPolicy = {
-  maxPromptLength: 1000,
+  maxPromptLength: 3000,
   maxNegativePromptLength: 1000,
   maxDurationSeconds: 600,
   allowedAspectRatios: ["16:9", "9:16", "4:3", "3:4", "1:1"],
@@ -143,6 +200,8 @@ const DEFAULT_TTS_POLICY: TTSGenerationCapabilityPolicy = {
  */
 export class RoutingCapabilityExecutor implements CapabilityExecutorPort {
   private readonly routes = new Map<string, CapabilityExecutorPort<Json, Json>>();
+  /** Registered capability ids (read-only inspection for the provider-free preflight). */
+  get registeredIds(): Iterable<string> { return this.routes.keys(); }
 
   register<I = Json, O = Json>(capabilityId: string, executor: CapabilityExecutorPort<I, O>): void {
     // The runtime boundary passes a CapabilityRequest<Json>; each registered
@@ -182,12 +241,19 @@ export function createProviderCapabilityBoundary(
       { ...DEFAULT_WEB_SEARCH_POLICY, ...options.policies?.webSearch },
     ),
   );
+  const imagePolicy: ImageGenerationCapabilityPolicy = {
+    ...DEFAULT_IMAGE_POLICY,
+    ...((options.adapters.imageGeneration as ImageGenerationProvider & { providerId?: string }).providerId === "runpod-zimage"
+      ? { maxPromptLength: runpodZImagePromptLength() }
+      : {}),
+    ...options.policies?.imageGeneration,
+  };
   routing.register(
     IMAGE_GENERATION_CAPABILITY_ID,
     createImageGenerationCapability({
       provider: options.adapters.imageGeneration,
       resolver,
-      policy: { ...DEFAULT_IMAGE_POLICY, ...options.policies?.imageGeneration },
+      policy: imagePolicy,
     }),
   );
   routing.register(
@@ -195,7 +261,11 @@ export function createProviderCapabilityBoundary(
     createVideoGenerationCapability({
       provider: options.adapters.videoGeneration,
       resolver,
-      policy: { ...DEFAULT_VIDEO_POLICY, ...options.policies?.videoGeneration },
+      // Video prompts are derived from validated director/image prompts
+      // (1700–2100 chars reconciled) plus image base64; the default 500 was
+      // sized for a placeholder and blocks the validated path. 3000 aligns
+      // with the image adapter's evidence-backed AMF bound.
+      policy: { maxPromptLength: 3000, ...options.policies?.videoGeneration },
     }),
   );
   routing.register(
@@ -225,8 +295,27 @@ export function createProviderCapabilityBoundary(
       }),
     );
   }
+  // media.compose is a deterministic local engine (FFmpeg), not a provider.
+  routing.register(
+    MEDIA_COMPOSE_CAPABILITY_ID,
+    createMediaComposeCapability({ resolver, policy: options.policies?.mediaCompose }),
+  );
+  // timeline.plan is deterministic planning (zero external calls), always registered.
+  routing.register(
+    TIMELINE_PLAN_CAPABILITY_ID,
+    createTimelinePlanCapability({ resolver, policy: options.policies?.timelinePlan }),
+  );
 
-  return { boundary: new RuntimeCapabilityExecutor({ resolver, executor: routing }), resolver };
+  return {
+    boundary: new RuntimeCapabilityExecutor({ resolver, executor: routing }),
+    resolver,
+    registeredCapabilityIds: [...routing.registeredIds].sort(),
+    resolvedProviderIds: {
+      ...(options.adapters.ttsGeneration === undefined ? {} : { [TTS_GENERATION_CAPABILITY_ID]: String((options.adapters.ttsGeneration as TTSGenerationProvider & { providerId?: string }).providerId ?? "unknown") }),
+      [IMAGE_GENERATION_CAPABILITY_ID]: String((options.adapters.imageGeneration as ImageGenerationProvider & { providerId?: string }).providerId ?? "unknown"),
+      [TIMELINE_PLAN_CAPABILITY_ID]: "deterministic-local",
+    },
+  };
 }
 
 export interface ProviderCapabilityEnvOptions {
@@ -237,6 +326,7 @@ export interface ProviderCapabilityEnvOptions {
   grants?: readonly CapabilityGrant[];
   policies?: ProviderCapabilityPolicies;
   ttsProvider?: TTSGenerationProvider;
+  ttsSubmissionLifecycle?: VoicetutSubmissionLifecycle;
 }
 
 /** Build the full provider capability boundary with adapters configured from env. */
@@ -252,7 +342,7 @@ export function createProviderCapabilityBoundaryFromEnv(
       onOperation: options.onOperation,
     }),
     analytics: analyticsAdapterFromEnv({ onOperation: options.onOperation }),
-    ttsGeneration: loadOrBlockTTS(options),
+    ttsGeneration: resolveExplicitTTSProvider(options),
   };
   return createProviderCapabilityBoundary({
     adapters,
@@ -265,14 +355,14 @@ export function createProviderCapabilityBoundaryFromEnv(
 }
 
 /** TTS is optional: a missing credential blocks the capability instead of the boundary. */
-function loadOrBlockTTS(options: ProviderCapabilityEnvOptions): TTSGenerationProvider | undefined {
+export function resolveExplicitTTSProvider(options: Pick<ProviderCapabilityEnvOptions, "ttsProvider" | "onOperation" | "ttsSubmissionLifecycle"> = {}): TTSGenerationProvider | undefined {
   if (options.ttsProvider !== undefined) return options.ttsProvider;
   if (process.env.TTS_PROVIDER === undefined || process.env.TTS_PROVIDER.trim().length === 0) {
     // TTS stays unregistered unless explicitly enabled via TTS_PROVIDER.
     return undefined;
   }
   try {
-    return ttsAdapterFromEnv({ onOperation: options.onOperation });
+    return ttsAdapterFromEnv({ onOperation: options.onOperation, submissionLifecycle: options.ttsSubmissionLifecycle });
   } catch {
     return undefined;
   }

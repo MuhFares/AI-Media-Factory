@@ -7,13 +7,16 @@ export type { WorkflowWorkerDeps } from "./worker.js";
 export { buildDefaultEngine, waitForTerminal } from "./engine.js";
 export type { BuildEngineDeps, WorkflowTerminalState } from "./engine.js";
 export { createDeterministicAgentExecutor } from "./executor.js";
-export { createProductionAgentExecutor, ProductionAgentExecutor, executeGovernedAgentRouterVisibleJson, executeGovernedVisibleJson, buildProviderBoundary, probeProductionOpenRouterTransport, sanitizedFailureMessage, researchCapabilityRequestId, classifySourceAuthority, sourceAuthorityRank, evaluateResearchEvidenceSufficiency, researchStatusForSufficiency, reclassifyResearchEvidence, buildDiscoveryQueries, buildVerificationQuery, isGenericFactListQuery } from "./production-executor.js";
+export { createProductionAgentExecutor, ProductionAgentExecutor, executeGovernedAgentRouterVisibleJson, executeGovernedVisibleJson, buildProviderBoundary, probeProductionOpenRouterTransport, sanitizedFailureMessage, researchCapabilityRequestId, classifySourceAuthority, sourceAuthorityRank, evaluateResearchEvidenceSufficiency, researchStatusForSufficiency, reclassifyResearchEvidence, normalizeResearchArtifactLineage, groundResearchReport, buildDiscoveryQueries, buildVerificationQuery, isGenericFactListQuery } from "./production-executor.js";
 export { GovernedAgentRuntime } from "./governed-agent-runtime.js";
 export { resolveApprovedProjectContext, assertMorrowayHistoricalContext } from "./project-context.js";
 export type { GovernedAgentRequest, GovernedAgentResult, EffectiveRuntimeConfig, GovernedProvider, CommandExecutionStatus } from "./governed-agent-runtime.js";
 export { bootstrapCanonicalAgentRegistry } from "./agent-bootstrap.js";
 export { createProductionWorker } from "./production-worker.js";
 export type { ProductionWorkerOptions, ProductionWorkerRuntime } from "./production-worker.js";
+export { executeTargetedVerification, createProductionTargetedVerificationRuntime } from "./targeted-verification.js";
+export { executeTargetedReevaluationRecovery, createProductionTargetedReevaluationRecoveryRuntime } from "./targeted-verification.js";
+export type { TargetedVerificationExecutionResult, TargetedVerificationRuntimeDeps, TargetedReevaluationRecoveryExecutionResult, TargetedReevaluationRecoveryRuntimeDeps, CanonicalReevaluationRoute } from "./targeted-verification.js";
 export { inspectWorkerExecutionEnvironment } from "./worker-execution-environment.js";
 export type { WorkerExecutionEnvironment } from "./worker-execution-environment.js";
 export {

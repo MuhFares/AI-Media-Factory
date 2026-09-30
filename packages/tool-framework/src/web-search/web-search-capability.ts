@@ -7,11 +7,15 @@ import type {
 } from "../capabilities.js";
 
 export const WEB_SEARCH_CAPABILITY_ID = "web.search";
+/** Authoritative production query limit shared by planning and execution. */
+export const WEB_SEARCH_MAX_QUERY_LENGTH = 200;
 
 export interface WebSearchRequest {
   query: string;
   maxResults?: number;
   allowedDomains?: readonly string[];
+  /** Runtime-only hook invoked by the HTTP adapter immediately before fetch. */
+  onExternalProviderInvocationStarted?: () => Promise<void>;
 }
 
 export interface WebSearchResult {
@@ -80,6 +84,9 @@ export class WebSearchCapabilityExecutor
         query: input.query.trim(),
         ...(input.maxResults === undefined ? {} : { maxResults: input.maxResults }),
         ...(input.allowedDomains === undefined ? {} : { allowedDomains: [...input.allowedDomains] }),
+        ...(request.onExternalProviderInvocationStarted === undefined
+          ? {}
+          : { onExternalProviderInvocationStarted: request.onExternalProviderInvocationStarted }),
       });
       if (!this.isValidProviderResponse(providerResponse, input.maxResults)) {
         return this.failed(request, "INVALID_PROVIDER_RESPONSE", "Provider returned malformed search results", startedAt, false);

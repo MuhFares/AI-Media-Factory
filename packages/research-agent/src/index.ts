@@ -5,6 +5,16 @@
 export type {
   ResearchAgentDependencies,
 } from "./research-agent.js";
+export {
+  TARGETED_VERIFICATION_MODE,
+  buildTargetedVerificationPlan,
+  validateTargetedReevaluation,
+} from "./targeted-verification.js";
+export type {
+  TargetedVerificationDispatchInput,
+  TargetedVerificationPlanEntry,
+  TargetedCandidateReevaluation,
+} from "./targeted-verification.js";
 
 export type {
   ResearchAgentInput,
@@ -17,6 +27,14 @@ export type {
   ResearchConfig,
   ResearchExecutionInput,
   ResearchExecutionOutput,
+  ResearchObjective,
+  ResearchMission,
+  DiscoveryLane,
+  CapabilitySupportEntry,
+  CandidateOpportunity,
+  CandidateVerificationPlan,
+  ContentOpportunityAssessment,
+  FactualVerification,
 } from "./research-types.js";
 export type { VisualResearchResult, VisualEvidence } from "@ai-media-factory/tool-framework";
 export type { ResearchMode, ResearchSourceType, ResearchPlatform, ResearchCapability, AccessMode, CapabilityStatus, FreshnessRequirement, EvidenceKind, SourceCapability, ResearchBudget, ResearchSourcePlan, ResearchSourceStrategy, ResearchRequest, ResearchEvidence, OriginalityConstraints, ReferenceContentAnalysis, ContentIntelligenceResult, ResearchResult, YouTubeResearchPort } from "./content-intelligence.js";
@@ -41,4 +59,25 @@ export {
   isRelevantResearchDescription,
   validateResearchContractIdentity,
   classifyResearchCapabilityError,
+  buildVerificationQueryFor,
+  MAX_DISCOVERY_REQUESTS,
+  MAX_VERIFICATION_REQUESTS,
+  MAX_CANDIDATES,
+  CANONICAL_DISCOVERY_LANES,
+  compileDiscoveryQuery,
+  packWebSearchQuery,
+  finalizeWebSearchQuery,
+  evaluateDiscoveryQueryQuality,
+  materializeDiscoveryRetrievalPlan,
+  normalizeRuntimeIdentityEchoes,
+} from "./research-agent.js";
+export type {
+  DiscoveryQueryQuality,
+  ExecutableRetrievalPlanEntry,
+  PackedWebSearchQuery,
+  QuerySemanticPriority,
+  RetainedQueryContext,
+  RuntimeIdentityEcho,
+  WebSearchPackingTrace,
+  WebSearchSemanticRequirement,
 } from "./research-agent.js";

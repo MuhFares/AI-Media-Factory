@@ -12,11 +12,13 @@
 
 import {
   ProviderError,
+  attachGoogleCause,
   providerAuthError,
   providerTransientError,
   providerTimeoutError,
   providerValidationError,
   providerError,
+  SubmissionOutcomeUnknownError,
 } from "./errors.js";
 import type { OperationSink } from "./observability.js";
 
@@ -49,6 +51,8 @@ export interface HttpSenderOptions {
   classify?: HttpStatusClassifier;
   onOperation?: OperationSink;
   requestKey?: string;
+  /** Called after local request validation/materialization, immediately before fetch. */
+  onFetchInvocationStarted?: () => Promise<void>;
   /** Include the response body snippet in `detail` — safe for non-2xx only. */
 }
 
@@ -77,17 +81,48 @@ export function isRetryable(error: unknown): boolean {
   return error instanceof ProviderError && error.retryable;
 }
 
+const SIDE_EFFECTING = new Set<HttpMethod>(["POST", "PUT", "PATCH", "DELETE"]);
+function safeCauseCode(error: unknown): string | undefined {
+  if (error === null || typeof error !== "object") return undefined;
+  const source = error as { code?: unknown; errno?: unknown; cause?: unknown };
+  const nested = source.cause !== null && typeof source.cause === "object" ? source.cause as { code?: unknown; errno?: unknown } : undefined;
+  const value = nested?.code ?? source.code ?? nested?.errno ?? source.errno;
+  return typeof value === "string" || typeof value === "number" ? String(value).slice(0, 64) : undefined;
+}
+function classifyTransport(error: unknown, aborted: boolean): string {
+  if (aborted || (error instanceof Error && error.name === "AbortError")) return "ABORTED";
+  const code = (safeCauseCode(error) ?? "").toUpperCase();
+  if (["ENOTFOUND", "EAI_AGAIN", "EAI_FAIL"].includes(code)) return "DNS_ERROR";
+  if (code === "ECONNREFUSED") return "CONNECTION_REFUSED";
+  if (["ECONNRESET", "EPIPE"].includes(code)) return "CONNECTION_RESET";
+  if (code.includes("CERT") || code.includes("TLS") || code.includes("SSL")) return "TLS_ERROR";
+  if (["ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT"].includes(code)) return "TIMEOUT";
+  if (["EACCES", "EPERM"].includes(code)) return "LOCAL_TRANSPORT_ACCESS_RESTRICTION";
+  return "NETWORK_ERROR_UNKNOWN";
+}
+function ambiguousSubmission(opts: HttpSenderOptions, error: unknown, aborted: boolean): SubmissionOutcomeUnknownError {
+  return new SubmissionOutcomeUnknownError(opts.providerId, opts.operation, "Provider submission outcome is unknown after a transport failure", {
+    cause: error, transportDiagnostic: classifyTransport(error, aborted), transportPhase: "FETCH_INVOCATION_STARTED", safeCauseCode: safeCauseCode(error),
+  });
+}
+
 export async function sendHttp(req: OutgoingHttpRequest, opts: HttpSenderOptions): Promise<HttpResponse> {
   const startedAt = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
   try {
+    try { new URL(req.url); } catch (error) {
+      throw new SubmissionOutcomeUnknownError(opts.providerId, opts.operation, "Provider endpoint is malformed", {
+        cause: error, transportDiagnostic: "MALFORMED_ENDPOINT", transportPhase: "SUBMISSION_INTENT", safeCauseCode: "ERR_INVALID_URL",
+      });
+    }
     const headers = new Headers(req.headers ?? {});
     if (req.body !== undefined && req.body !== null) {
       if (typeof req.body === "string" && !headers.has("content-type")) {
         headers.set("content-type", "application/json");
       }
     }
+    await opts.onFetchInvocationStarted?.();
     const response = await fetch(req.url, {
       method: req.method,
       headers,
@@ -119,6 +154,7 @@ export async function sendHttp(req: OutgoingHttpRequest, opts: HttpSenderOptions
     if (detailText.trim().length > 0 && error.detail === undefined) {
       (error as { detail?: string }).detail = detailText.slice(0, 1000);
     }
+    attachGoogleCause(error, detailText);
     opts.onOperation?.({
       providerId: opts.providerId,
       operation: opts.operation,
@@ -142,6 +178,7 @@ export async function sendHttp(req: OutgoingHttpRequest, opts: HttpSenderOptions
         category: "TIMEOUT",
         requestKey: opts.requestKey,
       });
+      if (SIDE_EFFECTING.has(req.method)) throw ambiguousSubmission(opts, error, true);
       throw providerTimeoutError(opts.providerId, opts.operation, `Provider request timed out after ${opts.timeoutMs}ms`);
     }
     opts.onOperation?.({
@@ -153,6 +190,7 @@ export async function sendHttp(req: OutgoingHttpRequest, opts: HttpSenderOptions
       category: "TRANSIENT",
       requestKey: opts.requestKey,
     });
+    if (SIDE_EFFECTING.has(req.method)) throw ambiguousSubmission(opts, error, false);
     throw providerTransientError(
       opts.providerId,
       opts.operation,

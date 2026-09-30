@@ -19,6 +19,12 @@ import type {
 
 type JsonRecord = { [key: string]: Json };
 
+/** Secret-safe diagnostics carried with the existing fail-closed errors. */
+export class ReviewValidationError extends Error {
+  readonly diagnostics: { validationStage: "parse" | "structural" | "semantic"; validationCode: string; issueCount?: number; issuePaths?: string[]; issueCodes?: string[]; semanticRuleId?: string };
+  constructor(message: string, diagnostics: ReviewValidationError["diagnostics"]) { super(message); this.name = "ReviewValidationError"; this.diagnostics = diagnostics; }
+}
+
 /** Default reviewer system prompt. */
 export const DEFAULT_REVIEWER_SYSTEM_PROMPT = `You are an expert software reviewer. Analyze only the supplied task, code, change, diff, and references.
 
@@ -39,6 +45,7 @@ function modeFromKind(kind: string): ReviewMode {
     case "thumbnail_report": return "thumbnail";
     case "video_report": return "video";
     case "published_report": return "published";
+    case "final_media_artifact": return "final_media";
     default: throw new Error(`Invalid review input: unsupported artifact kind "${String(kind)}"`);
   }
 }
@@ -58,6 +65,8 @@ function domainInstructions(mode: ReviewMode): string {
       return "This is a VIDEO review. Assess the video report's viability: it must report a completed video generated through the video.generate capability with matching completion evidence, expected metadata, and a valid asset reference. An artifact that lacks confirmed completion evidence must not be approved.";
     case "published":
       return "This is a PUBLISH review. Assess the published report's viability: it must report confirmed publication through the publish.youtube capability with matching runtime evidence, a non-empty idempotency key, and a valid published URL/reference sourced from a completed video. An artifact that lacks confirmed publication evidence must not be approved.";
+    case "final_media":
+      return "This is a FINAL PRODUCT review. Verify exact final-media lineage, passing technical QA, required production artifacts, and supplied brand/SEO evidence. No multimodal audiovisual inspector is available, so return human_review_required rather than claiming pixel or audiovisual semantic inspection passed.";
     case "coding":
     default:
       return "This is a CODE review. Analyze only the supplied task, code, change, diff, and references.";
@@ -109,7 +118,7 @@ export class ReviewerAgent extends BaseAgent {
     const { mode, artifact } = this.resolveReviewContext(input);
     const request = this.buildExecutionRequest(this.buildReviewPrompt(input, mode, artifact));
     const response = await this.runExecution(context, request, signal);
-    const parsed = this.parseReviewResponse(response.output, input);
+    const parsed = this.validateReviewResponse(response.output, input);
     return { report: this.applyReviewGate(mode, artifact, parsed), response };
   }
 
@@ -155,6 +164,10 @@ export class ReviewerAgent extends BaseAgent {
         if (typeof p.publicationId !== "string" || p.publicationId.trim() === "" || typeof p.publishedUrl !== "string" || p.publishedUrl.trim() === "") return ["published_report lacks a reference to the confirmed publication."];
         if (typeof p.idempotencyKey !== "string" || p.idempotencyKey.trim() === "") return ["published_report lacks an idempotency key."];
         if (typeof p.sourceVideoId !== "string" || p.sourceVideoId.trim() === "") return ["published_report lacks a source video reference."];
+        return [];
+      case "final_media":
+        if (typeof p.finalMediaArtifactId !== "string" || p.finalMediaArtifactId !== artifact.artifactId) return ["final_media_artifact lacks matching final media identity."];
+        if (typeof p.technicalQaStatus !== "string" || p.technicalQaStatus !== "passed") return ["final_media_artifact does not carry a passing Final Technical QA result."];
         return [];
       default:
         return [`Unsupported review mode "${String(mode)}".`];
@@ -220,7 +233,7 @@ Return a ReviewReport with summary, status, findings, recommendations, and metad
 REVIEW REPORT FORMAT (structured-output contract - the JSON below MUST satisfy these exact shapes):
 
 Set "reportId" to a UUID string. Set "taskDescription" EXACTLY to "${input.task.description}" (verbatim, no prefix, no suffix). Set "summary" to a concise string.
-Set "status" to EXACTLY one of: "approved" | "changes_requested" | "blocked" (copy the exact lowercase token; do NOT use any other value).
+Set "status" to EXACTLY one of: "approved" | "changes_requested" | "blocked" | "human_review_required" (copy the exact lowercase token; do NOT use any other value).
 
 Set "findings" to an array of OBJECTS, each with the exact shape {"id": "<string>", "severity": "critical" | "high" | "medium" | "low" | "info", "category": "correctness" | "architecture" | "bug" | "risk" | "security" | "maintainability", "title": "<string>", "description": "<string>", "recommendation": "<string>"}. "location" is optional (omit if not applicable).
 Set "recommendations" to an array of OBJECTS, each with the exact shape {"priority": "high" | "medium" | "low", "description": "<string>"}. "relatedFindingIds" is an optional array of finding id strings referencing findings in the report.
@@ -250,7 +263,7 @@ Output a single JSON object with ONLY the fields listed above (reportId, taskDes
         reportId: { type: "string", format: "uuid" },
         taskDescription: { type: "string" },
         summary: { type: "string" },
-        status: { type: "string", enum: ["approved", "changes_requested", "blocked"] },
+        status: { type: "string", enum: ["approved", "changes_requested", "blocked", "human_review_required"] },
         findings: {
           type: "array",
           items: {
@@ -285,11 +298,12 @@ Output a single JSON object with ONLY the fields listed above (reportId, taskDes
     };
   }
 
-  private parseReviewResponse(output: Json, input: ReviewerInput): ReviewReport {
-    if (!isRecord(output) || typeof output.reportId !== "string" || typeof output.taskDescription !== "string" || typeof output.summary !== "string" || typeof output.status !== "string" || !["approved", "changes_requested", "blocked"].includes(output.status) || !Array.isArray(output.findings) || !Array.isArray(output.recommendations) || !isRecord(output.metadata) || typeof output.metadata.createdAt !== "string" || typeof output.metadata.agentVersion !== "string") {
-      throw new Error("Invalid review response: invalid report structure");
+  /** Revalidate a persisted Review business payload with the production contract. */
+  validateReviewResponse(output: Json, input: ReviewerInput): ReviewReport {
+    if (!isRecord(output) || typeof output.reportId !== "string" || typeof output.taskDescription !== "string" || typeof output.summary !== "string" || typeof output.status !== "string" || !["approved", "changes_requested", "blocked", "human_review_required"].includes(output.status) || !Array.isArray(output.findings) || !Array.isArray(output.recommendations) || !isRecord(output.metadata) || typeof output.metadata.createdAt !== "string" || typeof output.metadata.agentVersion !== "string") {
+      throw new ReviewValidationError("Invalid review response: invalid report structure", { validationStage: "structural", validationCode: "REVIEW_STRUCTURAL_INVALID_REPORT", issueCount: 1, issuePaths: ["$"], issueCodes: ["INVALID_REPORT"] });
     }
-    if (output.taskDescription !== input.task.description) throw new Error("Invalid review response: task description does not match the request");
+    if (output.taskDescription !== input.task.description) throw new ReviewValidationError("Invalid review response: task description does not match the request", { validationStage: "semantic", validationCode: "REVIEW_SEMANTIC_TASK_DESCRIPTION_MISMATCH", semanticRuleId: "REVIEW_SEMANTIC_TASK_DESCRIPTION_MATCH" });
 
     return {
       reportId: output.reportId,
@@ -303,12 +317,12 @@ Output a single JSON object with ONLY the fields listed above (reportId, taskDes
   }
 
   private parseFinding(value: Json): ReviewFinding {
-    if (!isRecord(value) || typeof value.id !== "string" || !isSeverity(value.severity) || !isCategory(value.category) || typeof value.title !== "string" || typeof value.description !== "string" || typeof value.recommendation !== "string" || (value.location !== undefined && typeof value.location !== "string")) throw new Error("Invalid review response: invalid finding");
+    if (!isRecord(value) || typeof value.id !== "string" || !isSeverity(value.severity) || !isCategory(value.category) || typeof value.title !== "string" || typeof value.description !== "string" || typeof value.recommendation !== "string" || (value.location !== undefined && typeof value.location !== "string")) throw new ReviewValidationError("Invalid review response: invalid finding", { validationStage: "structural", validationCode: "REVIEW_STRUCTURAL_INVALID_FINDING", issueCount: 1, issuePaths: ["$.findings[]"], issueCodes: ["INVALID_FINDING"] });
     return { id: value.id, severity: value.severity, category: value.category, title: value.title, description: value.description, recommendation: value.recommendation, ...(typeof value.location === "string" ? { location: value.location } : {}) };
   }
 
   private parseRecommendation(value: Json): ReviewRecommendation {
-    if (!isRecord(value) || typeof value.priority !== "string" || !["high", "medium", "low"].includes(value.priority) || typeof value.description !== "string" || (value.relatedFindingIds !== undefined && (!Array.isArray(value.relatedFindingIds) || !value.relatedFindingIds.every((item) => typeof item === "string")))) throw new Error("Invalid review response: invalid recommendation");
+    if (!isRecord(value) || typeof value.priority !== "string" || !["high", "medium", "low"].includes(value.priority) || typeof value.description !== "string" || (value.relatedFindingIds !== undefined && (!Array.isArray(value.relatedFindingIds) || !value.relatedFindingIds.every((item) => typeof item === "string")))) throw new ReviewValidationError("Invalid review response: invalid recommendation", { validationStage: "structural", validationCode: "REVIEW_STRUCTURAL_INVALID_RECOMMENDATION", issueCount: 1, issuePaths: ["$.recommendations[]"], issueCodes: ["INVALID_RECOMMENDATION"] });
     return { priority: value.priority as ReviewRecommendation["priority"], description: value.description, ...(Array.isArray(value.relatedFindingIds) ? { relatedFindingIds: value.relatedFindingIds.filter((item): item is string => typeof item === "string") } : {}) };
   }
 

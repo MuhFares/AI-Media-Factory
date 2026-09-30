@@ -13,13 +13,14 @@ import type { AgentId, Json } from "@ai-media-factory/runtime";
 import type { CancellationToken, ExecutionContext, ExecutionResponse } from "@ai-media-factory/runtime";
 import { BaseAgent, type AgentExecutionInput, type AgentExecutionOutput } from "@ai-media-factory/runtime";
 import type { CapabilityRequest, CapabilityResult } from "@ai-media-factory/runtime";
-import { PUBLISH_CAPABILITY_ID, PUBLISH_PLATFORM, idempotencyKeyFor } from "@ai-media-factory/tool-framework";
+import { PUBLISH_CAPABILITY_ID, PUBLISH_PLATFORM, PUBLIC_PUBLISH_SCOPE, PRIVATE_VALIDATION_SCOPE, normalizeFinalTechnicalQa } from "@ai-media-factory/tool-framework";
 import type {
   PublishStatus,
   PublisherDependencies,
   PublisherInput,
   PublishedReport,
   PublisherSourceArtifact,
+  PublisherAuthorization,
 } from "./types.js";
 
 type JsonRecord = { [key: string]: Json };
@@ -60,6 +61,15 @@ function isPublisherInput(value: Json): value is JsonRecord & PublisherInput {
     return false;
   }
   return true;
+}
+
+function validAuthorization(auth: PublisherAuthorization | undefined, finalMedia: PublisherSourceArtifact | undefined): boolean {
+  return auth !== undefined && finalMedia !== undefined && auth.status === "AUTHORIZED" && [PUBLIC_PUBLISH_SCOPE, PRIVATE_VALIDATION_SCOPE].includes(auth.scope)
+    && auth.workflowId === finalMedia.workflowId && auth.finalMediaArtifactId === String(finalMedia.artifactId)
+    && auth.authorityBinding !== undefined
+    && auth.authorityBinding.workflowId === finalMedia.workflowId
+    && auth.authorityBinding.finalMediaArtifactId === String(finalMedia.artifactId)
+    && auth.humanApprovalId.trim() !== "";
 }
 
 /** Describes why the content chain is not publishable, or null when viable. */
@@ -127,6 +137,16 @@ export class PublisherAgent extends BaseAgent {
       return { ok: false, reason: `an upstream artifact (${blocked.kind}) is ${blocked.status} and cannot be published.` };
     }
 
+    const finalMedia = artifacts.find((a) => a.kind === "final_media_artifact");
+    if (finalMedia !== undefined) {
+      if (!validAuthorization(input.publisherAuthorization, finalMedia)) return { ok: false, reason: "a valid PublisherAuthorization bound to the exact final media artifact is required." };
+      const technical = artifacts.find((a) => a.kind === "final_technical_qa");
+      if (technical === undefined || !normalizeFinalTechnicalQa(technical.payload).passed) return { ok: false, reason: "passing Final Technical QA is required." };
+      const product = artifacts.find((a) => a.kind === "final_product_review");
+      if (product === undefined || !isRecord(product.payload) || !["approved", "human_review_required"].includes(String(product.payload.status))) return { ok: false, reason: "an acceptable Final Product Review is required." };
+      return { ok: true, reason: "" };
+    }
+
     const brand = artifacts.find((a) => a.kind === "brand_report");
     if (brand !== undefined && isRecord(brand.payload) && brand.payload.status !== "approved") {
       return { ok: false, reason: "the brand gate is not approved." };
@@ -161,14 +181,20 @@ export class PublisherAgent extends BaseAgent {
   private buildCapabilityRequest(input: PublisherInput): CapabilityRequest | null {
     const artifacts = input.validatedArtifacts ?? [];
     const lead = artifacts[0];
+    const finalMedia = artifacts.find((a) => a.kind === "final_media_artifact");
     const video = artifacts.find((a) => a.kind === "video_report");
     const writer = artifacts.find((a) => a.kind === "writer_report");
-    const videoId = video !== undefined && isRecord(video.payload) && typeof video.payload.videoId === "string" ? video.payload.videoId : "";
-    if (videoId === "") return null;
+    const finalPayload = finalMedia !== undefined && isRecord(finalMedia.payload) ? finalMedia.payload : undefined;
+    const videoId = finalMedia !== undefined ? String(finalMedia.artifactId) : video !== undefined && isRecord(video.payload) && typeof video.payload.videoId === "string" ? video.payload.videoId : "";
+    if (videoId === "" || finalPayload === undefined || typeof finalPayload.sha256 !== "string") return null;
+    const localPath = typeof finalPayload.storageReference === "string" ? finalPayload.storageReference : typeof finalPayload.finalFileReference === "string" ? finalPayload.finalFileReference : "";
+    if (localPath === "") return null;
 
     const title = this.deriveTitle(input, artifacts, writer);
-    const assetId = videoId;
-    const idempotencyKey = idempotencyKeyFor(lead?.workflowId ?? `workflow-${input.requestId}`, assetId, this.publisherConfig.platform);
+    const authorization = input.publisherAuthorization;
+    if (authorization === undefined) return null;
+    const binding = authorization.authorityBinding;
+    const idempotencyKey = binding.publicationIdentity;
 
     return {
       requestId: `publish-${input.requestId}`,
@@ -178,11 +204,31 @@ export class PublisherAgent extends BaseAgent {
       workflowId: lead?.workflowId ?? `workflow-${input.requestId}`,
       correlationId: lead?.correlationId ?? `correlation-${input.requestId}`,
       input: {
-        assetId,
+        projectId: binding.projectId,
+        finalMediaArtifactId: videoId,
+        finalMediaSha256: binding.finalMediaSha256,
+        mediaTransportRef: { type: "LOCAL_FILE", path: localPath, expectedSha256: binding.finalMediaSha256,
+          ...(typeof finalPayload.byteCount === "number" ? { expectedByteCount: finalPayload.byteCount } : {}), mimeType: "video/mp4" },
+        targetAccountId: binding.targetAccountId,
         title,
         ...(input.instructions === undefined ? {} : { description: input.instructions }),
         idempotencyKey,
         metadata: { workflowId: lead?.workflowId ?? "", correlationId: lead?.correlationId ?? "" },
+        publicationAuthority: {
+          approvalId: authorization.humanApprovalId,
+          decision: "approved",
+          scope: authorization.scope,
+          projectId: binding.projectId,
+          workflowId: binding.workflowId,
+          projectMode: binding.projectMode,
+          finalMediaArtifactId: binding.finalMediaArtifactId,
+          finalMediaSha256: binding.finalMediaSha256,
+          finalProductReviewId: binding.finalProductReviewId,
+          targetPlatform: binding.targetPlatform,
+          targetAccountId: binding.targetAccountId,
+          publicationPayloadHash: binding.publicationPayloadHash,
+          publicationIdentity: binding.publicationIdentity,
+        },
       },
       requestedAt: new Date().toISOString(),
     };
@@ -223,6 +269,12 @@ export class PublisherAgent extends BaseAgent {
     const publishedAt = typeof output.publishedAt === "string" ? output.publishedAt : "";
     const providerId = typeof output.providerId === "string" ? output.providerId : "";
     const idempotencyKey = typeof output.idempotencyKey === "string" ? output.idempotencyKey : "";
+    const finalMediaArtifactId = typeof output.finalMediaArtifactId === "string" ? output.finalMediaArtifactId : "";
+    const finalMediaSha256 = typeof output.finalMediaSha256 === "string" ? output.finalMediaSha256 : "";
+    const mediaTransportType = typeof output.mediaTransportType === "string" ? output.mediaTransportType : "";
+    const mediaTransportFingerprint = typeof output.mediaTransportFingerprint === "string" ? output.mediaTransportFingerprint : "";
+    const finalMedia = artifacts.find((a) => a.kind === "final_media_artifact");
+    const finalMediaPayload = finalMedia !== undefined && isRecord(finalMedia.payload) ? finalMedia.payload : undefined;
 
     const isGrantedCompletion = evidence !== undefined
       && evidence.capabilityId === PUBLISH_CAPABILITY_ID
@@ -230,12 +282,12 @@ export class PublisherAgent extends BaseAgent {
       && evidence.workflowId === (artifacts[0]?.workflowId ?? `workflow-${input.requestId}`)
       && evidence.correlationId === (artifacts[0]?.correlationId ?? `correlation-${input.requestId}`)
       && evidence.succeeded === true
-      && evidence.platform === platform;
+      && evidence.platform === platform
+      && finalMediaArtifactId === String(finalMedia?.artifactId ?? "")
+      && finalMediaSha256 === String(finalMediaPayload?.sha256 ?? "");
 
     const video = artifacts.find((a) => a.kind === "video_report");
-    const sourceVideoId = video !== undefined && isRecord(video.payload) && typeof video.payload.videoId === "string"
-      ? video.payload.videoId
-      : "";
+    const sourceVideoId = finalMedia !== undefined ? String(finalMedia.artifactId) : video !== undefined && isRecord(video.payload) && typeof video.payload.videoId === "string" ? video.payload.videoId : "";
 
     if (!isGrantedCompletion || publicationId === "" || publishedUrl === "") {
       return this.blockedReport(
@@ -260,6 +312,10 @@ export class PublisherAgent extends BaseAgent {
       publishedUrl,
       publishedAt,
       sourceVideoId,
+      finalMediaArtifactId,
+      finalMediaSha256,
+      mediaTransportType,
+      mediaTransportFingerprint,
       providerId,
       executionEvidencePresent: true,
       capabilityExecutions: execution === undefined ? [] : [execution],
@@ -281,6 +337,10 @@ export class PublisherAgent extends BaseAgent {
       publishedUrl: "",
       publishedAt: "",
       sourceVideoId: "",
+      finalMediaArtifactId: "",
+      finalMediaSha256: "",
+      mediaTransportType: "",
+      mediaTransportFingerprint: "",
       providerId: "",
       executionEvidencePresent: false,
       metadata: { workflowId: "", correlationId: "", createdAt: new Date().toISOString(), agentVersion: this.version },
@@ -312,6 +372,10 @@ export class PublisherAgent extends BaseAgent {
       publishedUrl: report.publishedUrl,
       publishedAt: report.publishedAt,
       sourceVideoId: report.sourceVideoId,
+      finalMediaArtifactId: report.finalMediaArtifactId,
+      finalMediaSha256: report.finalMediaSha256,
+      mediaTransportType: report.mediaTransportType,
+      mediaTransportFingerprint: report.mediaTransportFingerprint,
       providerId: report.providerId,
       executionEvidencePresent: report.executionEvidencePresent,
       metadata: report.metadata,

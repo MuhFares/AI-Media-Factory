@@ -1,0 +1,29 @@
+{
+  "deploymentId": "program-04-wan-hardening-deployment-v1",
+  "endpointId": "ry49lc45y50ldy",
+  "imageRepository": "ghcr.io/muhfares/amf-wan22-i2v",
+  "handlerDirectory": "experimental/wan2.2-i2v-v1",
+  "receiptStorage": {
+    "kind": "RUNPOD_NETWORK_VOLUME",
+    "mountPath": "/runpod-volume",
+    "receiptDirectory": "/runpod-volume/amf-video-receipts",
+    "networkVolumeIdEnvironmentKey": "RUNPOD_VIDEO_NETWORK_VOLUME_ID"
+  },
+  "managementCredentialEnvironmentKey": "RUNPOD_MANAGEMENT_API_KEY",
+  "immutableImageDigestEnvironmentKey": "RUNPOD_VIDEO_HANDLER_IMAGE_DIGEST",
+  "runtime": {
+    "model": "wan2.2",
+    "width": 480,
+    "height": 832,
+    "frames": 81,
+    "steps": 10,
+    "cfg": 2.0
+  },
+  "timeoutsMs": {
+    "submissionAcknowledgement": 300000,
+    "generation": 900000,
+    "pollInterval": 4000,
+    "statusRequest": 30000,
+    "resultDownload": 120000
+  }
+}

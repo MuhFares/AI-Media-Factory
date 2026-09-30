@@ -37,6 +37,7 @@ export class DefaultRecoveryManager implements RecoveryManager {
 
     const completed = new Set(checkpoint.completedSteps);
 
+    const checkpointState = parseWorkflowState(checkpoint.state);
     const steps = instance.steps.map((s) => {
       if (completed.has(s.stepId)) {
         return { ...s, status: "completed" as const };
@@ -44,6 +45,10 @@ export class DefaultRecoveryManager implements RecoveryManager {
       if (s.status === "failed" || s.status === "compensated" || s.status === "skipped") {
         return s; // failure semantics preserved: never becomes successful downstream input
       }
+      // An approval wait is a durable state, not an interrupted execution.
+      // Preserve the running gate across reload so a subsequent approval is
+      // applied to the same governed transition.
+      if (checkpointState === "AWAITING_APPROVAL" && s.status === "running") return s;
       // pending or running-from-crash → re-run idempotently
       return { ...s, status: "pending" as const, startedAt: null, finishedAt: null };
     });
@@ -55,22 +60,51 @@ export class DefaultRecoveryManager implements RecoveryManager {
     // enhancement — Phase 0 targets the sequential-content pipeline.)
     const ready = instance.ready.filter((id) => {
       const rec = steps.find((s) => s.stepId === id);
-      return rec && (rec.status === "pending" || rec.status === "failed");
+      if (rec === undefined) return false;
+      // An approval wait is a durable state. The awaited gate stays in the
+      // frontier so a cold resume + approval continues from the gate's
+      // successor; excluding it once emptied the frontier and triggered the
+      // safety net below, which injected an unrelated downstream stage into
+      // the frontier (the 2026-09-14 analytics incident: an AWAITING_APPROVAL
+      // resume executed `analytics` in parallel with `director` because the
+      // persistence adapter loads step records in alphabetical order).
+      if (rec.status === "running" && checkpointState === "AWAITING_APPROVAL") return true;
+      return rec.status === "pending" || rec.status === "failed";
     });
 
-    // Safety net: if the stored frontier is empty but work remains, surface the
-    // first still-pending step so the workflow can always make progress.
-    const effectiveReady =
-      ready.length > 0 || !steps.some((s) => s.status === "pending")
-        ? ready
-        : [steps.find((s) => s.status === "pending")!.stepId];
+    // Safety net: if the stored frontier is empty but work remains, surface
+    // the first still-pending step IN DEFINITION ORDER so the workflow can
+    // always make progress. The definition is the traversal authority — the
+    // stored step-array order is a storage artifact (alphabetical in the
+    // Postgres adapter) and must never select the frontier.
+    let effectiveReady = ready;
+    if (effectiveReady.length === 0 && steps.some((s) => s.status === "pending")) {
+      const definitionOrder = await this.definitionStepOrder(instance);
+      const firstPending = definitionOrder.find((id) => steps.find((s) => s.stepId === id)?.status === "pending")
+        ?? steps.find((s) => s.status === "pending")!.stepId;
+      effectiveReady = [firstPending];
+    }
 
     return {
       ...instance,
-      state: parseWorkflowState(checkpoint.state),
+      state: checkpointState,
       steps,
       ready: effectiveReady,
     };
+  }
+
+  /** The definition's step order is the canonical traversal order for frontier repair. */
+  private async definitionStepOrder(instance: WorkflowInstance): Promise<string[]> {
+    try {
+      const definition = await this.getDefinition(instance.definitionId, instance.definitionVersion) as { steps?: Array<{ id: string }> } | null;
+      if (definition && Array.isArray(definition.steps) && definition.steps.length > 0) {
+        return definition.steps.map((step) => step.id);
+      }
+    } catch {
+      // Definition unavailable (legacy loader) — the caller falls back to the
+      // persisted record order below.
+    }
+    return instance.steps.map((s) => s.stepId);
   }
 
   async isRecoverable(workflowId: Uuid): Promise<boolean> {
@@ -93,6 +127,8 @@ function parseWorkflowState(value: string): WorkflowState {
     case "FAILED":
     case "CANCELLED":
     case "ESCALATED":
+    case "REVISION_REQUIRED":
+    case "BUSINESS_BLOCKED":
       return value;
     default:
       throw new Error(`Invalid workflow state in checkpoint: ${value}`);

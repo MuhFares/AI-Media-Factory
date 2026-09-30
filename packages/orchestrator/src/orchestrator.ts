@@ -16,6 +16,7 @@
  */
 
 import type { AgentExecutorPort, Json, WorkflowContext } from "@ai-media-factory/shared";
+import { assertCanonicalStageCatalog, assertDirectiveOperational } from "@ai-media-factory/shared";
 import { CollaborationRunner, type CollaborationRunResult } from "@ai-media-factory/workflow-engine";
 import {
   DIRECTIVE_TEMPLATES,
@@ -23,6 +24,7 @@ import {
   listAgents,
   listOutputs,
   makeStages,
+  assertDirectiveTemplateCatalogConsistency,
 } from "./templates.js";
 import type {
   OrchestratorDirective,
@@ -70,12 +72,15 @@ export class Orchestrator {
       throw new Error("produce() requires an AgentExecutorPort — provide one via the Orchestrator constructor");
     }
     this.assertContext(context);
+    assertDirectiveOperational(directive);
     const prepared = this.prepare(directive, options);
     return new CollaborationRunner(this.deps.executor).run(prepared.stages, context);
   }
 
   private prepare(directive: OrchestratorDirective, options?: OrchestratorOptions): OrchestratorPlan {
     this.assertDirective(directive);
+    assertCanonicalStageCatalog();
+    assertDirectiveTemplateCatalogConsistency();
     const normalized = this.assertAndNormalizeOptions(options);
     const specs = DIRECTIVE_TEMPLATES[directive];
     const stages = makeStages(specs, normalized);

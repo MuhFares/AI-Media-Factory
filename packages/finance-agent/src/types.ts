@@ -86,6 +86,8 @@ export interface FinanceConfig {
   model: string;
   systemPrompt: string;
   includeReasoning?: boolean;
+  temperature?: number;
+  maxOutputTokens?: number;
 }
 
 export interface FinanceDependencies extends BaseAgentDependencies {

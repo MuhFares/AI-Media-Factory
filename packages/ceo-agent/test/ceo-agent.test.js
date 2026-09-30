@@ -1,4 +1,4 @@
-import { strictEqual, deepStrictEqual, ok, throws } from "node:assert";
+import { strictEqual, deepStrictEqual, ok, throws, rejects } from "node:assert";
 import { describe, it } from "node:test";
 import { Orchestrator } from "@ai-media-factory/orchestrator";
 import {
@@ -167,27 +167,22 @@ describe("CEOAgent — Orchestrator integration (CEO → ExecutiveDirective → 
     strictEqual(context.data.objective, "Research the pipeline");
   });
 
-  it("executes through the existing Orchestrator produce path (single execution path)", async () => {
+  it("blocks a retired directive before the existing Orchestrator execution path", async () => {
     const ceo = createCEOAgent({ registry: { has: (id) => ALL.has(id) }, clock: FIXED_CLOCK });
     const directive = ceo.decide({ objective: "Research the pipeline", intent: "research" });
     const { executor, calls } = makeFake(ALL);
     const orchestrator = new Orchestrator({ executor });
     const context = executiveContext(directive, TARGET);
-    const result = await produceExecutive(orchestrator, directive, context);
-    strictEqual(result.status, "completed");
-    deepStrictEqual(calls, ["planner", "research"]);
-    deepStrictEqual(result.lineage.map((item) => item.workflowId), ["workflow-ceo", "workflow-ceo"]);
-    deepStrictEqual(result.lineage.map((item) => item.correlationId), ["corr-ceo", "corr-ceo"]);
-    strictEqual(result.lineage[1].parentArtifact.artifactId, "planner-1");
+    await rejects(() => produceExecutive(orchestrator, directive, context), /DIRECTIVE_RETIRED:research/);
+    deepStrictEqual(calls, []);
   });
 
-  it("propagates execution failures through the produce path", async () => {
+  it("does not let a retired directive reach even a failing executor", async () => {
     const ceo = createCEOAgent({ registry: { has: (id) => ALL.has(id) }, clock: FIXED_CLOCK });
     const directive = ceo.decide({ objective: "Research the pipeline", intent: "research" });
     const { executor } = makeFake(new Set(["planner"]));
     const orchestrator = new Orchestrator({ executor });
-    const result = await produceExecutive(orchestrator, directive, executiveContext(directive, TARGET));
-    strictEqual(result.status, "failed");
+    await rejects(() => produceExecutive(orchestrator, directive, executiveContext(directive, TARGET)), /DIRECTIVE_RETIRED:research/);
   });
 
   it("never forwards an invalid directive to the Orchestrator", () => {
@@ -198,13 +193,12 @@ describe("CEOAgent — Orchestrator integration (CEO → ExecutiveDirective → 
     strictEqual(reached, false);
   });
 
-  it("does not create an alternate execution path (uses Orchestrator.produce)", async () => {
+  it("does not create an alternate path around the operational directive gate", async () => {
     const ceo = createCEOAgent({ registry: { has: (id) => ALL.has(id) }, clock: FIXED_CLOCK });
     const directive = ceo.decide({ objective: "Plan", intent: "plan" });
     const { executor, calls } = makeFake(ALL);
     const orchestrator = new Orchestrator({ executor });
-    const result = await produceExecutive(orchestrator, directive, executiveContext(directive, TARGET));
-    strictEqual(result.status, "completed");
-    deepStrictEqual(calls, ["planner"]);
+    await rejects(() => produceExecutive(orchestrator, directive, executiveContext(directive, TARGET)), /DIRECTIVE_RETIRED:plan/);
+    deepStrictEqual(calls, []);
   });
 });

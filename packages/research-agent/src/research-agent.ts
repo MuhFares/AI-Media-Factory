@@ -8,7 +8,7 @@ import type { ExecutionContext, ExecutionResponse, CancellationToken } from "@ai
 import { BaseAgent, type BaseAgentDependencies, type AgentExecutionInput, type AgentExecutionOutput } from "@ai-media-factory/runtime";
 import type { ExecutionRequest } from "@ai-media-factory/runtime";
 import type { CapabilityRequest } from "@ai-media-factory/tool-framework";
-import { isVisualResearchResult } from "@ai-media-factory/tool-framework";
+import { isVisualResearchResult, WEB_SEARCH_MAX_QUERY_LENGTH } from "@ai-media-factory/tool-framework";
 import type {
   ResearchAgentInput,
   ResearchCallUsage,
@@ -17,6 +17,10 @@ import type {
   ResearchPlan,
   ResearchReport,
   ResearchSource,
+  ResearchMission,
+  CandidateOpportunity,
+  CandidateVerificationPlan,
+  ResearchCandidateStory,
 } from "./research-types.js";
 import type { ContentIntelligenceResult, ResearchRequest, ResearchSourceRouter } from "./content-intelligence.js";
 
@@ -24,6 +28,8 @@ import type { ContentIntelligenceResult, ResearchRequest, ResearchSourceRouter }
 export interface ResearchAgentDependencies extends BaseAgentDependencies {
   config: ResearchConfig;
   sourceRouter?: ResearchSourceRouter;
+  /** Canonical runtime clock; injectable so date ownership is deterministic in tests. */
+  now?: () => Date;
 }
 
 interface ResearchExecutionResult {
@@ -100,6 +106,48 @@ function toCallUsage(usage: unknown): ResearchCallUsage {
   return { inputTokens: integer(record.inputTokens), outputTokens: integer(record.outputTokens), costUsd: cost };
 }
 
+/** Safe record coercion for deterministic evidence handling (never throws). */
+function safeRecord(value: Json): JsonRecord {
+  return isJsonRecord(value) ? value : {};
+}
+
+/** Recovery-attempt scope suffix for per-attempt capability identities. */
+function recoveryScopeSuffix(input: ResearchAgentInput): string {
+  const id = (input as unknown as { recoveryScopeId?: unknown }).recoveryScopeId;
+  return typeof id === "string" && id.trim() !== "" ? `:recovery:${id.trim()}` : "";
+}
+
+/**
+ * Deterministic lane-evidence zip: flatten successful retrieval results across
+ * bounded discovery executions, preserving lane association. Empty/blocked/
+ * failed executions contribute nothing (honest, never invented).
+ */
+function zipLaneEvidence(
+  requests: readonly MissionCapabilityRequest[],
+  executions: readonly unknown[],
+): { result: Json; laneId: string }[] {
+  const zipped: { result: Json; laneId: string }[] = [];
+  const count = Math.min(requests.length, executions.length);
+  for (let index = 0; index < count; index += 1) {
+    const request = requests[index];
+    const execution = executions[index];
+    if (!isJsonRecord(execution as Json)) continue;
+    const record = execution as unknown as JsonRecord;
+    if (record.status !== "success") continue;
+    const output = isJsonRecord((record.output ?? null) as Json) ? (record.output as JsonRecord) : null;
+    const results = output !== null && Array.isArray(output.results) ? output.results : [];
+    const laneRaw = (request.input as Record<string, unknown>).laneId;
+    const laneId = typeof laneRaw === "string" && laneRaw.trim().length > 0 ? laneRaw : "unknown";
+    for (const item of results.slice(0, 5)) {
+      if (item === null || typeof item !== "object" || Array.isArray(item)) continue;
+      zipped.push({ result: item as Json, laneId });
+      if (zipped.length >= MAX_CANDIDATES * 2) break;
+    }
+    if (zipped.length >= MAX_CANDIDATES * 2) break;
+  }
+  return zipped;
+}
+
 /** Successfully retrieved web results across capability executions (evidence for synthesis). */
 function collectSuccessfulRetrievals(capabilityExecutions: readonly unknown[]): { providerId: string; results: { id?: unknown; title?: unknown; url?: unknown; snippet?: unknown; source?: unknown }[] }[] {
   const collected: { providerId: string; results: { id?: unknown; title?: unknown; url?: unknown; snippet?: unknown; source?: unknown }[] }[] = [];
@@ -118,6 +166,352 @@ function collectSuccessfulRetrievals(capabilityExecutions: readonly unknown[]): 
     });
   }
   return collected;
+}
+
+/** A discovery or verification retrieval request declared by the mission. */
+export interface MissionCapabilityRequest extends CapabilityRequest<JsonRecord> {
+  readonly requestId: string;
+  readonly capabilityId: string;
+  readonly input: JsonRecord;
+}
+
+/** Runtime-owned, executable retrieval plan entry materialized from a mission lane. */
+export interface ExecutableRetrievalPlanEntry {
+  readonly retrievalId: string;
+  readonly laneId: string;
+  readonly purpose: string;
+  readonly capabilityId: "web.search";
+  readonly rawQuery: string;
+  readonly compiledQuery: string;
+  readonly finalizedQuery: string;
+  readonly semanticRequirements: readonly WebSearchSemanticRequirement[];
+  readonly retainedOutsideProviderQuery: readonly RetainedQueryContext[];
+  readonly packingTrace: WebSearchPackingTrace;
+  readonly role: "DISCOVERY";
+  readonly accountingOrdinal: number;
+  readonly request: MissionCapabilityRequest;
+}
+
+/** Deterministic verification-query builder (mirrors the worker-side contract). */
+export function buildVerificationQueryFor(candidateTopic: string, maxLength = WEB_SEARCH_MAX_QUERY_LENGTH): string {
+  const topicWords = deduplicateQueryWords([candidateTopic]).split(/\s+/u).filter(Boolean);
+  if (topicWords.length === 0) throw new Error("VERIFICATION_CANDIDATE_REQUIRED");
+  const authority = ["museum", "archive", "university", "official", "sources", "evidence"];
+  const minimum = deduplicateQueryWords([topicWords[0] ?? "", ...authority]);
+  if (minimum.length > maxLength) throw new Error("LOCAL_QUERY_COMPILATION_FAILED:verification:MANDATORY_SEMANTICS_DO_NOT_FIT");
+  const packed: string[] = [];
+  for (const word of [...topicWords, ...authority]) {
+    const candidate = deduplicateQueryWords([...packed, word]);
+    if (candidate.length <= maxLength) packed.push(word);
+  }
+  return deduplicateQueryWords(packed);
+}
+
+/** Maximum discovery retrieval requests per V2 execution (bounded). */
+export const MAX_DISCOVERY_REQUESTS = 3;
+/** Maximum verification retrieval requests per V2 execution (bounded). */
+export const MAX_VERIFICATION_REQUESTS = 3;
+/** Maximum candidates formed per V2 execution (bounded). */
+export const MAX_CANDIDATES = 6;
+
+/** Canonical discovery lane ids (missions should prefer these; custom ids allowed with purpose). */
+export const CANONICAL_DISCOVERY_LANES = [
+  "TREND_SIGNAL",
+  "SOCIAL_CONTENT_SIGNAL",
+  "SEARCH_DEMAND",
+  "COMPETITOR_PATTERN",
+  "HISTORICAL_OPPORTUNITY",
+  "CURRENT_EVENT_CONNECTION",
+  "SEASONAL_CALENDAR",
+  "EVERGREEN_CURIOSITY",
+  "FACTUAL_ARCHIVE_DISCOVERY",
+] as const;
+
+export interface DiscoveryQueryQuality {
+  hasGeographyContext: boolean;
+  hasHistoricalIntent: boolean;
+  hasConcreteCandidateIntent: boolean;
+  hasEvidenceIntent: boolean;
+  hasLaneIntent: boolean;
+  hasMarketLanguageContext: boolean;
+  providerSuitable: boolean;
+  nonGeneric: boolean;
+  passes: boolean;
+}
+
+export type QuerySemanticPriority = "TIER_1_REQUIRED" | "TIER_2_HIGH_VALUE" | "TIER_3_LINEAGE_ONLY";
+
+export interface WebSearchSemanticRequirement {
+  readonly dimension: string;
+  readonly priority: QuerySemanticPriority;
+  readonly compactTerms: readonly string[];
+  readonly canonicalSource: string;
+}
+
+export interface RetainedQueryContext {
+  readonly dimension: string;
+  readonly value: string;
+  readonly reason: string;
+}
+
+export interface WebSearchPackingTrace {
+  readonly originalQuery: string;
+  readonly providerQuery: string;
+  readonly retainedDimensions: readonly string[];
+  readonly retainedOutsideProviderQuery: readonly RetainedQueryContext[];
+  readonly droppedInstructionalProse: boolean;
+}
+
+export interface PackedWebSearchQuery {
+  readonly providerQuery: string;
+  readonly semanticRequirements: readonly WebSearchSemanticRequirement[];
+  readonly retainedOutsideProviderQuery: readonly RetainedQueryContext[];
+  readonly trace: WebSearchPackingTrace;
+}
+
+const containsAny = (value: string, patterns: readonly RegExp[]): boolean => patterns.some((pattern) => pattern.test(value));
+
+/** Evaluate a discovery query against the structured mission and lane, not length alone. */
+export function evaluateDiscoveryQueryQuality(query: string, mission: ResearchMission, lane: Pick<ResearchMission["discoveryLanes"][number], "laneId" | "purpose">): DiscoveryQueryQuality {
+  const value = query.toLowerCase();
+  const geography = mission.geography ?? mission.market;
+  const historical = mission.factualMode === "HISTORICAL_POV";
+  const geographyRequired = geography !== null && geography.trim() !== "";
+  const marketLanguageRequired = [mission.market, mission.language].some((item) => item !== null && item.trim() !== "");
+  const hasGeographyContext = !geographyRequired || value.includes(geography!.toLowerCase());
+  const hasHistoricalIntent = !historical || containsAny(value, [/\bhistor(?:y|ic|ical)\b/, /\barchive\b/, /\bheritage\b/, /\banniversar(?:y|ies)\b/]);
+  const hasConcreteCandidateIntent = historical
+    ? containsAny(value, [/\bnamed\b/, /\bevents?\b/, /\bpeople\b/, /\bpersons?\b/, /\bobjects?\b/, /\bincidents?\b/, /\bfigures?\b/, /\bartifacts?\b/])
+    : containsAny(value, [/\bconcepts?\b/, /\bcharacters?\b/, /\bsettings?\b/, /\bstories\b/, /\bvisuals?\b/, /\bideas?\b/]);
+  const hasEvidenceIntent = historical
+    ? containsAny(value, [/\bevidence\b/, /\bsources?\b/, /\bmuseums?\b/, /\barchives?\b/, /\buniversity\b/, /\binstitution(?:al|s)?\b/, /\breputable\b/, /\bdocumented\b/])
+    : containsAny(value, [/\breferences?\b/, /\bvisual inspiration\b/, /\bsource material\b/]);
+  const lanePatterns: Record<string, readonly RegExp[]> = {
+    HISTORICAL_OPPORTUNITY: [/\bopportunit(?:y|ies)\b/, /\bdiscover(?:y|ies)?\b/, /\bnamed\b/],
+    FACTUAL_ARCHIVE_DISCOVERY: [/\barchive\b/, /\binstitution(?:al|s)?\b/, /\bprimary sources?\b/, /\breputable sources?\b/],
+    TREND_SIGNAL: [/\bcurrent\b/, /\bsearch signals?\b/, /\bcontent signals?\b/, /\btrend signals?\b/],
+    SEASONAL_CALENDAR: [/\bdates?\b/, /\banniversar(?:y|ies)\b/, /\bcalendar\b/, /\bseasonal\b/],
+  };
+  const laneDescriptor = `${lane.laneId} ${lane.purpose}`.toLowerCase();
+  const hasLaneIntent = lanePatterns[lane.laneId] !== undefined
+    ? containsAny(value, lanePatterns[lane.laneId]!)
+    : /current|relevance|signal|trend|season|calendar/u.test(laneDescriptor)
+      ? containsAny(value, [/\bcurrent\b/, /\brelevance\b/, /\bsignals?\b/, /\bdates?\b/, /\bcalendar\b/])
+      : /archive|source|evidence|verify|verification/u.test(laneDescriptor)
+        ? hasEvidenceIntent
+        : historical ? hasHistoricalIntent && hasConcreteCandidateIntent : hasConcreteCandidateIntent;
+  const hasMarketLanguageContext = !marketLanguageRequired || [mission.market, mission.language]
+    .filter((item): item is string => item !== null && item.trim() !== "")
+    .every((item) => value.includes(item.toLowerCase()));
+  const wordCount = value.split(/\s+/u).filter(Boolean).length;
+  const providerSuitable = query.length <= WEB_SEARCH_MAX_QUERY_LENGTH && wordCount >= 4 && wordCount <= 30 && !/[\r\n]/u.test(query);
+  const nonGeneric = historical
+    ? hasGeographyContext && hasConcreteCandidateIntent && hasEvidenceIntent
+    : hasConcreteCandidateIntent && hasEvidenceIntent;
+  return {
+    hasGeographyContext,
+    hasHistoricalIntent,
+    hasConcreteCandidateIntent,
+    hasEvidenceIntent,
+    hasLaneIntent,
+    hasMarketLanguageContext,
+    providerSuitable,
+    nonGeneric,
+    // Audience/platform/editorial context is mission lineage, not a literal
+    // requirement for every provider search box query.
+    passes: hasGeographyContext && hasHistoricalIntent && hasConcreteCandidateIntent && hasEvidenceIntent && hasLaneIntent && providerSuitable && nonGeneric,
+  };
+}
+
+/** Compile missing mission dimensions into a bounded, deterministic discovery query. */
+export function compileDiscoveryQuery(query: string, mission: ResearchMission, lane: Pick<ResearchMission["discoveryLanes"][number], "laneId" | "purpose">): string {
+  const original = query.trim().replace(/\s+/g, " ");
+  const quality = evaluateDiscoveryQueryQuality(original, mission, lane);
+  if (quality.passes) return original;
+  const parts = [original];
+  const geography = mission.geography ?? mission.market;
+  if (!quality.hasGeographyContext && geography) parts.push(geography);
+  if (mission.factualMode === "HISTORICAL_POV") {
+    if (!quality.hasHistoricalIntent) parts.push("historical discovery");
+    if (!quality.hasConcreteCandidateIntent) parts.push("named events people objects incidents");
+    if (!quality.hasEvidenceIntent) parts.push("museum archive reputable sources evidence");
+  } else {
+    if (!quality.hasConcreteCandidateIntent) parts.push("original fantasy concepts characters settings");
+    if (!quality.hasEvidenceIntent) parts.push("creative references visual inspiration");
+  }
+  const laneIntent: Record<string, string> = {
+    HISTORICAL_OPPORTUNITY: "historical opportunity discovery",
+    FACTUAL_ARCHIVE_DISCOVERY: "institutional archive primary sources",
+    TREND_SIGNAL: "current search content signals",
+    SEASONAL_CALENDAR: "historical dates anniversaries calendar",
+  };
+  if (!quality.hasLaneIntent) parts.push(laneIntent[lane.laneId] ?? lane.purpose);
+  if (!quality.hasMarketLanguageContext) {
+    if (mission.market) parts.push(`${mission.market} market`);
+    if (mission.language) parts.push(`${mission.language} language`);
+  }
+  return [...new Set(parts.filter(Boolean))].join(" ").replace(/\s+/g, " ").trim();
+}
+
+function deduplicateQueryWords(parts: readonly string[]): string {
+  const seen = new Set<string>();
+  const words: string[] = [];
+  for (const word of parts.join(" ").replace(/[^\p{L}\p{N}._-]+/gu, " ").split(/\s+/u).filter(Boolean)) {
+    const key = word.toLocaleLowerCase("en-US");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    words.push(word);
+  }
+  return words.join(" ");
+}
+
+function compactLaneIntent(lane: Pick<ResearchMission["discoveryLanes"][number], "laneId" | "purpose">): string {
+  const descriptor = `${lane.laneId} ${lane.purpose}`.toLowerCase();
+  if (/current|relevance|signal|trend|season|calendar/u.test(descriptor)) return "current relevance signals";
+  if (/archive|source|evidence|verify|verification/u.test(descriptor)) return "archive evidence discovery";
+  return "historical discovery opportunities";
+}
+
+function semanticRequirementsForWebSearch(
+  mission: ResearchMission,
+  lane: Pick<ResearchMission["discoveryLanes"][number], "laneId" | "purpose">,
+): { requirements: WebSearchSemanticRequirement[]; outside: RetainedQueryContext[] } {
+  const historical = mission.factualMode === "HISTORICAL_POV";
+  const geography = mission.geography ?? mission.market;
+  const descriptor = `${lane.laneId} ${lane.purpose}`.toLowerCase();
+  const currentLane = /current|relevance|signal|trend|season|calendar/u.test(descriptor);
+  const requirements: WebSearchSemanticRequirement[] = [
+    ...(geography ? [{ dimension: "geography", priority: "TIER_1_REQUIRED" as const, compactTerms: deduplicateQueryWords([geography]).split(/\s+/u), canonicalSource: "mission.geography|mission.market" }] : []),
+    { dimension: "subject_domain", priority: "TIER_1_REQUIRED", compactTerms: historical ? ["history"] : ["fantasy"], canonicalSource: "mission.factualMode" },
+    { dimension: "concrete_discovery_class", priority: "TIER_1_REQUIRED", compactTerms: historical ? ["events", "people", "artifacts", "places"] : ["concepts", "characters", "settings"], canonicalSource: "lane purpose + factual mode" },
+    { dimension: "evidence_orientation", priority: "TIER_1_REQUIRED", compactTerms: historical ? ["sources", "evidence"] : ["references", "inspiration"], canonicalSource: "mission.verificationRequirements" },
+    ...(historical ? [{ dimension: "authority_preference", priority: "TIER_2_HIGH_VALUE" as const, compactTerms: ["museum", "archive", "university"], canonicalSource: "mission.verificationRequirements + lane.queryGuidance" }] : []),
+    { dimension: "lane_purpose", priority: "TIER_2_HIGH_VALUE", compactTerms: compactLaneIntent(lane).split(/\s+/u), canonicalSource: "lane.laneId + lane.purpose" },
+    ...(currentLane ? [{ dimension: "runtime_date", priority: "TIER_2_HIGH_VALUE" as const, compactTerms: [mission.currentDate], canonicalSource: "runtime currentDate" }] : []),
+  ];
+  const outside: RetainedQueryContext[] = [
+    ...(mission.language ? [{ dimension: "language", value: mission.language, reason: "Audience/language targeting remains in mission lineage; it is not essential lexical search-box semantics." }] : []),
+    ...(mission.audience ? [{ dimension: "audience", value: mission.audience, reason: "Audience framing is used during opportunity assessment and synthesis, outside provider query text." }] : []),
+    ...(mission.platforms.length > 0 ? [{ dimension: "platforms", value: mission.platforms.join(", "), reason: "Platform intent remains in mission lineage; unsupported social capabilities are not simulated through web.search terms." }] : []),
+    { dimension: "content_pillar", value: mission.contentPillar, reason: "Editorial POV and short-form framing remain in mission and synthesis lineage." },
+  ];
+  return { requirements, outside };
+}
+
+/** Deterministically pack rich intent into a search-engine-native provider query. */
+export function packWebSearchQuery(
+  compiledQuery: string,
+  mission: ResearchMission,
+  lane: Pick<ResearchMission["discoveryLanes"][number], "laneId" | "purpose">,
+  maxLength = WEB_SEARCH_MAX_QUERY_LENGTH,
+): PackedWebSearchQuery {
+  const normalized = compiledQuery.trim().replace(/\s+/gu, " ");
+  const { requirements, outside } = semanticRequirementsForWebSearch(mission, lane);
+  if (normalized.length <= maxLength && evaluateDiscoveryQueryQuality(normalized, mission, lane).passes) {
+    return {
+      providerQuery: normalized,
+      semanticRequirements: requirements,
+      retainedOutsideProviderQuery: outside,
+      trace: { originalQuery: normalized, providerQuery: normalized, retainedDimensions: requirements.map((item) => item.dimension), retainedOutsideProviderQuery: outside, droppedInstructionalProse: false },
+    };
+  }
+  const required = requirements.filter((item) => item.priority === "TIER_1_REQUIRED");
+  const highValue = requirements.filter((item) => item.priority === "TIER_2_HIGH_VALUE");
+  const requiredQuery = deduplicateQueryWords(required.flatMap((item) => item.compactTerms));
+  if (requiredQuery.length === 0 || requiredQuery.length > maxLength) {
+    throw new Error(`LOCAL_QUERY_COMPILATION_FAILED:${lane.laneId}:MANDATORY_SEMANTICS_DO_NOT_FIT`);
+  }
+  let providerQuery = requiredQuery;
+  const retained = required.map((item) => item.dimension);
+  for (const requirement of highValue) {
+    const candidate = deduplicateQueryWords([providerQuery, ...requirement.compactTerms]);
+    if (candidate.length <= maxLength) {
+      providerQuery = candidate;
+      retained.push(requirement.dimension);
+    }
+  }
+  if (!evaluateDiscoveryQueryQuality(providerQuery, mission, lane).passes) {
+    throw new Error(`LOCAL_QUERY_COMPILATION_FAILED:${lane.laneId}:MANDATORY_SEMANTICS_DO_NOT_FIT`);
+  }
+  return {
+    providerQuery,
+    semanticRequirements: requirements,
+    retainedOutsideProviderQuery: outside,
+    trace: { originalQuery: normalized, providerQuery, retainedDimensions: retained, retainedOutsideProviderQuery: outside, droppedInstructionalProse: normalized !== providerQuery },
+  };
+}
+
+/**
+ * Capability-aware finalization for web.search. Long model prose is replaced
+ * with a deterministic search-engine query assembled from mandatory mission
+ * dimensions in priority order. Nothing is character-sliced: either the full
+ * mandatory contract fits, or planning fails locally before capability I/O.
+ */
+export function finalizeWebSearchQuery(
+  compiledQuery: string,
+  mission: ResearchMission,
+  lane: Pick<ResearchMission["discoveryLanes"][number], "laneId" | "purpose">,
+  maxLength = WEB_SEARCH_MAX_QUERY_LENGTH,
+): string {
+  return packWebSearchQuery(compiledQuery, mission, lane, maxLength).providerQuery;
+}
+
+/**
+ * Convert descriptive Direction lanes into runtime-complete governed calls.
+ * Capability selection is owned by the supplied canonical inventory, never by
+ * a model-authored spelling of `actualCapability`. One discovery call is
+ * materialized per supported lane so unused envelope remains available for
+ * candidate-specific verification.
+ */
+export function materializeDiscoveryRetrievalPlan(
+  mission: ResearchMission,
+  scope: { workflowId: string; correlationId: string; taskId: string; recoverySuffix: string },
+  maxTotal: number,
+): ExecutableRetrievalPlanEntry[] {
+  const cap = Math.max(0, Math.min(maxTotal, MAX_DISCOVERY_REQUESTS));
+  if (cap === 0) return [];
+  const supportedWebTypes = new Set(
+    mission.availableCapabilities
+      .filter((entry) => entry.status === "SUPPORTED" && entry.via.includes("web.search"))
+      .map((entry) => entry.sourceType.trim().toUpperCase()),
+  );
+  const supportedLanes = mission.discoveryLanes.filter((lane) => supportedWebTypes.has(lane.desiredCapability.trim().toUpperCase()));
+  const plan: ExecutableRetrievalPlanEntry[] = [];
+  for (const lane of supportedLanes) {
+    if (plan.length >= cap) break;
+    const rawQuery = lane.queryGuidance.trim().replace(/\s+/g, " ");
+    if (rawQuery.length === 0 || lane.purpose.trim().length === 0 || lane.laneId.trim().length === 0) {
+      throw new Error(`RETRIEVAL_PLAN_MATERIALIZATION_FAILED:${lane.laneId || "unknown"}:REQUIRED_RUNTIME_FIELD_MISSING`);
+    }
+    const compiledQuery = compileDiscoveryQuery(rawQuery, mission, lane);
+    if (compiledQuery.length === 0) {
+      throw new Error(`RETRIEVAL_PLAN_MATERIALIZATION_FAILED:${lane.laneId}:QUERY_COMPILATION_FAILED`);
+    }
+    const packed = packWebSearchQuery(compiledQuery, mission, lane);
+    const finalizedQuery = packed.providerQuery;
+    const accountingOrdinal = plan.length + 1;
+    const retrievalId = `discovery-${lane.laneId}-${accountingOrdinal}`;
+    const requestId = `web-search-${scope.workflowId}:${scope.taskId}:lane-${lane.laneId}${scope.recoverySuffix}`;
+    const request: MissionCapabilityRequest = {
+      requestId,
+      capabilityId: "web.search",
+      agentId: "research",
+      workflowId: scope.workflowId,
+      correlationId: scope.correlationId,
+      requestedAt: new Date().toISOString(),
+      input: { query: finalizedQuery, maxResults: 5, laneId: lane.laneId, retrievalId, role: "DISCOVERY", accountingOrdinal },
+    };
+    plan.push({
+      retrievalId, laneId: lane.laneId, purpose: lane.purpose, capabilityId: "web.search",
+      rawQuery, compiledQuery, finalizedQuery,
+      semanticRequirements: packed.semanticRequirements,
+      retainedOutsideProviderQuery: packed.retainedOutsideProviderQuery,
+      packingTrace: packed.trace,
+      role: "DISCOVERY", accountingOrdinal, request,
+    });
+  }
+  if (supportedLanes.length > 0 && plan.length === 0) throw new Error("RETRIEVAL_PLAN_MATERIALIZATION_FAILED:SUPPORTED_CAPABILITY_WITHOUT_EXECUTABLE_CALL");
+  return plan;
 }
 export const DEFAULT_RESEARCH_SYSTEM_PROMPT = `You are an expert research agent. Your job is to investigate a planned research task and produce a precise, source-backed research report.
 
@@ -159,6 +553,44 @@ export class ResearchStructuralValidationError extends Error {
   constructor(readonly diagnostics: ResearchStructuralDiagnostics) {
     super("Invalid research response: invalid report structure");
   }
+}
+
+export interface RuntimeIdentityEcho {
+  readonly field: string;
+  readonly canonicalValue: unknown;
+  readonly expected: string;
+}
+
+/**
+ * Restore exact execution identities that are owned by runtime input rather
+ * than model reasoning. Missing identities are injected only from a known,
+ * non-empty canonical string; exact echoes are preserved; conflicts and
+ * absent canonical sources fail through the ordinary structural validator.
+ */
+export function normalizeRuntimeIdentityEchoes(record: JsonRecord, identities: readonly RuntimeIdentityEcho[]): JsonRecord {
+  const normalized = { ...record };
+  const fail = (field: string, code: ResearchStructuralIssue["code"], expected: string): never => {
+    throw new ResearchStructuralValidationError({
+      validationKind: "STRUCTURAL",
+      issues: [{ path: field, code, expected }],
+      shape: { topLevelKeys: [], strategyFindingKeys: [], truncated: false },
+      diagnosticsTruncated: false,
+    });
+  };
+  for (const identity of identities) {
+    const canonicalValue = identity.canonicalValue;
+    if (typeof canonicalValue !== "string" || canonicalValue.trim().length === 0) {
+      fail(identity.field, "missing_required", `canonical runtime source for ${identity.field}`);
+    }
+    const canonicalString = canonicalValue as string;
+    const supplied = normalized[identity.field];
+    if (supplied === undefined) {
+      normalized[identity.field] = canonicalString;
+      continue;
+    }
+    if (supplied !== canonicalString) fail(identity.field, "value_mismatch", identity.expected);
+  }
+  return normalized;
 }
 
 /** Stable contract identity for a research execution (deterministic exact validation). */
@@ -358,11 +790,13 @@ export class ResearchAgent extends BaseAgent {
 
   private readonly researchConfig: ResearchConfig;
   private readonly sourceRouter?: ResearchSourceRouter;
+  private readonly now: () => Date;
 
   constructor(deps: ResearchAgentDependencies) {
     super(deps);
     this.researchConfig = deps.config;
     this.sourceRouter = deps.sourceRouter;
+    this.now = deps.now ?? (() => new Date());
   }
 
   /** Execute a normalized source research request without changing legacy task callers. */
@@ -446,33 +880,41 @@ export class ResearchAgent extends BaseAgent {
     }
 
     const researchInput = input.input;
-    // PHASE A — planning LLM: identifies questions/queries; needs no sources.
-    const { report: planReport, response: planResponse } = await this.createReport(researchInput, input.context, signal);
+    const strategyMode = (researchInput as unknown as { strategyMode?: unknown }).strategyMode === "PRE_PUBLICATION_STRATEGY";
+    const synthesisContract = (researchInput as unknown as { synthesisContract?: unknown }).synthesisContract;
+    if (strategyMode || synthesisContract !== "amf-research-intelligence-v2") {
+      return this.executeLegacy(researchInput, input.context, signal);
+    }
+    return this.executeIntelligenceV2(researchInput, input.context, signal);
+  }
+
+  /**
+   * Legacy single-report path (strategy council + pre-contract callers).
+   * Preserved byte-for-byte in behavior for existing consumers.
+   */
+  private async executeLegacy(researchInput: ResearchAgentInput, context: ExecutionContext, signal: CancellationToken): Promise<AgentExecutionOutput> {
+    const { report: planReport, response: planResponse } = await this.createReport(researchInput, context, signal);
     const planUsage = toCallUsage(planResponse.usage);
     const intelligence = researchInput.researchRequest === undefined
       ? undefined
       : await this.executeSourceRequest(researchInput.researchRequest);
     const withIntelligence = intelligence === undefined ? planReport : { ...planReport, intelligence };
-    // PHASE B — governed retrieval with per-request lifecycle diagnostics.
     const governed = researchInput.capabilityRequests === undefined
       ? null
       : await this.runGovernedCapabilities(researchInput.capabilityRequests);
     const capabilityExecutions = governed === null ? [] : governed.map((outcome) => outcome.result);
-    // PHASE C — post-retrieval synthesis LLM (only with real retrieved
-    // evidence and an explicit synthesis contract; never on legacy/strategy
-    // inputs). The synthesis consumes actual retrieval results.
     const synthesisInputs = collectSuccessfulRetrievals(capabilityExecutions);
-    const wantsSynthesis = typeof (researchInput as unknown as { synthesisContract?: unknown }).synthesisContract === "string"
+    const wantsSynthesis = typeof researchInput.synthesisContract === "string"
       && (researchInput as unknown as { strategyMode?: unknown }).strategyMode !== "PRE_PUBLICATION_STRATEGY"
       && synthesisInputs.length > 0;
     let report: ResearchReport = withIntelligence;
     let synthesisUsage: ResearchCallUsage | null = null;
-    let response: ExecutionResponse = planResponse;
+    let executionResponse: ExecutionResponse = planResponse;
     if (wantsSynthesis) {
-      const synthesis = await this.createSynthesisReport(researchInput, withIntelligence, synthesisInputs, input.context, signal);
+      const synthesis = await this.createSynthesisReport(researchInput, withIntelligence, synthesisInputs, context, signal);
       synthesisUsage = toCallUsage(synthesis.response.usage);
       report = synthesis.report;
-      response = synthesis.response;
+      executionResponse = synthesis.response;
     }
     const baseOutput = this.toJson(report);
     const output: Json = capabilityExecutions.length > 0 && isJsonRecord(baseOutput)
@@ -486,8 +928,8 @@ export class ResearchAgent extends BaseAgent {
       : baseOutput;
 
     // Preserve provider execution metadata while returning normalized output.
-    const combined: ExecutionResponse = {
-      ...response,
+    const response: ExecutionResponse = {
+      ...executionResponse,
       usage: {
         inputTokens: planResponse.usage.inputTokens + (synthesisUsage?.inputTokens ?? 0),
         outputTokens: planResponse.usage.outputTokens + (synthesisUsage?.outputTokens ?? 0),
@@ -499,15 +941,10 @@ export class ResearchAgent extends BaseAgent {
 
     return {
       output,
-      response: combined,
+      response,
     };
   }
 
-  /**
-   * Collect successfully retrieved web results across capability executions
-   * for post-retrieval synthesis. Only success results with real items count;
-   * empty/blocked/failed executions contribute nothing.
-   */
   private async createSynthesisReport(
     input: ResearchAgentInput,
     plan: ResearchReport,
@@ -516,13 +953,488 @@ export class ResearchAgent extends BaseAgent {
     signal: CancellationToken,
   ): Promise<ResearchExecutionResult> {
     signal?.throwIfCancelled();
-    const prompt = this.buildSynthesisPrompt(input, plan, retrievals);
-    const request = this.buildExecutionRequest(prompt);
-    const response = await this.runExecution(context, request, signal);
-    return {
-      report: this.parseSynthesisResponse(response.output, input),
-      response,
+    const response = await this.runExecution(context, this.buildExecutionRequest(this.buildSynthesisPrompt(input, plan, retrievals), "FINAL_SYNTHESIS"), signal);
+    return { report: this.parseSynthesisResponse(response.output, input), response };
+  }
+
+  /**
+   * Intelligence V2 lifecycle (modes of the same Research agent, no new
+   * canonical agent): direction LLM → mission → discovery execution →
+   * candidate formation → verification planning → verification execution →
+   * final synthesis LLM → gate-ready output. Every phase is bounded; every
+   * external call flows through governed boundaries with diagnostics.
+   */
+  private async executeIntelligenceV2(researchInput: ResearchAgentInput, context: ExecutionContext, signal: CancellationToken): Promise<AgentExecutionOutput> {
+    // Compute the effective retrieval envelope BEFORE direction planning.
+    // When maxRetrievalCallsAvailable is supplied (production path), it is the
+    // binding cap.  When absent (test/legacy path), fall back to architectural
+    // maximum (MAX_DISCOVERY_REQUESTS + MAX_VERIFICATION_REQUESTS).
+    const architecturalMax = MAX_DISCOVERY_REQUESTS + MAX_VERIFICATION_REQUESTS;
+    const effectiveEnvelope = typeof researchInput.maxRetrievalCallsAvailable === "number"
+      && Number.isSafeInteger(researchInput.maxRetrievalCallsAvailable)
+      && researchInput.maxRetrievalCallsAvailable >= 0
+      ? Math.min(researchInput.maxRetrievalCallsAvailable, architecturalMax)
+      : architecturalMax;
+    // PHASE 0 — direction LLM produces the validated research mission.
+    const direction = await this.createDirectionReport(researchInput, context, signal);
+    const planningUsage = toCallUsage(direction.response.usage);
+    const scope = {
+      workflowId: String(context.inputEvent?.workflow_id ?? `wf-${researchInput.task.id}`),
+      correlationId: String(context.inputEvent?.correlation_id ?? context.inputEvent?.event_id ?? researchInput.task.id),
+      taskId: researchInput.task.id,
+      recoverySuffix: recoveryScopeSuffix(researchInput),
     };
+    // PHASE 1 — discovery execution across mission lanes (bounded to envelope).
+    const discoveryBudget = Math.min(MAX_DISCOVERY_REQUESTS, effectiveEnvelope);
+    const discoveryPlan = materializeDiscoveryRetrievalPlan(direction.mission, scope, discoveryBudget);
+    const discoveryRequests = discoveryPlan.map((entry) => entry.request);
+    // Pre-validate: if the mission demands more than the envelope allows,
+    // adapt by capping rather than allowing a downstream hard-cap failure.
+    const plannedDiscovery = discoveryRequests.length;
+    const remainingForVerification = Math.max(0, effectiveEnvelope - plannedDiscovery);
+    const discoveryGoverned = await this.runGovernedCapabilities(discoveryRequests);
+    const discoveryExecutions = discoveryGoverned.map((outcome) => outcome.result);
+    const social = await this.runSocialDiscovery(researchInput, direction.mission);
+    // PHASE 2 — candidate formation (deterministic) from discovery evidence.
+    const webEvidence = zipLaneEvidence(discoveryRequests, discoveryExecutions);
+    const opportunities = this.formCandidateOpportunities(direction.mission, webEvidence, social.evidence);
+    // PHASE 3 — verification planning (deterministic) + execution.
+    // Verification budget = envelope minus actual discovery calls consumed.
+    const verificationBudget = Math.min(MAX_VERIFICATION_REQUESTS, remainingForVerification);
+    const verificationPlans = this.planCandidateVerification(direction.mission, opportunities, webEvidence);
+    const verificationRequests = this.verificationRequestsFor(verificationPlans, scope, verificationBudget);
+    const verificationGoverned = verificationRequests.length === 0
+      ? []
+      : await this.runGovernedCapabilities(verificationRequests);
+    const verificationExecutions = verificationGoverned.map((outcome) => outcome.result);
+    // PHASE 4 — final synthesis LLM consumes mission + all evidence.
+    const synthesis = await this.createFinalSynthesisReport(
+      researchInput, direction.mission, opportunities, verificationPlans,
+      discoveryExecutions, social.evidence, verificationExecutions, context, signal,
+    );
+    const synthesisUsage = toCallUsage(synthesis.response.usage);
+    const report = synthesis.report;
+    const baseOutput = this.toJson(report);
+    const capabilityExecutions = [...discoveryExecutions, ...verificationExecutions];
+    const output: Json = {
+      ...safeRecord(baseOutput),
+      capabilityExecutions: JSON.parse(JSON.stringify(capabilityExecutions)) as Json[],
+      socialDiscovery: JSON.parse(JSON.stringify(social.outcomes.map((outcome) => outcome.result))) as Json[],
+      planningUsage: { ...planningUsage },
+      synthesisUsage: { ...synthesisUsage },
+      researchPlan: JSON.parse(JSON.stringify(direction.mission)) as Json,
+      retrievalPlan: JSON.parse(JSON.stringify(discoveryPlan.map(({ request: _request, ...entry }) => entry))) as Json[],
+      retrievalPlanning: {
+        status: discoveryPlan.length > 0 ? "MATERIALIZED" : "NO_SUPPORTED_CAPABILITY",
+        maxRetrievalCallsAvailable: effectiveEnvelope,
+        discoveryCallsMaterialized: discoveryPlan.length,
+        unusedAfterDiscovery: remainingForVerification,
+      },
+    };
+    const combined: ExecutionResponse = {
+      ...synthesis.response,
+      usage: {
+        inputTokens: planningUsage.inputTokens + synthesisUsage.inputTokens,
+        outputTokens: planningUsage.outputTokens + synthesisUsage.outputTokens,
+        costUsd: planningUsage.costUsd + synthesisUsage.costUsd,
+      },
+      output,
+      raw: JSON.stringify(report, null, 2),
+    };
+    return { output, response: combined };
+  }
+
+  /**
+   * PHASE 0 — direction LLM: produces the validated research mission from
+   * objective + canonical context + capability inventory. No retrieval runs
+   * before this completes.
+   */
+  private async createDirectionReport(
+    input: ResearchAgentInput,
+    context: ExecutionContext,
+    signal: CancellationToken,
+  ): Promise<{ mission: ResearchMission; response: ExecutionResponse }> {
+    signal?.throwIfCancelled();
+    const canonicalCurrentDate = this.now().toISOString().slice(0, 10);
+    const prompt = this.buildDirectionPrompt(input, canonicalCurrentDate);
+    const request = this.buildExecutionRequest(prompt, "DIRECTION");
+    const response = await this.runExecution(context, request, signal);
+    return { mission: this.parseDirectionResponse(response.output, input, canonicalCurrentDate), response };
+  }
+
+  /**
+   * Deterministic mission validation (contract amf-research-mission-v1).
+   * Identity echoes byte-for-byte; content fields are structural, never
+   * semantically judged. Throws ResearchStructuralValidationError on defect.
+   */
+  private parseDirectionResponse(output: Json, input: ResearchAgentInput, canonicalCurrentDate: string): ResearchMission {
+    const fail = (path: string, code: ResearchStructuralIssue["code"], expected?: string | number): never => {
+      throw new ResearchStructuralValidationError({
+        validationKind: "STRUCTURAL",
+        issues: [{ path, code, ...(expected === undefined ? {} : { expected }) }],
+        shape: { topLevelKeys: [], strategyFindingKeys: [], truncated: false },
+        diagnosticsTruncated: false,
+      });
+    };
+    if (!isJsonRecord(output)) fail("$", "wrong_type", "object");
+    const taskId = (input.task as unknown as { id?: unknown }).id;
+    const contractStage = (input as unknown as { contract?: unknown }).contract;
+    const expectedStage = isJsonRecord((contractStage ?? null) as Json) && typeof (contractStage as JsonRecord).stage === "string"
+      ? String((contractStage as JsonRecord).stage)
+      : undefined;
+    const record = normalizeRuntimeIdentityEchoes(output as JsonRecord, [
+      { field: "taskId", canonicalValue: taskId, expected: "exact task identity echo" },
+      { field: "stage", canonicalValue: expectedStage, expected: "exact stage identity echo" },
+    ]);
+    const strings = (value: unknown, path: string, allowEmpty: boolean): string | null => {
+      if (value === null || value === undefined) return null;
+      if (typeof value !== "string") fail(path, "wrong_type", "string");
+      if (!allowEmpty && (value as string).trim().length === 0) fail(path, "missing_required", "non-empty string");
+      return value as string;
+    };
+    const requireString = (path: string): string => {
+      const value = record[path];
+      if (typeof value !== "string" || value.trim().length === 0) fail(path, value === undefined ? "missing_required" : "value_mismatch", "non-empty string");
+      return value as string;
+    };
+    const missionId = requireString("missionId");
+    const objective = requireString("objective");
+    const contentPillar = requireString("contentPillar");
+    const factualMode = record.factualMode;
+    if (factualMode !== "HISTORICAL_POV" && factualMode !== "ORIGINAL_FANTASY") fail("factualMode", "invalid_enum", "HISTORICAL_POV|ORIGINAL_FANTASY");
+    const trendMode = record.trendMode;
+    if (trendMode !== "TREND_LED" && trendMode !== "EVERGREEN" && trendMode !== "HYBRID") fail("trendMode", "invalid_enum", "TREND_LED|EVERGREEN|HYBRID");
+    if (!Array.isArray(record.discoveryLanes) || record.discoveryLanes.length < 1 || record.discoveryLanes.length > 5) {
+      fail("discoveryLanes", !Array.isArray(record.discoveryLanes) ? "wrong_type" : "too_small", "array of 1..5 lanes");
+    }
+    for (const [index, lane] of (record.discoveryLanes as unknown[]).entries()) {
+      if (lane === null || typeof lane !== "object" || Array.isArray(lane)) fail(`discoveryLanes[${index}]`, "wrong_type", "object");
+      const entry = lane as Record<string, unknown>;
+      for (const field of ["laneId", "purpose", "queryGuidance", "desiredCapability", "expectedOutput"] as const) {
+        if (typeof entry[field] !== "string" || (entry[field] as string).trim().length === 0) fail(`discoveryLanes[${index}].${field}`, "missing_required", "non-empty string");
+      }
+      if (!Number.isSafeInteger(entry.maxCalls) || (entry.maxCalls as number) < 1 || (entry.maxCalls as number) > 3) {
+        fail(`discoveryLanes[${index}].maxCalls`, "invalid_enum", "integer 1..3");
+      }
+    }
+    const asStringArray = (value: unknown, path: string): string[] => {
+      if (!Array.isArray(value)) fail(path, "wrong_type", "array");
+      for (const item of value as unknown[]) if (typeof item !== "string") fail(path, "wrong_type", "array of strings");
+      return value as string[];
+    };
+    const strOrNull = (value: unknown, path: string): string | null => {
+      if (value === null || value === undefined) return null;
+      return strings(value, path, true);
+    };
+    const suppliedInventory = Array.isArray((input as unknown as JsonRecord).capabilityInventory)
+      ? ((input as unknown as JsonRecord).capabilityInventory as Json[])
+        .filter((entry): entry is JsonRecord => isJsonRecord(entry))
+        .filter((entry) => typeof entry.sourceType === "string" && ["SUPPORTED", "PARTIALLY_SUPPORTED", "UNSUPPORTED"].includes(String(entry.status)))
+        .map((entry) => ({
+          sourceType: String(entry.sourceType),
+          status: String(entry.status) as "SUPPORTED" | "PARTIALLY_SUPPORTED" | "UNSUPPORTED",
+          via: Array.isArray(entry.via) ? entry.via.filter((item): item is string => typeof item === "string") : [],
+          limitations: Array.isArray(entry.limitations) ? entry.limitations.filter((item): item is string => typeof item === "string") : [],
+        }))
+      : [];
+    const desiredSourceTypes = asStringArray(record.desiredSourceTypes, "desiredSourceTypes");
+    const unavailableDesiredCapabilities = desiredSourceTypes
+      .filter((sourceType) => !suppliedInventory.some((entry) => entry.sourceType === sourceType && entry.status === "SUPPORTED"))
+      .map((sourceType) => ({ sourceType, reason: suppliedInventory.find((entry) => entry.sourceType === sourceType)?.limitations.join("; ") || "No supported governed capability in the supplied inventory" }));
+    return {
+      taskId: record.taskId as string,
+      stage: typeof record.stage === "string" ? record.stage as string : "",
+      missionId,
+      objective,
+      market: strOrNull(record.market, "market"),
+      geography: strOrNull(record.geography, "geography"),
+      language: strOrNull(record.language, "language"),
+      platforms: asStringArray(record.platforms, "platforms"),
+      contentPillar,
+      factualMode: factualMode as "HISTORICAL_POV" | "ORIGINAL_FANTASY",
+      audience: strOrNull(record.audience, "audience"),
+      trendMode: trendMode as "TREND_LED" | "EVERGREEN" | "HYBRID",
+      timeHorizon: (() => {
+        const horizon = record.timeHorizon;
+        if (horizon === null || horizon === undefined) return { from: null, to: null };
+        if (!isJsonRecord(horizon as Json)) fail("timeHorizon", "wrong_type", "object");
+        const window = horizon as unknown as Record<string, unknown>;
+        return { from: strOrNull(window.from, "timeHorizon.from"), to: strOrNull(window.to, "timeHorizon.to") };
+      })(),
+      currentDate: canonicalCurrentDate,
+      discoveryLanes: (record.discoveryLanes as unknown[]).map((lane) => {
+        const entry = lane as Record<string, unknown>;
+        return {
+          laneId: String(entry.laneId), purpose: String(entry.purpose), queryGuidance: String(entry.queryGuidance),
+          desiredCapability: String(entry.desiredCapability), actualCapability: typeof entry.actualCapability === "string" ? entry.actualCapability as string : String(entry.desiredCapability),
+          maxCalls: Number(entry.maxCalls), expectedOutput: String(entry.expectedOutput),
+        };
+      }),
+      desiredSourceTypes,
+      availableCapabilities: suppliedInventory,
+      unavailableDesiredCapabilities,
+      searchPriorities: asStringArray(record.searchPriorities, "searchPriorities"),
+      verificationRequirements: asStringArray(record.verificationRequirements, "verificationRequirements"),
+      stopConditions: asStringArray(record.stopConditions, "stopConditions"),
+      riskNotes: asStringArray(record.riskNotes, "riskNotes"),
+    };
+  }
+
+  /**
+   * Research Direction prompt: the model reasons about WHERE/WHY/HOW to
+   * investigate from the objective, canonical context and the real capability
+   * inventory — before any retrieval runs. It must state desired-vs-available
+   * capabilities honestly and never claim unsupported analysis.
+   */
+  private buildDirectionPrompt(input: ResearchAgentInput, canonicalCurrentDate: string): string {
+    const { task } = input;
+    const record = input as unknown as JsonRecord;
+    const objective = isJsonRecord(record.researchObjective) ? record.researchObjective : {};
+    const projectContext = isJsonRecord(record.projectContext) ? record.projectContext : null;
+    const inventory = Array.isArray(record.capabilityInventory) ? record.capabilityInventory : [];
+    return `${this.researchConfig.systemPrompt}
+
+Research Direction (contract amf-research-mission-v1) for research task ${task.id}.
+Echo TASK_ID exactly into taskId (byte-for-byte, never paraphrased): ${JSON.stringify(task.id)}
+Describe the requested objective in your own words into objective (do NOT copy verbatim; keep it clearly about the requested task): ${JSON.stringify(task.description)}
+RESEARCH OBJECTIVE (structured; market/geography null means unspecified — choose explicitly with rationale, never infer permanence):
+${JSON.stringify(objective).slice(0, 2000)}
+PROJECT CONTEXT (canonical brand/strategy facts — use these, never improvise brand strategy):
+${projectContext !== null ? JSON.stringify(projectContext).slice(0, 2000) : "none supplied; say so explicitly rather than inventing strategy"}
+CAPABILITY INVENTORY (actual current capabilities — desired sources WITHOUT a SUPPORTED entry must be recorded under unavailableDesiredCapabilities with reasons; never claim INSTAGRAM_ANALYZED, viral, trending or popular without governed capability evidence):
+${JSON.stringify(inventory).slice(0, 2000)}
+CANONICAL CURRENT DATE (runtime-owned; use this value for recency, seasonal and verification reasoning): ${JSON.stringify(canonicalCurrentDate)}
+Return one JSON mission with: missionId (string); objective (string); market (string|null); geography (string|null — null unless the objective specifies one); language (string|null); platforms (string[]); contentPillar (string); factualMode ("HISTORICAL_POV"|"ORIGINAL_FANTASY" — ORIGINAL_FANTASY only for explicitly fictional storytelling; fictional inspiration must never be framed as factual history); audience (string|null); trendMode ("TREND_LED"|"EVERGREEN"|"HYBRID" — TREND_LED only with a plan for temporal evidence); timeHorizon {from:string|null,to:string|null}; currentDate (string YYYY-MM-DD, use execution context date); discoveryLanes (1..5 entries {laneId, purpose, queryGuidance, desiredCapability, actualCapability, maxCalls 1..3, expectedOutput} — choose only relevant lanes); desiredSourceTypes (string[]); availableCapabilities (array echoing usable inventory entries); unavailableDesiredCapabilities (array {sourceType, reason}); searchPriorities (string[]); verificationRequirements (string[] — HISTORICAL_POV requires museum/archive/university/reputable-reference corroboration); stopConditions (string[]); riskNotes (string[]).
+Never claim media generation, publication, upload, or any production authority. Do not include explanatory text outside the JSON.`;
+  }
+
+  /**
+   * Deterministic discovery request construction from a validated mission.
+   * Bounded (MAX_DISCOVERY_REQUESTS); request ids embed lane scope plus the
+   * recovery attempt identity for per-attempt evidence separation.
+   */
+  /**
+   * Deterministic verification request construction from verification plans.
+   * Bounded (MAX_VERIFICATION_REQUESTS); per-candidate association travels in
+   * the requestId so evidence never mixes across candidates accidentally.
+   */
+  private verificationRequestsFor(plans: CandidateVerificationPlan[], scope: { workflowId: string; correlationId: string; taskId: string; recoverySuffix: string }, maxTotal?: number): MissionCapabilityRequest[] {
+    const cap = typeof maxTotal === "number" ? Math.min(maxTotal, MAX_VERIFICATION_REQUESTS) : MAX_VERIFICATION_REQUESTS;
+    if (cap <= 0) return [];
+    const requests: MissionCapabilityRequest[] = [];
+    for (const plan of plans) {
+      for (const [queryIndex, query] of plan.verificationQueries.entries()) {
+        if (requests.length >= cap) break;
+        requests.push({
+          requestId: `web-search-${scope.workflowId}:${scope.taskId}:verify-${plan.candidateId}-q${queryIndex + 1}${scope.recoverySuffix}`,
+          capabilityId: "web.search",
+          agentId: "research",
+          workflowId: scope.workflowId,
+          correlationId: scope.correlationId,
+          requestedAt: new Date().toISOString(),
+          input: { query: buildVerificationQueryFor(String(query)), maxResults: 5, laneId: "verification", candidateId: plan.candidateId },
+        });
+      }
+      if (requests.length >= cap) break;
+    }
+    return requests;
+  }
+
+  /**
+   * Deterministic candidate formation from discovery evidence (no model call).
+   * Each retrieved result becomes a candidate opportunity stub grounded in
+   * that result; trend signals attach ONLY from provider-returned social
+   * evidence with matching vocabulary (never invented). Bounded.
+   */
+  private formCandidateOpportunities(
+    mission: ResearchMission,
+    webEvidence: { result: Json; laneId: string }[],
+    socialEvidence: { platform: string; title?: string; caption?: string; canonicalUrl?: string; engagement?: Record<string, number>; retrievedAt: string; limitations: string[] }[],
+  ): CandidateOpportunity[] {
+    const candidates: CandidateOpportunity[] = [];
+    const tokenize = (value: string): Set<string> => new Set(
+      value.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length >= 4),
+    );
+    let index = 0;
+    for (const item of webEvidence) {
+      if (candidates.length >= MAX_CANDIDATES) break;
+      const record = safeRecord(item.result);
+      const title = typeof record.title === "string" ? record.title.slice(0, 200) : "";
+      const snippet = typeof record.snippet === "string" ? record.snippet.slice(0, 500) : "";
+      if (title.trim().length === 0) continue;
+      index += 1;
+      const topicTokens = tokenize(`${title} ${snippet}`);
+      const trendSignals: CandidateOpportunity["trendSignals"] = [];
+      for (const social of socialEvidence) {
+        const socialTokens = tokenize(`${social.title ?? ""} ${social.caption ?? ""}`);
+        let shared = 0;
+        for (const token of topicTokens) if (socialTokens.has(token) && ++shared >= 2) break;
+        if (shared >= 2) {
+          trendSignals.push({
+            signal: `social-mention:${social.platform}`,
+            provenance: social.canonicalUrl ?? social.platform,
+            observedAt: social.retrievedAt,
+          });
+        }
+        if (trendSignals.length >= 3) break;
+      }
+      candidates.push({
+        candidateId: `candidate-${index}`,
+        topic: title,
+        candidateType: item.laneId,
+        contentPillar: mission.contentPillar,
+        marketRelevance: mission.market,
+        trendSignals,
+        evergreenSignals: [],
+        factualAngle: snippet.slice(0, 300),
+        whyInteresting: snippet.slice(0, 300),
+        visualPotential: "",
+        shortFormPotential: "",
+        discoveryEvidenceIds: typeof record.id === "number" || typeof record.id === "string" ? [record.id as string | number] : [],
+        risks: [],
+        verificationQuestions: [
+          `Corroborate "${title.slice(0, 80)}" with an institutional source (museum, archive, university).`,
+          `Verify the central factual claim of "${title.slice(0, 80)}" against a primary or reputable secondary reference.`,
+        ],
+        verificationRequired: mission.factualMode === "HISTORICAL_POV",
+      });
+    }
+    return candidates;
+  }
+
+  /**
+   * Deterministic verification planning (no model call): candidates that
+   * lack corroboration (fewer than 2 distinct-domain discovery evidence
+   * items) get targeted verification queries via buildVerificationQuery.
+   */
+  private planCandidateVerification(
+    mission: ResearchMission,
+    candidates: CandidateOpportunity[],
+    webEvidence: { result: Json; laneId: string }[],
+  ): CandidateVerificationPlan[] {
+    if (mission.factualMode !== "HISTORICAL_POV") return [];
+    const plans: CandidateVerificationPlan[] = [];
+    for (const candidate of candidates) {
+      if (plans.length >= MAX_CANDIDATES) break;
+      if (candidate.verificationRequired === false) continue;
+      const domains = new Set<string>();
+      for (const id of candidate.discoveryEvidenceIds) {
+        const found = webEvidence.find((item) => {
+          const record = safeRecord(item.result);
+          return record.id === id;
+        });
+        const url = found !== undefined ? String(safeRecord(found.result).url ?? "") : "";
+        try {
+          const host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+          if (host.includes(".")) domains.add(host);
+        } catch { /* unparseable URL contributes no domain */ }
+      }
+      if (domains.size >= 2) continue;
+      plans.push({
+        candidateId: candidate.candidateId,
+        claimsToVerify: [candidate.topic, candidate.factualAngle].filter((claim) => claim.trim().length > 0),
+        verificationQueries: [buildVerificationQueryFor(candidate.topic)],
+        preferredAuthorityClasses: ["PRIMARY_OR_INSTITUTIONAL", "REPUTABLE_SECONDARY"],
+        minimumEvidenceRule: "at least 2 independent (distinct-domain) sources with at least 1 above community/compilation tier",
+        risks: [],
+      });
+    }
+    return plans;
+  }
+
+  /**
+   * Bounded social discovery through the injected source router. Social
+   * evidence is content-intelligence only (platform/source/query/time/
+   * provider-returned metadata); reach, virality, trend rank, view velocity
+   * and demographics are NEVER fabricated — only copied when the provider
+   * returned them. Failures degrade to recorded limitations, never silent.
+   */
+  private async runSocialDiscovery(
+    input: ResearchAgentInput,
+    mission: ResearchMission,
+  ): Promise<{ outcomes: ResearchCapabilityOutcome[]; evidence: { platform: string; title?: string; caption?: string; canonicalUrl?: string; engagement?: Record<string, number>; retrievedAt: string; limitations: string[] }[] }> {
+    const outcomes: ResearchCapabilityOutcome[] = [];
+    const evidence: { platform: string; title?: string; caption?: string; canonicalUrl?: string; engagement?: Record<string, number>; retrievedAt: string; limitations: string[] }[] = [];
+    const wantsSocial = mission.discoveryLanes.some((lane) => /social/i.test(lane.desiredCapability) || /social/i.test(lane.laneId));
+    if (!wantsSocial) return { outcomes, evidence };
+    const socialSupported = mission.availableCapabilities.some((entry) => entry.status === "SUPPORTED" && /INSTAGRAM|SOCIAL|TIKTOK/i.test(entry.sourceType));
+    if (!socialSupported) {
+      const lifecycle: ResearchCapabilityLifecycleState[] = ["REQUESTED", "BLOCKED"];
+      outcomes.push({
+        result: { status: "blocked", resultId: "social-discovery-unsupported", capabilityId: "social.discovery", reason: "Desired social discovery is not available in the canonical capability inventory", reasonCode: "CAPABILITY_NOT_REGISTERED", lifecycle: [...lifecycle] } as unknown as Json,
+        lifecycle: [...lifecycle], reasonCode: "CAPABILITY_NOT_REGISTERED",
+      });
+      return { outcomes, evidence };
+    }
+    if (this.sourceRouter === undefined) {
+      const lifecycle: ResearchCapabilityLifecycleState[] = ["REQUESTED", "AUTHORIZED", "BLOCKED"];
+      outcomes.push({
+        result: {
+          status: "blocked", resultId: "social-discovery-unconfigured", capabilityId: "social.discovery",
+          reason: "No social source router is configured", reasonCode: "MISSING_PROVIDER_BOUNDARY", lifecycle: [...lifecycle],
+        } as unknown as Json,
+        lifecycle: [...lifecycle],
+        reasonCode: "MISSING_PROVIDER_BOUNDARY",
+      });
+      return { outcomes, evidence };
+    }
+    const platforms = (mission.platforms ?? []).map((platform) => platform.toUpperCase());
+    const platform = platforms.includes("INSTAGRAM") ? "INSTAGRAM" : platforms.includes("TIKTOK") ? "TIKTOK" : "INSTAGRAM";
+    const lifecycle: ResearchCapabilityLifecycleState[] = ["REQUESTED", "AUTHORIZED", "EXECUTING"];
+    try {
+      const response = await this.sourceRouter.execute({
+        mode: "CONTENT_DISCOVERY",
+        topic: mission.objective.slice(0, 200),
+        platforms: [platform as "INSTAGRAM" | "TIKTOK"],
+      });
+      lifecycle.push("COMPLETED");
+      const limitations = [...(response.limitations ?? []), "Social evidence is content-intelligence only, not factual verification."];
+      for (const item of (response.sources ?? []).slice(0, 3)) {
+        const source = item as unknown as Record<string, unknown>;
+        const entry: { platform: string; title?: string; caption?: string; canonicalUrl?: string; engagement?: Record<string, number>; retrievedAt: string; limitations: string[] } = {
+          platform,
+          retrievedAt: typeof source.retrievedAt === "string" ? source.retrievedAt as string : new Date().toISOString(),
+          limitations,
+        };
+        if (typeof source.title === "string") entry.title = (source.title as string).slice(0, 200);
+        if (typeof source.text === "string") entry.caption = (source.text as string).slice(0, 500);
+        if (typeof source.canonicalUrl === "string") entry.canonicalUrl = (source.canonicalUrl as string).slice(0, 500);
+        if (source.engagement !== null && typeof source.engagement === "object" && !Array.isArray(source.engagement)) {
+          const engagement: Record<string, number> = {};
+          for (const [key, value] of Object.entries(source.engagement as Record<string, unknown>)) {
+            if (typeof value === "number" && Number.isFinite(value)) engagement[key.slice(0, 40)] = value;
+          }
+          if (Object.keys(engagement).length > 0) entry.engagement = engagement;
+        }
+        evidence.push(entry);
+      }
+      outcomes.push({
+        result: {
+          status: "success",
+          resultId: `social-discovery-${platform.toLowerCase()}-${mission.missionId}`,
+          capabilityId: "social.discovery",
+          output: { platform, resultCount: evidence.length },
+          evidence: { providerId: "social-router", evidenceId: `ev-social-${platform.toLowerCase()}-${mission.missionId}`, succeeded: evidence.length > 0, executedAt: new Date().toISOString() },
+          reasonCode: "CAPABILITY_COMPLETED",
+          lifecycle: [...lifecycle],
+        } as unknown as Json,
+        lifecycle: [...lifecycle],
+        reasonCode: "CAPABILITY_COMPLETED",
+      });
+    } catch (error) {
+      lifecycle.push("FAILED");
+      const reasonCode = classifyResearchCapabilityError(error);
+      outcomes.push({
+        result: {
+          status: "failed", resultId: "social-discovery-failed", capabilityId: "social.discovery",
+          error: { code: reasonCode, message: (error instanceof Error ? error.message : String(error)).slice(0, 300), retryable: false },
+          reasonCode, lifecycle: [...lifecycle],
+        } as unknown as Json,
+        lifecycle: [...lifecycle],
+        reasonCode,
+      });
+    }
+    return { outcomes, evidence };
   }
 
   private async createReport(
@@ -599,7 +1511,7 @@ When visual grounding is needed, also include optional visual data with topic, v
 Every citation sourceId must refer to an item in sources. Do not invent sources, URLs, or citations.`;
   }
 
-  private buildExecutionRequest(prompt: string): ExecutionRequest {
+  private buildExecutionRequest(prompt: string, callLeg: "DIRECTION" | "FINAL_SYNTHESIS" = "DIRECTION"): ExecutionRequest {
     const strategyMode = prompt.startsWith("PRE_PUBLICATION_STRATEGY.");
     return {
       model: this.researchConfig.model,
@@ -611,6 +1523,7 @@ Every citation sourceId must refer to an item in sources. Do not invent sources,
       temperature: this.researchConfig.temperature,
       maxOutputTokens: this.researchConfig.maxOutputTokens,
       responseSchema: this.getResearchResponseSchema(),
+      callIdentity: { callLeg },
     };
   }
 
@@ -799,16 +1712,80 @@ Every citation sourceId must refer to an item in sources. Do not invent sources,
    * the supplied evidence: inventing source metadata or substituting internal
    * knowledge is a contract violation.
    */
+  /**
+   * PHASE 4 — final synthesis LLM: consumes mission + discovery evidence +
+   * candidate opportunities + verification evidence. Candidates arise from
+   * evidence; an empty list is honest, never structural failure.
+   */
+  private async createFinalSynthesisReport(
+    input: ResearchAgentInput,
+    mission: ResearchMission,
+    opportunities: CandidateOpportunity[],
+    verificationPlans: CandidateVerificationPlan[],
+    discoveryExecutions: readonly unknown[],
+    socialEvidence: { platform: string; title?: string; caption?: string; canonicalUrl?: string; engagement?: Record<string, number>; retrievedAt: string; limitations: string[] }[],
+    verificationExecutions: readonly unknown[],
+    context: ExecutionContext,
+    signal: CancellationToken,
+  ): Promise<ResearchExecutionResult> {
+    signal?.throwIfCancelled();
+    const prompt = this.buildFinalSynthesisPrompt(input, mission, opportunities, verificationPlans, discoveryExecutions, socialEvidence, verificationExecutions);
+    const request = this.buildExecutionRequest(prompt, "FINAL_SYNTHESIS");
+    const response = await this.runExecution(context, request, signal);
+    return {
+      report: this.parseSynthesisResponse(response.output, input),
+      response,
+    };
+  }
+
+  private buildFinalSynthesisPrompt(
+    input: ResearchAgentInput,
+    mission: ResearchMission,
+    opportunities: CandidateOpportunity[],
+    verificationPlans: CandidateVerificationPlan[],
+    discoveryExecutions: readonly unknown[],
+    socialEvidence: { platform: string; title?: string; caption?: string; canonicalUrl?: string; engagement?: Record<string, number>; retrievedAt: string; limitations: string[] }[],
+    verificationExecutions: readonly unknown[],
+  ): string {
+    const { task } = input;
+    const record = input as unknown as JsonRecord;
+    const contract = isJsonRecord(record.contract) ? record.contract : null;
+    const projectContext = isJsonRecord(record.projectContext) ? record.projectContext : null;
+    const successfulDiscovery = discoveryExecutions
+      .map((item) => safeRecord(item as Json))
+      .filter((execution) => execution.status === "success")
+      .map((execution) => safeRecord(execution.output));
+    return `${this.researchConfig.systemPrompt}
+
+Final research synthesis (contract amf-research-synthesis-v1) for research task ${task.id}.
+Echo TASK_ID exactly into taskId (byte-for-byte, never paraphrased): ${JSON.stringify(task.id)}
+Echo STAGE exactly into stage: ${JSON.stringify(typeof contract?.stage === "string" ? contract.stage : "research")}
+Describe the requested task in your own words into taskDescription (do NOT copy verbatim; keep it clearly about the requested task): ${JSON.stringify(task.description)}
+RESEARCH MISSION (authoritative plan — candidates must arise from its evidence):
+${JSON.stringify(mission).slice(0, 3000)}
+${projectContext !== null ? `PROJECT CONTEXT (canonical brand/strategy facts):\n${JSON.stringify(projectContext).slice(0, 2000)}\n` : ``}
+DISCOVERY EVIDENCE (web retrieval; the ONLY web sources you may cite):
+${JSON.stringify(successfulDiscovery).slice(0, 4000)}
+SOCIAL/CONTENT-INTELLIGENCE EVIDENCE (opportunity signals only — NEVER factual proof; never claim trending/reach/virality beyond what is shown here):
+${JSON.stringify(socialEvidence).slice(0, 2000)}
+CANDIDATE OPPORTUNITIES (from discovery evidence):
+${JSON.stringify(opportunities).slice(0, 3000)}
+VERIFICATION PLANS:
+${JSON.stringify(verificationPlans).slice(0, 2000)}
+VERIFICATION EVIDENCE (per-candidate corroboration results):
+${JSON.stringify(verificationExecutions.map((item) => safeRecord(item as Json))).slice(0, 4000)}
+Return one JSON ResearchReport with: reportId (UUID); taskId (exact echo); stage (exact echo); taskDescription; summary; candidateStories (array, possibly empty when evidence is insufficient — an empty list is honest, never a failure — each entry {candidateId:string, topic:string, factualAngle:string, keyClaims:string[], sourceIds:number[], supportingEvidenceIds:string[] (stable evidence IDs copied exactly from the supplied retrieval evidence; never source IDs or capability-result IDs), sourceQualitySummary:string, visualPotential:string, shortFormPotential:string, trendEvidence:[{signal:string, observedAt:string|null, source:string}] (ONLY from social evidence above, with provenance; omit when none), evergreenEvidence:string[], marketRelevance:string|null, evidenceRisks:string[], verificationStatus:string, contentOpportunityAssessment:{level:"HIGH"|"MEDIUM"|"LOW", basis:string} (opportunity is SEPARATE from factual verification), factualVerification:{status:"STRONG"|"PARTIAL"|"INCOMPLETE", basis:string}, recommendedForProduction:boolean}); sources (array of {id:number,title:string,url:string,snippet:string} built ONLY from DISCOVERY/VERIFICATION evidence above); confidence (number 0..1 reflecting evidence quality, never inflated by retrieval count alone); citations (array of {sourceId:number,text:string} — every sourceId must equal a sources.id); evidenceRisks (array of strings); status (string: "grounded" when candidates are supported, "insufficient_evidence" otherwise); metadata {createdAt:string,agentVersion:string}.
+Never claim media generation, publication, upload, or any production authority. Never invent source metadata. Do not include explanatory text outside the JSON.`;
+  }
+
+  /** Backward-compatible V1 post-retrieval synthesis prompt. */
   private buildSynthesisPrompt(
     input: ResearchAgentInput,
     plan: ResearchReport,
     retrievals: { providerId: string; results: { id?: unknown; title?: unknown; url?: unknown; snippet?: unknown; source?: unknown }[] }[],
   ): string {
-    const { task } = input;
-    const contract = (input as unknown as { contract?: unknown }).contract as unknown as { taskId?: unknown; stage?: unknown } | undefined;
-    const projectContext = isJsonRecord((input as unknown as JsonRecord).projectContext)
-      ? (input as unknown as JsonRecord).projectContext
-      : null;
+    const contract = input.contract;
+    const projectContext = isJsonRecord((input.projectContext ?? null) as Json) ? input.projectContext : null;
     const evidence = retrievals.map((retrieval, retrievalIndex) => ({
       retrievalId: retrievalIndex + 1,
       providerId: retrieval.providerId,
@@ -822,16 +1799,14 @@ Every citation sourceId must refer to an item in sources. Do not invent sources,
     }));
     return `${this.researchConfig.systemPrompt}
 
-Post-retrieval synthesis (contract amf-research-synthesis-v1) for research task ${task.id}.
-Echo TASK_ID exactly into taskId (byte-for-byte, never paraphrased): ${JSON.stringify(typeof contract?.taskId === "string" ? contract.taskId : task.id)}
-Echo STAGE exactly into stage: ${JSON.stringify(typeof contract?.stage === "string" ? contract.stage : "research")}
-Describe the requested task in your own words into taskDescription (do NOT copy verbatim; keep it clearly about the requested task): ${JSON.stringify(task.description)}
-Planning summary to refine (not to repeat blindly): ${JSON.stringify(plan.summary).slice(0, 900)}
-${projectContext !== null ? `PROJECT CONTEXT (canonical brand/strategy facts — use these, never improvise brand strategy):\n${JSON.stringify(projectContext).slice(0, 2000)}\n` : ``}
-RETRIEVED EVIDENCE (the ONLY sources you may cite; every citation sourceId must equal a sources.id below):
+Post-retrieval synthesis (contract amf-research-synthesis-v1) for research task ${input.task.id}.
+Echo TASK_ID exactly into taskId: ${JSON.stringify(contract?.taskId ?? input.task.id)}
+Echo STAGE exactly into stage: ${JSON.stringify(contract?.stage ?? "research")}
+Planning summary: ${JSON.stringify(plan.summary).slice(0, 900)}
+${projectContext === null ? "" : `PROJECT CONTEXT:\n${JSON.stringify(projectContext).slice(0, 2000)}\n`}
+RETRIEVED EVIDENCE (the only sources you may cite):
 ${JSON.stringify(evidence).slice(0, 6000)}
-Return one JSON ResearchReport with: reportId (UUID); taskId (exact echo); stage (exact echo); taskDescription; summary; candidateStories (array, possibly empty when evidence is insufficient — an empty list is honest, never a failure — each entry {candidateId:string, topic:string, factualAngle:string, keyClaims:string[], sourceIds:number[], supportingEvidenceIds:number[], sourceQualitySummary:string, visualPotential:string, shortFormPotential:string, evidenceRisks:string[], verificationStatus:string} — every sourceId must equal a sources.id); sources (array of {id:number,title:string,url:string,snippet:string} built ONLY from RETRIEVED EVIDENCE above); confidence (number 0..1 reflecting evidence quality, never inflated by retrieval count alone); citations (array of {sourceId:number,text:string}); evidenceRisks (array of strings: coverage gaps, source-quality limits); status (string: "grounded" when candidates are supported, "insufficient_evidence" otherwise); metadata {createdAt:string,agentVersion:string}.
-Never claim media generation, publication, upload, or any production authority. Never invent source metadata. Do not include explanatory text outside the JSON.`;
+Return one valid ResearchReport JSON with candidateStories, sources, citations, evidenceRisks, status, and metadata. An empty candidateStories list is valid when evidence is insufficient. Never invent source metadata or authority.`;
   }
 
   /**
@@ -879,6 +1854,15 @@ Never claim media generation, publication, upload, or any production authority. 
           diagnosticsTruncated: false,
         });
       }
+      const candidateSourceIds = Array.isArray(candidate.sourceIds) ? candidate.sourceIds : [];
+      const knownSourceIds = new Set(report.sources.map((source) => source.id));
+      if (candidateSourceIds.some((id) => typeof id !== "number" || !knownSourceIds.has(id))) {
+        throw new ResearchStructuralValidationError({
+          validationKind: "STRUCTURAL",
+          issues: [{ path: `candidateStories[${index}].sourceIds`, code: "value_mismatch", expected: "ids from sources" }],
+          shape: { topLevelKeys: [], strategyFindingKeys: [], truncated: false }, diagnosticsTruncated: false,
+        });
+      }
     }
     if (!Array.isArray(record.evidenceRisks) || !record.evidenceRisks.every((risk): risk is string => typeof risk === "string")) {
       throw new ResearchStructuralValidationError({
@@ -903,19 +1887,38 @@ Never claim media generation, publication, upload, or any production authority. 
         const strings = (value: unknown): string[] | undefined => Array.isArray(value)
           ? value.filter((entry): entry is string => typeof entry === "string")
           : undefined;
+        const opportunity = isJsonRecord((candidate.contentOpportunityAssessment ?? null) as Json)
+          && ["HIGH", "MEDIUM", "LOW"].includes(String((candidate.contentOpportunityAssessment as JsonRecord).level))
+          && typeof (candidate.contentOpportunityAssessment as JsonRecord).basis === "string"
+          ? candidate.contentOpportunityAssessment as unknown as ResearchCandidateStory["contentOpportunityAssessment"] : undefined;
+        const factual = isJsonRecord((candidate.factualVerification ?? null) as Json)
+          && ["STRONG", "PARTIAL", "INCOMPLETE"].includes(String((candidate.factualVerification as JsonRecord).status))
+          && typeof (candidate.factualVerification as JsonRecord).basis === "string"
+          ? candidate.factualVerification as unknown as ResearchCandidateStory["factualVerification"] : undefined;
+        const historical = input.researchObjective?.factualMode === "HISTORICAL_POV";
+        const carriesEligibilityContract = input.researchObjective !== undefined
+          || Object.prototype.hasOwnProperty.call(candidate, "recommendedForProduction")
+          || factual !== undefined || opportunity !== undefined;
+        const recommended = candidate.recommendedForProduction === true && (!historical || factual?.status === "STRONG");
         return {
           candidateId: String(candidate.candidateId),
           topic: String(candidate.topic),
           ...(typeof candidate.factualAngle === "string" ? { factualAngle: candidate.factualAngle } : {}),
           ...(strings(candidate.keyClaims) === undefined ? {} : { keyClaims: strings(candidate.keyClaims) }),
           ...(Array.isArray(candidate.sourceIds) ? { sourceIds: candidate.sourceIds.filter((id): id is number => typeof id === "number") } : {}),
-          ...(Array.isArray(candidate.supportingEvidenceIds) ? { supportingEvidenceIds: candidate.supportingEvidenceIds.filter((id): id is number => typeof id === "number") } : {}),
+          ...(Array.isArray(candidate.supportingEvidenceIds) ? { supportingEvidenceIds: candidate.supportingEvidenceIds.filter((id): id is string => typeof id === "string" && id.trim().length > 0) } : {}),
           ...(typeof candidate.sourceQualitySummary === "string" ? { sourceQualitySummary: candidate.sourceQualitySummary } : {}),
           ...(typeof candidate.visualPotential === "string" ? { visualPotential: candidate.visualPotential } : {}),
           ...(typeof candidate.shortFormPotential === "string" ? { shortFormPotential: candidate.shortFormPotential } : {}),
           ...(typeof candidate.fitNote === "string" ? { fitNote: candidate.fitNote } : {}),
           ...(Array.isArray(candidate.evidenceRisks) ? { evidenceRisks: candidate.evidenceRisks.filter((risk): risk is string => typeof risk === "string") } : {}),
           ...(typeof candidate.verificationStatus === "string" ? { verificationStatus: candidate.verificationStatus } : {}),
+          ...(opportunity === undefined ? {} : { contentOpportunityAssessment: opportunity }),
+          ...(factual === undefined ? {} : { factualVerification: factual }),
+          ...(Array.isArray(candidate.trendEvidence) ? { trendEvidence: candidate.trendEvidence as ResearchCandidateStory["trendEvidence"] } : {}),
+          ...(strings(candidate.evergreenEvidence) === undefined ? {} : { evergreenEvidence: strings(candidate.evergreenEvidence) }),
+          ...(typeof candidate.marketRelevance === "string" || candidate.marketRelevance === null ? { marketRelevance: candidate.marketRelevance as string | null } : {}),
+          ...(carriesEligibilityContract ? { recommendedForProduction: recommended } : {}),
         };
       }),
       evidenceRisks: (record.evidenceRisks as unknown[]).filter((risk): risk is string => typeof risk === "string"),

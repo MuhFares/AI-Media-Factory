@@ -5,6 +5,14 @@ import type {
   CapabilityResult,
   ExecutionEvidence,
 } from "../capabilities.js";
+import {
+  PUBLIC_PUBLISH_SCOPE,
+  PRIVATE_VALIDATION_SCOPE,
+  publicationIdentityV2,
+  sha256Canonical,
+  type PublicationAuthority,
+} from "./publication-validation.js";
+import { preflightMediaTransport, type MediaTransportRef } from "./media-transport.js";
 
 /**
  * Publishing capability.
@@ -26,8 +34,11 @@ export const PUBLISH_PLATFORM: PublishingPlatform = "youtube";
 export type PublishStatus = "pending" | "completed" | "failed";
 
 export interface PublishRequest {
-  /** Reference to the asset to publish (e.g. the generated video id/url). */
-  assetId: string;
+  /** Immutable AMF identity. Never interpreted as a path or URL. */
+  finalMediaArtifactId: string;
+  finalMediaSha256: string;
+  /** Provider-readable transport, independently verified against the canonical hash. */
+  mediaTransportRef: MediaTransportRef;
   title: string;
   description?: string;
   /** Optional publisher-supplied tags/custom metadata. */
@@ -55,14 +66,20 @@ export interface PublishingProvider {
 }
 
 export interface PublishingCapabilityInput {
-  assetId: string;
+  projectId?: string;
+  finalMediaArtifactId: string;
+  finalMediaSha256?: string;
+  mediaTransportRef: MediaTransportRef;
+  targetAccountId?: string;
   title: string;
   description?: string;
   tags?: readonly string[];
   metadata?: Record<string, string>;
   options?: PublishRequest["options"];
-  /** Deterministic idempotency key: workflowId + assetId + platform. */
+  /** Prospective v2 identity. Legacy keys remain readable in the store but cannot authorize a new publish. */
   idempotencyKey?: string;
+  /** Exact PUBLIC_PUBLISH authority required immediately before provider invocation. */
+  publicationAuthority?: PublicationAuthority;
 }
 
 export interface PublishingCapabilityOutput {
@@ -73,6 +90,10 @@ export interface PublishingCapabilityOutput {
   publishedAt?: string;
   idempotencyKey: string;
   deduplicated: boolean;
+  finalMediaArtifactId: string;
+  finalMediaSha256: string;
+  mediaTransportType: MediaTransportRef["type"];
+  mediaTransportFingerprint: string;
 }
 
 export interface PublishingCapabilityPolicy {
@@ -149,7 +170,7 @@ export class PublishingCapabilityExecutor
       return this.blocked(request, "Publishing capability is not authorized");
     }
     const idempotencyKey = this.idempotencyKey(request);
-    const validation = this.validateInput(request.input, idempotencyKey);
+    const validation = await this.validateInput(request.input, idempotencyKey, request.workflowId);
     if (validation !== null) {
       return this.blocked(request, validation);
     }
@@ -166,6 +187,10 @@ export class PublishingCapabilityExecutor
         publishedAt: existing.publishedAt,
         idempotencyKey,
         deduplicated: true,
+        finalMediaArtifactId: request.input.finalMediaArtifactId,
+        finalMediaSha256: request.input.finalMediaSha256!,
+        mediaTransportType: request.input.mediaTransportRef.type,
+        mediaTransportFingerprint: (await preflightMediaTransport(request.input.mediaTransportRef, request.input.finalMediaSha256!)).fingerprint,
       };
       return {
         status: "success",
@@ -182,7 +207,9 @@ export class PublishingCapabilityExecutor
     let providerId = "";
     try {
       const providerRequest: PublishRequest = {
-        assetId: request.input.assetId,
+        finalMediaArtifactId: request.input.finalMediaArtifactId,
+        finalMediaSha256: request.input.finalMediaSha256!,
+        mediaTransportRef: request.input.mediaTransportRef,
         title: request.input.title.trim(),
         ...(request.input.description === undefined ? {} : { description: request.input.description.trim() }),
         ...(request.input.tags === undefined ? {} : { tags: [...request.input.tags] }),
@@ -234,6 +261,10 @@ export class PublishingCapabilityExecutor
       publishedAt: published.publishedAt,
       idempotencyKey,
       deduplicated: false,
+      finalMediaArtifactId: request.input.finalMediaArtifactId,
+      finalMediaSha256: request.input.finalMediaSha256!,
+      mediaTransportType: request.input.mediaTransportRef.type,
+      mediaTransportFingerprint: (await preflightMediaTransport(request.input.mediaTransportRef, request.input.finalMediaSha256!)).fingerprint,
     };
     return {
       status: "success",
@@ -244,12 +275,12 @@ export class PublishingCapabilityExecutor
     };
   }
 
-  private validateInput(input: PublishingCapabilityInput, idempotencyKey: string): string | null {
-    if (typeof input?.assetId !== "string" || input.assetId.trim().length === 0) {
-      return "assetId must not be empty";
+  private async validateInput(input: PublishingCapabilityInput, idempotencyKey: string, workflowId: string): Promise<string | null> {
+    if (typeof input?.finalMediaArtifactId !== "string" || input.finalMediaArtifactId.trim().length === 0) {
+      return "finalMediaArtifactId must not be empty";
     }
-    if (input.assetId.trim().length > this.policy.maxAssetIdLength) {
-      return "assetId exceeds the configured length limit";
+    if (input.finalMediaArtifactId.trim().length > this.policy.maxAssetIdLength) {
+      return "finalMediaArtifactId exceeds the configured length limit";
     }
     if (typeof input.title !== "string" || input.title.trim().length === 0) {
       return "title must not be empty";
@@ -263,12 +294,38 @@ export class PublishingCapabilityExecutor
     if (input.idempotencyKey !== undefined && input.idempotencyKey !== idempotencyKey) {
       return "idempotencyKey does not match the derived deterministic key";
     }
-    if (input.tags !== undefined && (!Array.isArray(input.tags) || input.tags.some((t) => typeof t !== "string" || t.length > this.policy.maxTagLength))) {
+    if (input.tags !== undefined && (!Array.isArray(input.tags) || input.tags.length > this.policy.maxTags || input.tags.some((t) => typeof t !== "string" || t.length > this.policy.maxTagLength))) {
       return "tags exceed the configured limits";
     }
     if (input.options?.visibility !== undefined && !this.policy.allowedVisibility.includes(input.options.visibility)) {
       return "visibility is not in the configured allowed set";
     }
+    const authority = input.publicationAuthority;
+    const visibility = input.options?.visibility;
+    const requiredScope = visibility === "private" ? PRIVATE_VALIDATION_SCOPE : PUBLIC_PUBLISH_SCOPE;
+    if (authority === undefined || authority.decision !== "approved" || authority.scope !== requiredScope) {
+      return `compatible explicit ${requiredScope} authority is required`;
+    }
+    const payloadHash = sha256Canonical({
+      assetId: input.finalMediaArtifactId,
+      title: input.title.trim(),
+      ...(input.description === undefined ? {} : { description: input.description.trim() }),
+      ...(input.tags === undefined ? {} : { tags: [...input.tags] }),
+      ...(input.metadata === undefined ? {} : { metadata: { ...input.metadata } }),
+      ...(input.options === undefined ? {} : { options: { ...input.options } }),
+    });
+    if (input.projectId === undefined || input.finalMediaSha256 === undefined || input.targetAccountId === undefined) {
+      return "projectId, finalMediaSha256, and targetAccountId are required for publication identity v2";
+    }
+    if (authority.projectId !== input.projectId || authority.workflowId !== workflowId || authority.finalMediaArtifactId !== input.finalMediaArtifactId
+      || authority.finalMediaSha256 !== input.finalMediaSha256 || authority.targetPlatform !== PUBLISH_PLATFORM
+      || authority.targetAccountId !== input.targetAccountId || authority.publicationPayloadHash !== payloadHash
+      || authority.publicationIdentity !== idempotencyKey) {
+      return "PUBLIC_PUBLISH authority binding does not match the exact publication identity";
+    }
+    if (input.mediaTransportRef === undefined) return "mediaTransportRef is required";
+    try { await preflightMediaTransport(input.mediaTransportRef, input.finalMediaSha256); }
+    catch (error) { return error instanceof Error ? error.message : "MEDIA_TRANSPORT_PREFLIGHT_FAILED"; }
     return null;
   }
 
@@ -299,7 +356,26 @@ export class PublishingCapabilityExecutor
   }
 
   private idempotencyKey(request: PublishingRequestEnvelope): string {
-    return idempotencyKeyFor(request.workflowId, request.input.assetId, PUBLISH_PLATFORM);
+    const input = request.input;
+    if (input.projectId !== undefined && input.finalMediaSha256 !== undefined && input.targetAccountId !== undefined) {
+      const publicationPayloadHash = sha256Canonical({
+        assetId: input.finalMediaArtifactId,
+        title: input.title.trim(),
+        ...(input.description === undefined ? {} : { description: input.description.trim() }),
+        ...(input.tags === undefined ? {} : { tags: [...input.tags] }),
+        ...(input.metadata === undefined ? {} : { metadata: { ...input.metadata } }),
+        ...(input.options === undefined ? {} : { options: { ...input.options } }),
+      });
+      return publicationIdentityV2({
+        projectId: input.projectId,
+        workflowId: request.workflowId,
+        finalMediaSha256: input.finalMediaSha256,
+        targetPlatform: PUBLISH_PLATFORM,
+        targetAccountId: input.targetAccountId,
+        publicationPayloadHash,
+      });
+    }
+    return idempotencyKeyFor(request.workflowId, input.finalMediaArtifactId, PUBLISH_PLATFORM);
   }
 
   private blocked(request: PublishingRequestEnvelope, reason: string): PublishingCapabilityResult {

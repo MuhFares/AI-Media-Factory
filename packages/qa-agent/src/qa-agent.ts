@@ -1,7 +1,7 @@
 import type { AgentId, Json } from "@ai-media-factory/runtime";
 import { BaseAgent, type AgentExecutionInput, type AgentExecutionOutput, type CancellationToken, type ExecutionContext, type ExecutionRequest, type ExecutionResponse, type JsonSchema } from "@ai-media-factory/runtime";
 import type { CapabilityResult } from "@ai-media-factory/runtime";
-import type { QAAgentDependencies, QAConfig, QAContentArtifact, QAContentKind, QAEvidenceSource, QAExecutionEvidence, QAFinding, QAFindingCategory, QAFindingSeverity, QAInput, QAMode, QAPriority, QAReport, QAReportStatus, QARisk, QATestResult, QATestStatus, QARecommendation } from "./qa-types.js";
+import type { QAAgentDependencies, QAConfig, QAContentArtifact, QAContentKind, QAEvidenceSource, QAExecutionEvidence, QAFinding, QAFindingCategory, QAFindingSeverity, QAInput, QAMode, QAPriority, QAReport, QAReportStatus, QARisk, QATestResult, QATestStatus, QARecommendation, FinalMediaQAInput } from "./qa-types.js";
 
 type JsonRecord = { [key: string]: Json };
 const testStatuses: QATestStatus[] = ["passed", "failed", "skipped", "not_executed"];
@@ -37,7 +37,11 @@ function validInput(value: Json): value is JsonRecord & QAInput {
   if (value.validatedArtifacts !== undefined
     && !(Array.isArray(value.validatedArtifacts)
       && value.validatedArtifacts.every(isContentArtifact))) return false;
-  return true;
+  if (value.finalMedia !== undefined && !isFinalMedia(value.finalMedia)) return false;
+  return value.finalMedia !== undefined || value.validatedArtifacts === undefined || value.validatedArtifacts.length >= 0;
+}
+function isFinalMedia(value: Json): value is JsonRecord & FinalMediaQAInput {
+  return record(value) && typeof value.workflowId === "string" && typeof value.finalMediaArtifactId === "string" && typeof value.path === "string" && typeof value.durationMs === "number" && Number.isFinite(value.durationMs) && value.durationMs > 0 && typeof value.timelineArtifactId === "string" && typeof value.narrationArtifactId === "string" && Array.isArray(value.sceneClipArtifactIds) && value.sceneClipArtifactIds.length > 0 && value.sceneClipArtifactIds.every((id) => typeof id === "string");
 }
 function isContentArtifact(value: Json): value is JsonRecord & QAContentArtifact {
   return record(value)
@@ -55,6 +59,7 @@ function isContentArtifact(value: Json): value is JsonRecord & QAContentArtifact
 }
 /** Derive the QA domain: a populated content chain selects content QA. */
 function qaModeOf(input: QAInput): QAMode {
+  if (input.finalMedia !== undefined) return "final_media";
   return input.validatedArtifacts !== undefined && input.validatedArtifacts.length > 0 ? "content" : "engineering";
 }
 function thisEvidence(value: JsonRecord): boolean { return typeof value.testName === "string" && oneOf(value.status, testStatuses) && typeof value.executed === "boolean" && oneOf(value.source, sources) && (value.evidence === undefined || typeof value.evidence === "string") && (value.durationMs === undefined || (typeof value.durationMs === "number" && Number.isFinite(value.durationMs) && value.durationMs >= 0)) && (value.failure === undefined || typeof value.failure === "string") && !(value.executed && (value.source !== "runtime" || typeof value.evidence !== "string" || value.evidence.trim() === "")); }
@@ -78,7 +83,8 @@ export class QAAgent extends BaseAgent {
     const prepared = this.prepareInput(input.input, capabilityExecutions);
     const response = await this.runExecution(input.context, this.buildExecutionRequest(this.buildPrompt(prepared, input.context)), signal);
     const parsed = this.parseResponse(response.output, prepared);
-    const report = qaModeOf(input.input) === "content" ? this.applyContentQAGate(parsed, input.input) : this.normalizeClaims(parsed);
+    const mode = qaModeOf(input.input);
+    const report = mode === "content" ? this.applyContentQAGate(parsed, input.input) : mode === "final_media" ? this.applyFinalMediaQAGate(parsed, input.input.finalMedia!) : this.normalizeClaims(parsed);
     const baseOutput = this.toJson(report);
     const output: Json = capabilityExecutions.length > 0 && record(baseOutput)
       ? { ...baseOutput, capabilityExecutions: JSON.parse(JSON.stringify(capabilityExecutions)) as Json[] }
@@ -222,6 +228,17 @@ export class QAAgent extends BaseAgent {
     };
   }
 
+  /** Deterministic final technical QA: only inspectable composition facts are passed here. */
+  private applyFinalMediaQAGate(report: QAReport, media: FinalMediaQAInput): QAReport {
+    const failures: string[] = [];
+    if (media.path.trim() === "") failures.push("Final media path is missing.");
+    if (!Number.isFinite(media.durationMs) || media.durationMs <= 0) failures.push("Final media duration is invalid.");
+    if (media.timelineArtifactId.trim() === "" || media.narrationArtifactId.trim() === "") failures.push("Final media lineage is incomplete.");
+    if (media.sceneClipArtifactIds.length === 0 || new Set(media.sceneClipArtifactIds).size !== media.sceneClipArtifactIds.length) failures.push("Final media scene clips are missing or duplicated.");
+    const findings = failures.map((description, index) => ({ id: `final-media-${index + 1}`, severity: "critical" as const, category: "correctness" as const, description }));
+    return { ...report, status: failures.length === 0 ? "passed" : "blocked", summary: failures.length === 0 ? "Final media passed deterministic technical QA." : "Blocked: final media failed deterministic technical QA.", findings: [...findings, ...report.findings], finalMedia: media };
+  }
+
   private validateContentChain(artifacts: readonly QAContentArtifact[]): { blocked: boolean; findings: QAFinding[]; recommendations: QARecommendation[] } {
     const findings: QAFinding[] = [];
     const recommendations: QARecommendation[] = [];
@@ -349,8 +366,8 @@ export class QAAgent extends BaseAgent {
           ...(artifact.parentArtifact === undefined ? {} : { parentArtifact: { artifactId: artifact.parentArtifact.artifactId, kind: artifact.parentArtifact.kind } }),
           payload: artifact.payload,
         }));
-    const { validatedArtifacts: _validated, ...base } = report;
-    return { ...base, testResults: report.testResults.map((test) => ({ ...test })), findings: report.findings.map((finding) => ({ ...finding })), risks: report.risks.map((risk) => ({ ...risk })), recommendations: report.recommendations.map((recommendation) => ({ ...recommendation })), metadata: { ...report.metadata }, ...(validatedArtifacts === undefined ? {} : { validatedArtifacts }) };
+    const { validatedArtifacts: _validated, finalMedia, ...base } = report;
+    return { ...base, testResults: report.testResults.map((test) => ({ ...test })), findings: report.findings.map((finding) => ({ ...finding })), risks: report.risks.map((risk) => ({ ...risk })), recommendations: report.recommendations.map((recommendation) => ({ ...recommendation })), metadata: { ...report.metadata }, ...(validatedArtifacts === undefined ? {} : { validatedArtifacts }), ...(finalMedia === undefined ? {} : { finalMedia: finalMedia as unknown as Json }) };
   }
 }
 

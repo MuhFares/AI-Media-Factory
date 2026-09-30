@@ -4,10 +4,18 @@ import type { AgentId, Json, Timestamp, Uuid } from "./index.js";
 export type CollaborationStatus = "pending" | "in_progress" | "completed" | "blocked" | "failed" | "cancelled";
 
 /** Stable discriminator for artifacts exchanged by the core agents. */
-export type AgentArtifactKind = "execution_plan" | "research_report" | "writer_report" | "seo_report" | "brand_report" | "coding_report" | "review_report" | "qa_report" | "documentation_report" | "thumbnail_report" | "video_report" | "published_report" | "analytics_report" | "growth_report" | "finance_report";
+export type AgentArtifactKind = "execution_plan" | "evidence_backed_content_brief" | "research_report" | "ceo_recommendation" | "hook_concepts" | "writer_report" | "seo_report" | "brand_report" | "coding_report" | "review_report" | "qa_report" | "visual_direction_contract" | "visual_direction_plan" | "documentation_report" | "thumbnail_report" | "video_report" | "published_report" | "analytics_report" | "growth_report" | "finance_report" | "strategy_research_input_envelope" | "scene_plan" | "narration_artifact" | "timeline_plan" | "scene_visual_artifact" | "visual_semantic_review" | "visual_technical_qa" | "wan_authorization" | "scene_video_clip" | "final_media_artifact" | "final_technical_qa" | "final_product_review" | "publisher_authorization" | "publication_integration_validation" | "production_policy_decision";
 
 /** Canonical structural payloads used at the collaboration boundary. */
 export interface ExecutionPlanArtifactPayload extends Record<string, Json> { planId: Uuid; objective: string; tasks: Json[]; }
+export interface EvidenceBackedContentBriefArtifactPayload extends Record<string, Json> {
+  briefId: Uuid; stage: "POST_RESEARCH_SYNTHESIS"; objective: string; finalAngle: string;
+  keyPoints: Json[]; claims: Json[]; uncertainties: Json[]; evidenceRefs: Json[];
+  hookDirection: string; messageProgression: Json[]; audienceFraming: string;
+  toneConstraints: Json[]; writerInstructions: Json[]; originalityConstraints: Json[];
+  platformConstraints: Json[]; warnings: Json[]; status: "completed" | "blocked";
+  researchSources: Json[];
+}
 export interface ResearchReportArtifactPayload extends Record<string, Json> { reportId: Uuid; taskDescription: string; summary: string; sources: Json[]; }
 export interface WriterReportArtifactPayload extends Record<string, Json> { contentId: Uuid; taskDescription: string; objective: string; title: string; content: string; summary: string; sourceReferences: Json[]; status: string; }
 export interface SEOReportArtifactPayload extends Record<string, Json> { reportId: Uuid; taskDescription: string; objective: string; optimizedTitle: string; optimizedDescription: string; keywords: Json[]; topics: Json[]; searchIntent: string; contentStructure: Json[]; status: string; }
@@ -22,16 +30,23 @@ export interface PublishedReportArtifactPayload extends Record<string, Json> { r
 export interface AnalyticsReportArtifactPayload extends Record<string, Json> { reportId: Uuid; publicationId: string; contentId: string; platform: string; retrievedAt: string; status: string; summary: string; metrics: Record<string, number>; source: string; sourceId: string; executionEvidencePresent: boolean; metadata: Record<string, Json>; capabilityExecutions: Json[]; }
 export interface GrowthReportArtifactPayload extends Record<string, Json> { recommendationId: Uuid; objective: string; contentId: string; status: string; summary: string; winningPatterns: Json[]; losingPatterns: Json[]; recommendations: Json[]; experiments: Json[]; priorities: Json[]; confidence: number; sourceArtifactReferences: Json[]; metadata: Record<string, Json>; }
 export interface FinanceReportArtifactPayload { [key: string]: Json | undefined; reportId: Uuid; contentId: string; status: string; summary: string; revenue?: number; cost?: number; profit?: number; roi?: number; cpa?: number; cpaType?: "CPA" | "CAC"; margin?: number; currency?: string; confidence: number; sourceArtifactReferences: Json[]; metadata: Record<string, Json>; }
+export interface MediaChainArtifactPayload extends Record<string, Json> { artifactId: string; status: string; workflowId: string; }
+export interface PreMediaArtifactPayload extends Record<string, Json> { status: string; summary: string; }
 
 export interface AgentArtifactPayloadByKind {
   execution_plan: ExecutionPlanArtifactPayload;
+  evidence_backed_content_brief: EvidenceBackedContentBriefArtifactPayload;
   research_report: ResearchReportArtifactPayload;
+  ceo_recommendation: PreMediaArtifactPayload;
+  hook_concepts: PreMediaArtifactPayload;
   writer_report: WriterReportArtifactPayload;
   seo_report: SEOReportArtifactPayload;
   brand_report: BrandReviewReportArtifactPayload;
   coding_report: CodingReportArtifactPayload;
   review_report: ReviewReportArtifactPayload;
   qa_report: QAReportArtifactPayload;
+  visual_direction_plan: PreMediaArtifactPayload;
+  visual_direction_contract: PreMediaArtifactPayload;
   documentation_report: DocumentationReportArtifactPayload;
   thumbnail_report: ThumbnailReportArtifactPayload;
   video_report: VideoReportArtifactPayload;
@@ -39,6 +54,21 @@ export interface AgentArtifactPayloadByKind {
   analytics_report: AnalyticsReportArtifactPayload;
   growth_report: GrowthReportArtifactPayload;
   finance_report: FinanceReportArtifactPayload;
+  strategy_research_input_envelope: ExecutionPlanArtifactPayload;
+  scene_plan: MediaChainArtifactPayload;
+  narration_artifact: MediaChainArtifactPayload;
+  timeline_plan: MediaChainArtifactPayload;
+  scene_visual_artifact: MediaChainArtifactPayload;
+  visual_semantic_review: MediaChainArtifactPayload;
+  visual_technical_qa: MediaChainArtifactPayload;
+  wan_authorization: MediaChainArtifactPayload;
+  scene_video_clip: MediaChainArtifactPayload;
+  final_media_artifact: MediaChainArtifactPayload;
+  final_technical_qa: MediaChainArtifactPayload;
+  final_product_review: MediaChainArtifactPayload;
+  publisher_authorization: MediaChainArtifactPayload;
+  publication_integration_validation: MediaChainArtifactPayload;
+  production_policy_decision: MediaChainArtifactPayload;
 }
 
 /** State of the artifact itself, independent from transport/workflow state. */

@@ -17,6 +17,8 @@ export interface StepOutcome {
   output: Json;
   /** For agent steps, the produced collaboration artifact (if any). */
   artifact?: CollaborationArtifact;
+  reviewBusinessStatus?: "approved" | "changes_requested" | "blocked" | "human_review_required";
+  reviewExecutionId?: string;
   /** For branch steps: the chosen next step id. */
   chosenNext?: string;
   error?: { message: string; retryable: boolean };

@@ -73,6 +73,27 @@ export interface ExecutiveDirective {
   readonly cycle?: number;
 }
 
+/** V2-only, owner-review synthesis. It deliberately does not replace ExecutiveDirective. */
+export interface StrategyCouncilSynthesisV2 {
+  readonly contract: "STRATEGY_COUNCIL_SYNTHESIS_V2";
+  readonly status: "AWAITING_OWNER_APPROVAL";
+  readonly executiveSummary: { readonly recommendation: string; readonly tradeoffs: readonly string[]; readonly launchDecision: string; readonly ownerDecisions: readonly string[]; readonly deferredDecisions: readonly string[] };
+  readonly strategicRecommendation: { readonly territory: string; readonly rationale: string; readonly targetAudience: string; readonly audiencePromise: string; readonly differentiation: string; readonly flagshipProposition: string };
+  readonly contentSystem: { readonly primaryPillars: readonly string[]; readonly deferredPillars: readonly string[]; readonly formats: readonly string[]; readonly flagshipFormat: string; readonly productionModel: string };
+  readonly platforms: readonly { readonly platform: "Instagram Reels" | "YouTube Shorts" | "TikTok"; readonly role: string; readonly priority: number; readonly launchTiming: string; readonly reuseApproach: string; readonly rationale: string }[];
+  readonly identity: { readonly recommendation: "FACELESS" | "PERSONAL_BRAND" | "HYBRID"; readonly rationale: string };
+  readonly channelPortfolio: { readonly recommendation: "ONE_CHANNEL" | "MULTIPLE_CHANNELS" | "PHASED_PORTFOLIO"; readonly launchArchitecture: string; readonly launchesFirst: string; readonly deferred: readonly string[]; readonly expansionTrigger: string; readonly rationale: string };
+  readonly monetization: { readonly initialRoutes: readonly string[]; readonly laterRoutes: readonly string[]; readonly dependencies: readonly string[]; readonly assumptions: readonly string[]; readonly risks: readonly string[] };
+  readonly costAndReinvestment: { readonly startingModel: string; readonly requiredPaidComponents: readonly string[]; readonly lowCostComponents: readonly string[]; readonly reinvestmentPriorities: readonly string[]; readonly costControlGates: readonly string[]; readonly unknownCosts: readonly string[] };
+  readonly revenueMilestones: readonly { readonly monthlyUsd: 100 | 1000 | 10000; readonly objective: string; readonly mechanism: string; readonly operationalRequirement: string; readonly scaleTrigger: string; readonly majorRisk: string }[];
+  readonly productionFeasibility: { readonly difficulty: string; readonly workflowComplexity: string; readonly aiDependency: string; readonly humanReview: string; readonly scalabilityConstraints: readonly string[] };
+  readonly videoConcepts: readonly { readonly concept: string; readonly pillar: string; readonly hook: string; readonly platformFit: readonly string[]; readonly rationale: string }[];
+  readonly risks: readonly { readonly category: string; readonly impact: string; readonly mitigation: string }[];
+  readonly evidenceNotes: readonly { readonly label: string; readonly classification: "KNOWN" | "OBSERVED" | "INFERRED" | "ASSUMED" | "UNKNOWN"; readonly rationale: string }[];
+  readonly disagreements: readonly { readonly specialists: readonly string[]; readonly positions: readonly string[]; readonly resolution: string; readonly rationale: string }[];
+  readonly namingCriteria: readonly string[];
+}
+
 /** Options to construct a CEOAgent. */
 export interface CEOAgentOptions {
   /** Restricts requested stages to registered agents; never invents agents. */

@@ -33,12 +33,31 @@ export interface YouTubeAnalyticsConfig {
   maxRetries?: number;
   /** Analytics window: number of days ending today. Must be >= 1. */
   windowDays?: number;
+  /**
+   * Explicit provider metric list. Defaults to SUPPORTED_METRICS (monetary
+   * included). Pass NON_MONETARY_METRICS for validation proofs that must
+   * not request revenue. Unknown names are rejected at construction.
+   */
+  metrics?: readonly string[];
   onOperation?: OperationSink;
 }
 
 const DEFAULT_BASE_URL = "https://youtubeanalytics.googleapis.com";
 const SUPPORTED_METRICS =
   "views,averageViewDuration,estimatedMinutesWatched,likes,comments,shares,estimatedRevenue";
+
+/** M4 non-monetary metric set: identical to SUPPORTED_METRICS minus
+ *  estimatedRevenue. Monetary reports require yt-analytics-monetary
+ *  scope plus monetization eligibility; requesting them without both
+ *  can reject the entire report. M4 never needs revenue. */
+export const NON_MONETARY_METRICS = [
+  "views",
+  "averageViewDuration",
+  "estimatedMinutesWatched",
+  "likes",
+  "comments",
+  "shares",
+] as const;
 
 const KNOWN_METRIC_KEYS: Record<string, keyof PerformanceMetrics | undefined> = {
   views: "views",
@@ -60,6 +79,7 @@ export class YouTubeAnalyticsAdapter implements AnalyticsProvider {
   private readonly timeoutMs: number;
   private readonly maxRetries: number;
   private readonly windowDays: number;
+  private readonly metricsParam: string;
   private readonly onOperation: OperationSink;
 
   constructor(config: YouTubeAnalyticsConfig) {
@@ -69,11 +89,22 @@ export class YouTubeAnalyticsAdapter implements AnalyticsProvider {
         "config.accessToken is required. Provide a YouTube OAuth access token (YOUTUBE_ACCESS_TOKEN).",
       );
     }
+    const known = new Set<string>(SUPPORTED_METRICS.split(","));
+    const chosen = config.metrics ?? [...known];
+    for (const m of chosen) {
+      if (!known.has(m)) {
+        throw providerConfigError("youtube-analytics", `config.metrics contains unsupported metric '${m}'`);
+      }
+    }
+    if (chosen.length === 0) {
+      throw providerConfigError("youtube-analytics", "config.metrics must not be empty");
+    }
     this.accessToken = config.accessToken.trim();
     this.baseUrl = config.baseUrl ?? DEFAULT_BASE_URL;
     this.timeoutMs = config.timeoutMs ?? 15_000;
     this.maxRetries = config.maxRetries ?? 2;
     this.windowDays = config.windowDays ?? 30;
+    this.metricsParam = chosen.join(",");
     assertPositive("youtube-analytics", this.timeoutMs, "timeoutMs");
     assertPositive("youtube-analytics", this.windowDays, "windowDays");
     this.onOperation = sinkOf(config.onOperation);
@@ -91,7 +122,7 @@ export class YouTubeAnalyticsAdapter implements AnalyticsProvider {
     const start = new Date(end.getTime() - (this.windowDays - 1) * 86_400_000);
     const url = new URL(`${this.baseUrl.replace(/\/$/, "")}/v2/reports`);
     url.searchParams.set("ids", "channel==MINE");
-    url.searchParams.set("metrics", SUPPORTED_METRICS);
+    url.searchParams.set("metrics", this.metricsParam);
     url.searchParams.set("dimensions", "video");
     url.searchParams.set("filters", `video==${request.publicationId}`);
     url.searchParams.set("startDate", toYmd(start));

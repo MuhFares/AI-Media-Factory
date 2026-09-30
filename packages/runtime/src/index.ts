@@ -23,3 +23,4 @@ export * from "./execution/runtime-agent-executor.js";
 export * from "./execution/registry-agent-resolver.js";
 export * from "./execution/runtime-capability-executor.js";
 export * from "./execution/structured-output-reliability.js";
+export * from "./execution/bounded-structural-diagnostics.js";

@@ -34,6 +34,12 @@ dist/
 .env.*
 !.env.example
 
+# ---------- Owner-local YouTube OAuth material (never commit) ----------
+# Narrow credential/token filename patterns only; normal JSON stays tracked.
+client_secret*.json
+*-oauth-token.json
+.youtube-oauth/
+
 # ---------- Editors / OS ----------
 .idea/
 .vscode/*

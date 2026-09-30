@@ -1,6 +1,7 @@
 /**
  * Video Agent implementation.
- * Deterministic agent: validates the approved content chain (thumbnail present,
+ * Deterministic agent: validates the approved content chain (a governed scene
+ * visual for production, or a legacy thumbnail where explicitly applicable),
  * brand approved, upstream lineage valid) and requests the `video.generate`
  * capability through the injected capability execution boundary. It does not
  * call a provider directly and never claims completion without matching
@@ -11,7 +12,7 @@ import type { AgentId, Json } from "@ai-media-factory/runtime";
 import type { CancellationToken, ExecutionContext, ExecutionResponse } from "@ai-media-factory/runtime";
 import { BaseAgent, type AgentExecutionInput, type AgentExecutionOutput } from "@ai-media-factory/runtime";
 import type { CapabilityRequest, CapabilityResult } from "@ai-media-factory/runtime";
-import { VIDEO_GENERATION_CAPABILITY_ID } from "@ai-media-factory/tool-framework";
+import { VIDEO_GENERATION_CAPABILITY_ID, validateWanAuthorization } from "@ai-media-factory/tool-framework";
 import type {
   VideoAgentDependencies,
   VideoAgentInput,
@@ -57,6 +58,8 @@ function isVideoAgentInput(value: Json): value is JsonRecord & VideoAgentInput {
       && value.validatedArtifacts.every((item) => isVideoSourceArtifact(item)))) {
     return false;
   }
+  if (value.wanAuthorization !== undefined && !isRecord(value.wanAuthorization)) return false;
+  if (value.visualArtifact !== undefined && !isRecord(value.visualArtifact)) return false;
   return true;
 }
 
@@ -135,14 +138,10 @@ export class VideoAgent extends BaseAgent {
     }
 
     const thumbnail = artifacts.find((a) => a.kind === "thumbnail_report");
-    if (thumbnail === undefined) return { ok: false, reason: "a thumbnail artifact is required but is missing." };
-    if (!isRecord(thumbnail.payload)) return { ok: false, reason: "the thumbnail artifact payload is malformed." };
-    if (thumbnail.payload.status !== "completed") {
-      return { ok: false, reason: `the thumbnail is ${String(thumbnail.payload.status)} and cannot feed video generation.` };
-    }
-    if (thumbnail.payload.executionEvidencePresent !== true) {
-      return { ok: false, reason: "the thumbnail lacks matching runtime evidence of image generation." };
-    }
+    const visualArtifact = input.visualArtifact ?? this.legacyThumbnailVisual(thumbnail);
+    if (visualArtifact === null) return { ok: false, reason: "an authorized governed scene visual is required; no legacy thumbnail input is available." };
+    const authorization = validateWanAuthorization({ workflowId: artifacts[0].workflowId, artifact: visualArtifact, authorization: input.wanAuthorization });
+    if (!authorization.ok) return { ok: false, reason: `${authorization.code}: ${authorization.reason}` };
 
     return { ok: true, reason: "" };
   }
@@ -154,9 +153,18 @@ export class VideoAgent extends BaseAgent {
     if (seed === null) return null;
     const lead = artifacts[0];
     const thumbnail = artifacts.find((a) => a.kind === "thumbnail_report");
-    const thumbnailId = thumbnail !== undefined && isRecord(thumbnail.payload) && typeof thumbnail.payload.imageId === "string"
-      ? thumbnail.payload.imageId
-      : "";
+    const governedVisual = input.visualArtifact;
+    const sourceAssetId = governedVisual?.generationId
+      ?? (thumbnail !== undefined && isRecord(thumbnail.payload) && typeof thumbnail.payload.imageId === "string" ? thumbnail.payload.imageId : "");
+    // Legacy thumbnails may provide a data URL. Governed visuals are referenced
+    // by their exact authorized generation identity instead.
+    let imageBase64: string | undefined;
+    if (governedVisual === undefined && thumbnail !== undefined && isRecord(thumbnail.payload) && typeof thumbnail.payload.url === "string") {
+      const url: string = thumbnail.payload.url;
+      const comma = url.indexOf(",");
+      if (url.startsWith("data:") && comma >= 0) imageBase64 = url.slice(comma + 1).trim();
+      else if (url.length > 500 && /^[A-Za-z0-9+/=]+$/.test(url.slice(0, 100))) imageBase64 = url.trim();
+    }
     return {
       requestId: `video-${input.requestId}`,
       capabilityId: VIDEO_GENERATION_CAPABILITY_ID,
@@ -168,11 +176,21 @@ export class VideoAgent extends BaseAgent {
         prompt: seed.prompt,
         aspectRatio: seed.aspectRatio,
         durationSeconds: this.videoConfig.durationSeconds,
-        ...(thumbnailId === "" ? {} : { sourceAssetIds: [thumbnailId] }),
+        ...(sourceAssetId === "" ? {} : { sourceAssetIds: [sourceAssetId] }),
+        ...(imageBase64 === undefined ? {} : { imageBase64 }),
         ...(input.instructions === undefined ? {} : { negativePrompt: input.instructions }),
       },
       requestedAt: new Date().toISOString(),
     };
+  }
+
+  private legacyThumbnailVisual(thumbnail: VideoSourceArtifact | undefined): import("@ai-media-factory/tool-framework").GeneratedVisualArtifact | null {
+    if (thumbnail === undefined || !isRecord(thumbnail.payload)) return null;
+    if (thumbnail.payload.status !== "completed" || thumbnail.payload.executionEvidencePresent !== true) return null;
+    const path = typeof thumbnail.payload.imageUrl === "string" ? thumbnail.payload.imageUrl : "";
+    const generationId = typeof thumbnail.payload.imageId === "string" ? thumbnail.payload.imageId : "";
+    if (path === "" || generationId === "") return null;
+    return { artifactId: thumbnail.artifactId, sceneId: "scene-001", artifactPathOrReference: path, provider: typeof thumbnail.payload.providerId === "string" ? thumbnail.payload.providerId : "legacy-thumbnail", generationId, integrityStatus: "UNKNOWN" };
   }
 
   /** Derive a safe, bounded prompt from the writer/seo/thumnail artifacts. */

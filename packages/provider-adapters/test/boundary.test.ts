@@ -154,7 +154,7 @@ describe("provider capability boundary", () => {
     strictEqual(evidence.videoId, (output as { videoId?: string }).videoId);
   });
 
-  it("publishes for the publisher agent and deduplicates the same logical request", async (t) => {
+  it("blocks publisher-agent publish without explicit PUBLIC_PUBLISH authority before any provider call", async (t) => {
     const publishMock = await createYouTubePublishMock();
     t.after(() => publishMock.close());
     const media = await createMediaMock();
@@ -178,20 +178,13 @@ describe("provider capability boundary", () => {
       options: { visibility: "unlisted" },
     });
     const first = await boundary.executeCapability(request);
-    const firstResult = await assertSuccess<{ [key: string]: unknown }>(first, "publish.youtube", "publisher");
-    strictEqual((firstResult.output as { status: string }).status, "completed");
-    strictEqual((firstResult.output as { deduplicated: boolean }).deduplicated, false);
-
-    const second = await boundary.executeCapability(request);
-    const secondResult = await assertSuccess<{ [key: string]: unknown }>(second, "publish.youtube", "publisher");
-    strictEqual((secondResult.output as { status: string }).status, "completed");
-    strictEqual((secondResult.output as { deduplicated: boolean }).deduplicated, true);
-    strictEqual(
-      (secondResult.output as { publicationId?: string }).publicationId,
-      (firstResult.output as { publicationId?: string }).publicationId,
-    );
-    strictEqual(publishMock.state.uploads, 1, "the second call never reached the provider");
-    strictEqual(publishStore.count(), 1, "one persisted outcome per logical request");
+    // Canonical behavior: fail-closed PUBLIC_PUBLISH authority gate. The
+    // success-plus-dedup path is covered with exact authority in
+    // tool-framework/publisher-authority-guard tests.
+    strictEqual(first.status, "blocked");
+    strictEqual(first.reason, "compatible explicit PUBLIC_PUBLISH authority is required");
+    strictEqual(publishMock.state.uploads, 0, "blocked requests never reach the provider");
+    strictEqual(publishStore.count(), 0, "blocked requests persist nothing");
   });
 
   it("fetches analytics for the analytics agent with provider-backed metrics", async (t) => {

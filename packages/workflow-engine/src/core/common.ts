@@ -25,7 +25,9 @@ export type WorkflowState =
   | "COMPLETED"
   | "FAILED"
   | "CANCELLED"
-  | "ESCALATED";
+  | "ESCALATED"
+  | "REVISION_REQUIRED"
+  | "BUSINESS_BLOCKED";
 
 /** A state transition rule. */
 export interface StateTransition {

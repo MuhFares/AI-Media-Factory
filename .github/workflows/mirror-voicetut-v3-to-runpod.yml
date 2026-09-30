@@ -1,0 +1,107 @@
+name: Mirror VoiceTuT v3 to RunPod registry
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_repository:
+        description: "Exact repository path shown in the RunPod registry (no host, tag, or credentials)"
+        required: true
+        type: string
+      target_tag:
+        description: "Target tag"
+        required: true
+        default: "v3"
+        type: string
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    env:
+      SOURCE_TAG_IMAGE: ghcr.io/muhfares/voicetut-tts:v3
+      SOURCE_DIGEST: sha256:2b9b0d987c98a03cda78f90ebc462e5d2927c18af230f9f6a980455dda00ede8
+      TARGET_REGISTRY: registry.runpod.net
+
+    steps:
+      - name: Set up crane
+        uses: imjasonh/setup-crane@v0.4
+
+      - name: Validate target reference
+        shell: bash
+        env:
+          TARGET_REPOSITORY: ${{ inputs.target_repository }}
+          TARGET_TAG: ${{ inputs.target_tag }}
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_REPOSITORY" =~ ^[a-z0-9][a-z0-9._/-]*$ ]] || {
+            echo "Invalid target repository syntax; use the exact RunPod repository path only."
+            exit 1
+          }
+          [[ "$TARGET_TAG" =~ ^[A-Za-z0-9._-]+$ ]] || {
+            echo "Invalid target tag syntax."
+            exit 1
+          }
+          [[ "$TARGET_REPOSITORY" != *"@"* ]] || { echo "Digest syntax is not accepted in target_repository."; exit 1; }
+          echo "Target registry: $TARGET_REGISTRY"
+          echo "Target repository path: $TARGET_REPOSITORY"
+          echo "Target tag: $TARGET_TAG"
+
+      - name: Log in to source GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.GHCR_READ_USERNAME }}
+          password: ${{ secrets.GHCR_READ_TOKEN }}
+
+      - name: Log in to RunPod registry
+        uses: docker/login-action@v3
+        with:
+          registry: registry.runpod.net
+          username: ${{ secrets.RUNPOD_REGISTRY_USERNAME }}
+          password: ${{ secrets.RUNPOD_REGISTRY_PASSWORD }}
+
+      - name: Verify source tag resolves to the known v3 digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(crane digest "$SOURCE_TAG_IMAGE")"
+          [[ "$actual" == "$SOURCE_DIGEST" ]] || {
+            echo "Source tag digest does not match the approved v3 digest."
+            exit 1
+          }
+          echo "Source tag verified at approved digest: $actual"
+
+      - name: Copy exact OCI image without rebuilding
+        shell: bash
+        env:
+          TARGET_REPOSITORY: ${{ inputs.target_repository }}
+          TARGET_TAG: ${{ inputs.target_tag }}
+        run: |
+          set -euo pipefail
+          target="$TARGET_REGISTRY/$TARGET_REPOSITORY:$TARGET_TAG"
+          crane copy "${SOURCE_TAG_IMAGE}@${SOURCE_DIGEST}" "$target"
+          echo "Copied source digest to target reference: $target"
+
+      - name: Verify target digest and image content identity
+        shell: bash
+        env:
+          TARGET_REPOSITORY: ${{ inputs.target_repository }}
+          TARGET_TAG: ${{ inputs.target_tag }}
+        run: |
+          set -euo pipefail
+          target="$TARGET_REGISTRY/$TARGET_REPOSITORY:$TARGET_TAG"
+          target_digest="$(crane digest "$target")"
+          echo "Source digest: $SOURCE_DIGEST"
+          echo "Target manifest digest: $target_digest"
+
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          crane manifest "${SOURCE_TAG_IMAGE}@${SOURCE_DIGEST}" > "$tmp/source.json"
+          crane manifest "$target" > "$tmp/target.json"
+
+          jq -S 'if .manifests then {kind:"index", manifests:[.manifests[] | {digest, mediaType, size, platform}]} else {kind:"manifest", config:(.config.digest // null), layers:[.layers[]?.digest] | sort} end' "$tmp/source.json" > "$tmp/source-normalized.json"
+          jq -S 'if .manifests then {kind:"index", manifests:[.manifests[] | {digest, mediaType, size, platform}]} else {kind:"manifest", config:(.config.digest // null), layers:[.layers[]?.digest] | sort} end' "$tmp/target.json" > "$tmp/target-normalized.json"
+          cmp "$tmp/source-normalized.json" "$tmp/target-normalized.json"
+          echo "Source/target config-layer or index-manifest identity verified."

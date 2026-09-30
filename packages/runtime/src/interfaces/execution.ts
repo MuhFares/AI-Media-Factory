@@ -16,6 +16,12 @@ export interface ExecutionRequest {
   maxOutputTokens: number;
   /** The output schema the model is asked to conform to. */
   responseSchema?: import("./validation.js").JsonSchema;
+  /** Optional stable logical-call identity used for budget/provenance attribution. */
+  callIdentity?: {
+    callLeg: string;
+  };
+  /** Optional observational hook. It never authorizes retries or fallback. */
+  onTransportEvent?: (event: "FETCH_INVOCATION_STARTED" | "HTTP_RESPONSE_HEADERS_RECEIVED" | "HTTP_RESPONSE_BODY_RECEIVED" | "RESPONSE_PARSED", details?: Record<string, unknown>) => Promise<void> | void;
 }
 
 /** Token/cost usage returned by a provider. */

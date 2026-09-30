@@ -39,18 +39,20 @@ import {
   workflow,
 } from "@ai-media-factory/workflow-engine";
 import { createPool, migrate, PostgresPersistence } from "@ai-media-factory/database";
-import { TEST_DATABASE_URL } from "./helpers.js";
+import { TEST_DATABASE_URL, assertTestDatabaseIsolation } from "./helpers.js";
 
 const CONN = TEST_DATABASE_URL;
 let persistence;
 
 async function newPersistence() {
+  assertTestDatabaseIsolation();
   const pool = createPool({ connectionString: CONN });
   await migrate(pool);
   return new PostgresPersistence(pool);
 }
 
 async function truncateAll() {
+  assertTestDatabaseIsolation();
   const pool = createPool({ connectionString: CONN });
   await migrate(pool);
   await pool.query(

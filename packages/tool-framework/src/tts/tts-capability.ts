@@ -4,7 +4,9 @@ import type {
   CapabilityResolver,
   CapabilityResult,
   ExecutionEvidence,
+  ProviderFailureMetadata,
 } from "../capabilities.js";
+import { sanitizeProviderFailureMetadata } from "../core/provider-failure.js";
 
 export const TTS_GENERATION_CAPABILITY_ID = "tts.generate";
 
@@ -18,6 +20,13 @@ export interface TTSGenerationRequest {
   format?: "wav" | "mp3";
   /** Optional speed hint. Providers without speed support ignore it. */
   speed?: number;
+  /** Internal coordinator mode: exactly one provider request for this already-sized chunk. */
+  singleChunk?: boolean;
+  /** Stable AMF identity used for durable acknowledgement recovery. */
+  logicalSubmissionId?: string;
+  workflowId?: string;
+  textFingerprint?: string;
+  configurationFingerprint?: string;
 }
 
 export interface TTSGenerationProviderResponse {
@@ -38,6 +47,7 @@ export interface TTSGenerationProviderResponse {
 
 export interface TTSGenerationProvider {
   generate(request: TTSGenerationRequest): Promise<TTSGenerationProviderResponse>;
+  generateSingleChunk?(request: TTSGenerationRequest): Promise<TTSGenerationProviderResponse>;
 }
 
 export interface TTSGenerationCapabilityInput extends TTSGenerationRequest {}
@@ -108,12 +118,19 @@ export class TTSGenerationCapabilityExecutor
     try {
       const providerRequest: TTSGenerationRequest = {
         text: input.text.trim(),
+        ...(input.logicalSubmissionId === undefined ? {} : { logicalSubmissionId: input.logicalSubmissionId.trim() }),
+        ...(input.workflowId === undefined ? { workflowId: request.workflowId } : { workflowId: input.workflowId.trim() }),
+        ...(input.textFingerprint === undefined ? {} : { textFingerprint: input.textFingerprint.trim() }),
+        ...(input.configurationFingerprint === undefined ? {} : { configurationFingerprint: input.configurationFingerprint.trim() }),
         ...(input.language === undefined ? {} : { language: input.language.trim() }),
         ...(input.voice === undefined ? {} : { voice: input.voice.trim() }),
         ...(input.format === undefined ? {} : { format: input.format }),
         ...(input.speed === undefined ? {} : { speed: input.speed }),
+        ...(input.singleChunk === undefined ? {} : { singleChunk: input.singleChunk }),
       };
-      const providerResponse = await this.provider.generate(providerRequest);
+      const providerResponse = providerRequest.singleChunk && this.provider.generateSingleChunk !== undefined
+        ? await this.provider.generateSingleChunk(providerRequest)
+        : await this.provider.generate(providerRequest);
       if (!this.isValidProviderResponse(providerResponse)) {
         return this.failed(
           request,
@@ -141,7 +158,11 @@ export class TTSGenerationCapabilityExecutor
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : "TTS provider failed";
-      return this.failed(request, "PROVIDER_ERROR", message, startedAt, true);
+      const failureMetadata = sanitizeProviderFailureMetadata(error, {
+        capability: request.capabilityId,
+        latencyMs: Math.max(0, Date.now() - startedAt),
+      });
+      return this.failed(request, "PROVIDER_ERROR", message, startedAt, true, failureMetadata ?? undefined);
     }
   }
 
@@ -163,6 +184,14 @@ export class TTSGenerationCapabilityExecutor
     }
     if (input.voice !== undefined && (typeof input.voice !== "string" || input.voice.trim().length === 0 || input.voice.trim().length > 64)) {
       return "voice must be a short non-empty string";
+    }
+    for (const [name, value, max] of [
+      ["logicalSubmissionId", input.logicalSubmissionId, 200],
+      ["workflowId", input.workflowId, 200],
+      ["textFingerprint", input.textFingerprint, 128],
+      ["configurationFingerprint", input.configurationFingerprint, 128],
+    ] as const) {
+      if (value !== undefined && (typeof value !== "string" || value.trim().length === 0 || value.trim().length > max)) return `${name} must be a bounded non-empty string`;
     }
     return null;
   }
@@ -207,13 +236,14 @@ export class TTSGenerationCapabilityExecutor
     message: string,
     startedAt: number,
     providerInvoked: boolean,
+    failureMetadata?: ProviderFailureMetadata,
   ): TTSGenerationCapabilityResult {
     return {
       status: "failed",
       resultId: this.resultId(request),
       capabilityId: request.capabilityId,
-      error: { code, message, retryable: false },
-      evidence: this.evidence(request, "", "", false, startedAt, providerInvoked, { code, message }),
+      error: { code, message, retryable: failureMetadata?.retryable ?? false, ...(failureMetadata === undefined ? {} : { failureMetadata }) },
+      evidence: this.evidence(request, "", "", false, startedAt, providerInvoked, { code, message, retryable: failureMetadata?.retryable ?? false, ...(failureMetadata === undefined ? {} : { failureMetadata }) }),
     };
   }
 
@@ -224,7 +254,7 @@ export class TTSGenerationCapabilityExecutor
     succeeded: boolean,
     startedAt: number,
     providerInvoked: boolean,
-    error?: { code: string; message: string },
+    error?: { code: string; message: string; retryable?: boolean; failureMetadata?: ProviderFailureMetadata },
   ): ExecutionEvidence {
     return {
       evidenceId: `evidence-${this.resultId(request)}`,

@@ -13,6 +13,7 @@
 import type { Uuid, CollaborationArtifact } from "@ai-media-factory/shared";
 import type { WorkflowInstance } from "../core/instance.js";
 import type { WorkflowCheckpoint } from "./checkpoint.js";
+import type { ExecutionProvenanceRecord } from "./execution-provenance.js";
 
 /**
  * Marker thrown by a step executor when the process is interrupted mid-step
@@ -56,10 +57,31 @@ export interface ExecutionEvidenceRecord {
   readonly payload: Record<string, unknown>;
 }
 
+/** Append-only, secret-safe state transition record for governed provider work. */
+export interface ExecutionLifecycleEvent {
+  readonly executionId: string;
+  readonly workflowId: Uuid;
+  readonly stage: string;
+  readonly state: string;
+  readonly occurredAt: string;
+  readonly attemptNumber: number;
+  readonly metadata: Record<string, unknown>;
+}
+
+/** Independent, append-only evidence when the normal terminal event cannot be written. */
+export interface ExecutionFailureFallbackEvent {
+  readonly executionId: string;
+  readonly workflowId: Uuid;
+  readonly stage: string;
+  readonly attemptNumber: number;
+  readonly occurredAt: string;
+  readonly metadata: Record<string, unknown>;
+}
+
 /** A durable decision/directive/business-cycle record (CEO layer). */
 export interface DecisionRecord {
   readonly decisionId: Uuid;
-  readonly kind: "executive_directive" | "business_decision" | "business_cycle";
+  readonly kind: "executive_directive" | "business_decision" | "business_cycle" | "production_policy";
   readonly workflowId: Uuid | null;
   readonly correlationId: string | null;
   readonly cycle: number | null;
@@ -94,6 +116,19 @@ export interface PersistencePort {
   // -- Execution evidence ------------------------------------------------------
   saveExecutionEvidence(record: ExecutionEvidenceRecord): Promise<void>;
   listExecutionEvidence(workflowId: Uuid): Promise<ExecutionEvidenceRecord[]>;
+
+  // Additive provenance support. Legacy persistence adapters remain valid.
+  saveExecutionProvenance?(record: ExecutionProvenanceRecord): Promise<void>;
+  listExecutionProvenance?(workflowId: Uuid): Promise<ExecutionProvenanceRecord[]>;
+  /**
+   * Durable compare-and-set at the paid-provider boundary.  A true result is
+   * the sole authority to start transport for a prepared execution.
+   */
+  claimReadyExecutionProvenance?(executionId: string, details?: { maxTokens?: number; callLeg?: string; reservationId?: string; idempotencyKey?: string }): Promise<boolean>;
+  appendExecutionLifecycleEvent?(event: ExecutionLifecycleEvent): Promise<void>;
+  listExecutionLifecycleEvents?(executionId: string): Promise<ExecutionLifecycleEvent[]>;
+  appendExecutionFailureFallbackEvent?(event: ExecutionFailureFallbackEvent): Promise<void>;
+  listExecutionFailureFallbackEvents?(executionId: string): Promise<ExecutionFailureFallbackEvent[]>;
 
   // -- Decisions / directives / business cycle ---------------------------------
   saveDecision(record: DecisionRecord): Promise<void>;

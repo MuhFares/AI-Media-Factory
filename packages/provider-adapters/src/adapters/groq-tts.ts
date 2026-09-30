@@ -28,6 +28,7 @@ import type {
   TTSGenerationProviderResponse,
   TTSGenerationRequest,
 } from "@ai-media-factory/tool-framework";
+import { chunkNarration } from "@ai-media-factory/tool-framework";
 import { sendHttpWithRetry } from "../core/http.js";
 import { providerConfigError, providerValidationError } from "../core/errors.js";
 import { assertPositive, envNumber, optionalEnv } from "../core/config.js";
@@ -140,6 +141,23 @@ export class GroqTTSAdapter implements TTSGenerationProvider {
     };
   }
 
+  /** Canonical coordinator boundary: exactly one already-sized chunk, one POST. */
+  async generateSingleChunk(request: TTSGenerationRequest): Promise<TTSGenerationProviderResponse> {
+    const text = request.text.trim();
+    if (text.length === 0 || text.length > MAX_CHUNK_CHARS) {
+      throw providerValidationError(this.providerId, "generate", `Single chunk must contain 1-${MAX_CHUNK_CHARS} characters`);
+    }
+    const isArabic = this.isArabic(request.language, text);
+    const model = isArabic ? this.arabicModel : this.englishModel;
+    const voice = this.resolveVoice(request.voice, isArabic);
+    if (request.format !== undefined && request.format !== "wav") throw providerValidationError(this.providerId, "generate", "Provider supports only wav output");
+    const wav = await this.synthesizeChunk(text, model, voice, 0, 1);
+    const parsed = parseWav(wav);
+    if (parsed === null || parsed.data.length === 0) throw providerValidationError(this.providerId, "generate", "Provider returned invalid or empty WAV audio");
+    const audioId = `groq-${createHash("sha256").update(`${text}\n${voice}\n${model}`).digest("hex").slice(0, 16)}`;
+    return { providerId: this.providerId, audioId, url: `data:audio/wav;base64,${Buffer.from(wav).toString("base64")}`, format: "wav", voice, model };
+  }
+
   private isArabic(language: string | undefined, text: string): boolean {
     if (language !== undefined) {
       const lowered = language.trim().toLowerCase();
@@ -218,39 +236,7 @@ export class GroqTTSAdapter implements TTSGenerationProvider {
 
 /** Split text into <=maxChars chunks at sentence boundaries (Arabic-aware). */
 export function chunkText(text: string, maxChars: number): string[] {
-  const trimmed = text.trim();
-  if (trimmed.length <= maxChars) return [trimmed];
-  const sentences = trimmed.split(/(?<=[.!?؟؛…])\s+/);
-  const chunks: string[] = [];
-  let current = "";
-  for (const sentence of sentences) {
-    const piece = sentence.trim();
-    if (piece.length === 0) continue;
-    if (piece.length > maxChars) {
-      // Hard-split an over-long sentence at word boundaries
-      if (current.length > 0) {
-        chunks.push(current.trim());
-        current = "";
-      }
-      let remainder = piece;
-      while (remainder.length > maxChars) {
-        let cut = remainder.lastIndexOf(" ", maxChars);
-        if (cut <= 0) cut = maxChars;
-        chunks.push(remainder.slice(0, cut).trim());
-        remainder = remainder.slice(cut).trim();
-      }
-      if (remainder.length > 0) current = remainder + " ";
-      continue;
-    }
-    if ((current + " " + piece).trim().length > maxChars) {
-      chunks.push(current.trim());
-      current = piece + " ";
-    } else {
-      current = (current + " " + piece).trim() + " ";
-    }
-  }
-  if (current.trim().length > 0) chunks.push(current.trim());
-  return chunks.filter((c) => c.length > 0);
+  return chunkNarration(text, maxChars).map((chunk) => chunk.text);
 }
 
 interface WavFmt {

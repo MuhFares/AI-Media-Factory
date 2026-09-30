@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import { strictEqual, ok } from "node:assert";
-import { PublishingCapabilityExecutor, PUBLISH_CAPABILITY_ID, PUBLISH_PLATFORM, idempotencyKeyFor } from "../dist/index.js";
+import { PublishingCapabilityExecutor, PUBLISH_CAPABILITY_ID, PUBLISH_PLATFORM, idempotencyKeyFor, publicationIdentityV2, sha256Canonical } from "../dist/index.js";
 
 const descriptor = { capabilityId: PUBLISH_CAPABILITY_ID, description: "Publish content", inputSchema: { type: "object" }, outputSchema: { type: "object" } };
 
@@ -19,13 +19,32 @@ function memoryStore() {
   };
 }
 
-const baseInput = (overrides = {}) => ({
-  assetId: "vid-0001",
-  title: "Modern Media Pipelines",
-  description: "A published explainer on media pipelines.",
-  options: { visibility: "public" },
-  ...overrides,
-});
+const baseInput = (overrides = {}) => {
+  const input = {
+    projectId: "project-publish",
+    finalMediaArtifactId: "vid-0001",
+    finalMediaSha256: "a".repeat(64),
+    mediaTransportRef: { type: "HTTPS_URL", url: "https://media.example/vid-0001.mp4", expectedSha256: "a".repeat(64) },
+    targetAccountId: "youtube-channel-1",
+    title: "Modern Media Pipelines",
+    description: "A published explainer on media pipelines.",
+    options: { visibility: "public" },
+    ...overrides,
+  };
+  const publicationPayloadHash = sha256Canonical({ assetId: input.finalMediaArtifactId, title: input.title.trim(), description: input.description.trim(), options: input.options });
+  const identity = publicationIdentityV2({ projectId: input.projectId, workflowId: "workflow-publish", finalMediaSha256: input.finalMediaSha256, targetPlatform: "youtube", targetAccountId: input.targetAccountId, publicationPayloadHash });
+  return {
+    ...input,
+    idempotencyKey: overrides.idempotencyKey ?? identity,
+    publicationAuthority: overrides.publicationAuthority ?? {
+      approvalId: "approval-public-1", decision: "approved", scope: "PUBLIC_PUBLISH",
+      projectId: input.projectId, workflowId: "workflow-publish", projectMode: "PRODUCTION",
+      finalMediaArtifactId: input.finalMediaArtifactId, finalMediaSha256: input.finalMediaSha256,
+      finalProductReviewId: "review-1", targetPlatform: "youtube", targetAccountId: input.targetAccountId,
+      publicationPayloadHash, publicationIdentity: identity,
+    },
+  };
+};
 
 const completed = (overrides = {}) => ({
   providerId: "fake-publish",
@@ -54,7 +73,8 @@ describe("PublishingCapabilityExecutor", () => {
     const { executor, calls } = setup(async () => completed());
     const result = await executor.execute(request(baseInput()));
     strictEqual(result.status, "success");
-    strictEqual(calls[0].assetId, "vid-0001");
+    strictEqual(calls[0].finalMediaArtifactId, "vid-0001");
+    strictEqual(calls[0].mediaTransportRef.url, "https://media.example/vid-0001.mp4");
     strictEqual(calls[0].title, "Modern Media Pipelines");
     strictEqual(result.output.providerId, "fake-publish");
     strictEqual(result.output.publicationId, "pub-0001");
@@ -154,7 +174,7 @@ describe("PublishingCapabilityExecutor", () => {
 
   it("accepts an explicit matching idempotencyKey and rejects a mismatched one as blocked", async () => {
     const { executor } = setup(async () => completed());
-    const good = await executor.execute(request({ ...baseInput(), idempotencyKey: idempotencyKeyFor("workflow-publish", "vid-0001", "youtube") }));
+    const good = await executor.execute(request(baseInput()));
     strictEqual(good.status, "success");
     const bad = await executor.execute(request({ ...baseInput(), idempotencyKey: "publish:fake" }));
     strictEqual(bad.status, "blocked");

@@ -9,10 +9,10 @@ import type { PlanTask } from "@ai-media-factory/planner-agent";
  * single domain; writer/seo/brand extend the same reviewer execution path
  * (no second reviewer agent, no new execution boundary).
  */
-export type ReviewArtifactKind = "coding_report" | "writer_report" | "seo_report" | "brand_report" | "thumbnail_report" | "video_report" | "published_report";
+export type ReviewArtifactKind = "coding_report" | "writer_report" | "seo_report" | "brand_report" | "thumbnail_report" | "video_report" | "published_report" | "final_media_artifact";
 
 /** Review domain, derived from the artifact kind under review. */
-export type ReviewMode = "coding" | "writer" | "seo" | "brand" | "thumbnail" | "video" | "published";
+export type ReviewMode = "coding" | "writer" | "seo" | "brand" | "thumbnail" | "video" | "published" | "final_media";
 
 /** An upstream artifact handed to the Reviewer for multi-domain review. */
 export interface ArtifactUnderReview {
@@ -60,7 +60,7 @@ export interface ReviewReport {
   reportId: Uuid;
   taskDescription: string;
   summary: string;
-  status: "approved" | "changes_requested" | "blocked";
+  status: "approved" | "changes_requested" | "blocked" | "human_review_required";
   findings: ReviewFinding[];
   recommendations: ReviewRecommendation[];
   metadata: {

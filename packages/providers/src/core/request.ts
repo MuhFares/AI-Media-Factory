@@ -70,6 +70,11 @@ export interface GenerateResponse {
   model: ModelId;
   latencyMs: number;
   finishReason: "stop" | "length" | "tool_calls" | "content_filter" | "error";
+  /**
+   * Sanitized raw-response metadata (presence booleans only, never payloads).
+   * Populated by adapters that observe the raw envelope; absent otherwise.
+   */
+  rawMeta?: import("../structured-output.js").RawResponseMeta;
 }
 
 /** One streamed increment (streaming, req #11). */

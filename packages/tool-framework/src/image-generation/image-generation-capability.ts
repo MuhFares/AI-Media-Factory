@@ -14,6 +14,20 @@ export interface ImageGenerationRequest {
   width?: number;
   height?: number;
   aspectRatio?: string;
+  seed?: number;
+  steps?: number;
+  guidance?: number;
+  cfg?: number;
+  sampler?: string;
+  scheduler?: string;
+  denoise?: number;
+  size?: string;
+  outputFormat?: "png" | "jpeg" | "webp";
+  safetyChecker?: boolean;
+  referenceImageBase64?: string;
+  referenceImageUrl?: string;
+  referenceImageMimeType?: "image/png" | "image/jpeg";
+  strength?: number;
 }
 
 export interface ImageGenerationProviderResponse {
@@ -26,6 +40,7 @@ export interface ImageGenerationProviderResponse {
   url: string;
   /** Generation parameters echoed back by the provider. */
   parameters?: ImageGenerationRequest;
+  metadata?: Readonly<Record<string, string | number | boolean>>;
 }
 
 export interface ImageGenerationProvider {
@@ -51,6 +66,19 @@ export interface ImageGenerationCapabilityPolicy {
   maxHeight: number;
   allowedAspectRatios: readonly string[];
 }
+
+/**
+ * Evidence-backed AMF image-prompt budget (characters, positive prompt).
+ *
+ * Derivation (NOT a provider claim): measured canonical Attempt-4 compiled
+ * max 2345 chars + ~28% headroom = 3000. The previous 1000 was an AMF-side
+ * constant with no provider backing in-repo (ComfyUI CLIPTextEncode takes
+ * free text; the zimage path already operates at 4000–8192). This bound is
+ * enforced fail-closed (reject, never slice) at both capability and adapter.
+ */
+export const IMAGE_PROMPT_MAX_CHARS = 3000;
+/** Negative prompts stay at the historical bound (measured canonical max ~330). */
+export const IMAGE_NEGATIVE_PROMPT_MAX_CHARS = 1000;
 
 type ImageGenerationRequestEnvelope = CapabilityRequest<ImageGenerationCapabilityInput>;
 type ImageGenerationCapabilityResult = CapabilityResult<ImageGenerationCapabilityOutput>;
@@ -123,6 +151,20 @@ export class ImageGenerationCapabilityExecutor
         ...(input.width === undefined ? {} : { width: input.width }),
         ...(input.height === undefined ? {} : { height: input.height }),
         ...(input.aspectRatio === undefined ? {} : { aspectRatio: input.aspectRatio }),
+        ...(input.seed === undefined ? {} : { seed: input.seed }),
+        ...(input.steps === undefined ? {} : { steps: input.steps }),
+        ...(input.guidance === undefined ? {} : { guidance: input.guidance }),
+        ...(input.cfg === undefined ? {} : { cfg: input.cfg }),
+        ...(input.sampler === undefined ? {} : { sampler: input.sampler }),
+        ...(input.scheduler === undefined ? {} : { scheduler: input.scheduler }),
+        ...(input.denoise === undefined ? {} : { denoise: input.denoise }),
+        ...(input.size === undefined ? {} : { size: input.size }),
+        ...(input.outputFormat === undefined ? {} : { outputFormat: input.outputFormat }),
+        ...(input.safetyChecker === undefined ? {} : { safetyChecker: input.safetyChecker }),
+        ...(input.referenceImageBase64 === undefined ? {} : { referenceImageBase64: input.referenceImageBase64 }),
+        ...(input.referenceImageUrl === undefined ? {} : { referenceImageUrl: input.referenceImageUrl }),
+        ...(input.referenceImageMimeType === undefined ? {} : { referenceImageMimeType: input.referenceImageMimeType }),
+        ...(input.strength === undefined ? {} : { strength: input.strength }),
       };
       const providerResponse = await this.provider.generate(providerRequest);
       if (!this.isValidProviderResponse(providerResponse)) {
@@ -142,6 +184,7 @@ export class ImageGenerationCapabilityExecutor
         ...(providerResponse.parameters === undefined
           ? {}
           : { parameters: providerResponse.parameters }),
+        ...(providerResponse.metadata === undefined ? {} : { metadata: providerResponse.metadata }),
       };
       return {
         status: "success",
@@ -200,6 +243,22 @@ export class ImageGenerationCapabilityExecutor
     ) {
       return "aspectRatio is not in the configured allowed set";
     }
+    if (input.referenceImageUrl !== undefined) {
+      try {
+        const reference = new URL(input.referenceImageUrl);
+        if (reference.protocol !== "https:") return "referenceImageUrl must be a provider-fetchable HTTPS URL";
+      } catch {
+        return "referenceImageUrl must be a provider-fetchable HTTPS URL";
+      }
+      if (input.referenceImageMimeType === undefined) return "referenceImageMimeType is required with referenceImageUrl";
+    }
+    if (input.referenceImageBase64 !== undefined && input.referenceImageMimeType === undefined) {
+      return "referenceImageMimeType is required with referenceImageBase64";
+    }
+    if (input.referenceImageUrl !== undefined && input.referenceImageBase64 !== undefined) {
+      return "reference image transport must use exactly one canonical form";
+    }
+    if (input.seed !== undefined && (!Number.isSafeInteger(input.seed) || input.seed < 0)) return "seed must be a non-negative safe integer";
     return null;
   }
 

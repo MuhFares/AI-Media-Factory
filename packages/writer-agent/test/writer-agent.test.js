@@ -19,6 +19,17 @@ const researchHandoff = {
   },
 };
 
+const synthesisHandoff = {
+  artifactId: "artifact-brief-1",
+  kind: "evidence_backed_content_brief",
+  payload: {
+    stage: "POST_RESEARCH_SYNTHESIS",
+    status: "completed",
+    claims: [{ text: "Supported finding", status: "SUPPORTED", sourceIds: [1] }],
+    researchSources: [{ sourceId: 1, title: "Source A", url: "https://example.com/a", snippet: "Supported finding" }],
+  },
+};
+
 function writerJson(overrides = {}) {
   return {
     contentId: "00000000-0000-4000-8000-0000000000W1",
@@ -54,6 +65,17 @@ describe("WriterAgent — production specialist contract", () => {
     strictEqual(result.output.sourceReferences[0].sourceId, 1);
     strictEqual(result.output.metadata.researchArtifactId, "artifact-research-1");
     strictEqual(result.output.capabilityExecutions, undefined);
+  });
+
+  it("1b — production handoff accepts only an evidence-backed synthesis brief", async () => {
+    const agent = build(writerJson({ taskDescription: "Write an article", metadata: { ...writerJson().metadata, researchArtifactId: "artifact-brief-1" } }));
+    const result = await agent.execute({ context: {}, input: { objective: "Write an article", previousArtifact: synthesisHandoff, requireSynthesis: true } }, SIGNAL);
+    strictEqual(result.output.metadata.researchArtifactId, "artifact-brief-1");
+  });
+
+  it("1c — production mode rejects the legacy direct research handoff", async () => {
+    const agent = build(writerJson());
+    await rejects(() => agent.execute({ context: {}, input: { ...input().input, requireSynthesis: true } }, SIGNAL), /requires evidence_backed_content_brief/);
   });
 
   it("2 — missing research artifact is a controlled failure (never a success)", async () => {
@@ -116,5 +138,52 @@ describe("WriterAgent — production specialist contract", () => {
         ok(!source.includes(forbidden), `${name} must not import ${forbidden}`);
       }
     }
+  });
+});
+
+describe("WriterAgent — revision cycle directive (Revision Cycle V1)", () => {
+  it("carries the authoritative revision instructions into the provider prompt", async () => {
+    let capturedPrompt = "";
+    const agent = createWriterAgent({
+      config: {},
+      execute: async (_context, request) => {
+        capturedPrompt = request.messages.find((message) => message.role === "user").content;
+        return { output: writerJson({ taskDescription: "Write an article", metadata: { createdAt: "2026-08-11T00:00:00.000Z", agentVersion: "1.0.0", researchArtifactId: "artifact-brief-1" } }), raw: "{}", usage: { inputTokens: 2, outputTokens: 2, costUsd: 0 }, model: "test", provider: "test", latencyMs: 1 };
+      },
+    });
+    const revision = {
+      revisionTaskId: "revision-task-1",
+      revisionVersion: 1,
+      reviewArtifactId: "review-artifact-1",
+      reviewExecutionId: "review-execution-1",
+      priorWriterArtifactId: "writer-artifact-1",
+      summary: "Content is overly brief relative to the SEO structure.",
+      findings: [{ id: "FIND-001", title: "Content is overly brief", recommendation: "Expand the practical step." }],
+      recommendations: [{ priority: "medium", description: "Add the concluding takeaway." }],
+      priorTitle: "Old title",
+      priorContent: "Old content body.",
+    };
+    const result = await agent.execute({ context: {}, input: { objective: "Write an article", previousArtifact: synthesisHandoff, requireSynthesis: true, revision } }, SIGNAL);
+    strictEqual(result.output.status, "completed");
+    ok(capturedPrompt.includes("REVISION DIRECTIVE"), "prompt must carry the revision directive");
+    ok(capturedPrompt.includes("revision-task-1"), "prompt must carry the revision task identity");
+    ok(capturedPrompt.includes("review-artifact-1"), "prompt must carry the source review artifact");
+    ok(capturedPrompt.includes("Content is overly brief"), "prompt must carry the review summary");
+    ok(capturedPrompt.includes("FIND-001"), "prompt must carry the review findings");
+    ok(capturedPrompt.includes("Add the concluding takeaway."), "prompt must carry the review recommendations");
+    ok(capturedPrompt.includes("Old content body."), "prompt must carry the prior content to revise");
+  });
+
+  it("omits the revision directive entirely for ordinary (non-revision) runs", async () => {
+    let capturedPrompt = "";
+    const agent = createWriterAgent({
+      config: {},
+      execute: async (_context, request) => {
+        capturedPrompt = request.messages.find((message) => message.role === "user").content;
+        return { output: writerJson({ taskDescription: "Write an article", metadata: { createdAt: "2026-08-11T00:00:00.000Z", agentVersion: "1.0.0", researchArtifactId: "artifact-brief-1" } }), raw: "{}", usage: { inputTokens: 2, outputTokens: 2, costUsd: 0 }, model: "test", provider: "test", latencyMs: 1 };
+      },
+    });
+    await agent.execute({ context: {}, input: { objective: "Write an article", previousArtifact: synthesisHandoff, requireSynthesis: true } }, SIGNAL);
+    ok(!capturedPrompt.includes("REVISION DIRECTIVE"), "ordinary runs must not see a revision directive");
   });
 });

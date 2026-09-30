@@ -18,7 +18,9 @@
     "test": "node --test --test-concurrency=1"
   },
   "dependencies": {
+    "@ai-media-factory/provider-adapters": "*",
     "@ai-media-factory/shared": "*",
+    "@ai-media-factory/tool-framework": "*",
     "@ai-media-factory/workflow-engine": "*",
     "pg": "^8.13.1"
   },

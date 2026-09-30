@@ -8,7 +8,7 @@
 import { test, before, after } from "node:test";
 import { strictEqual, ok } from "node:assert";
 import { createPool, migrate, PostgresPersistence, PostgresQueue } from "@ai-media-factory/database";
-import { TEST_DATABASE_URL } from "./helpers.js";
+import { TEST_DATABASE_URL, assertTestDatabaseIsolation } from "./helpers.js";
 
 const CONN = TEST_DATABASE_URL;
 let pool;
@@ -39,6 +39,7 @@ function makeSubmission(workflowId, submissionKey) {
 }
 
 before(async () => {
+  assertTestDatabaseIsolation();
   pool = createPool({ connectionString: CONN });
   await migrate(pool);
   await pool.query(
@@ -98,7 +99,7 @@ test("orphaned running job is reclaimed and re-processable (crash recovery)", as
 
   // Simulate a worker that died some time ago (backdate claimed_at).
   await pool.query(
-    `UPDATE workflow_jobs SET claimed_at = $1::text WHERE workflow_id = $2::text`,
+    `UPDATE workflow_jobs SET claimed_at = $1::text, lease_heartbeat_at = $1::text WHERE workflow_id = $2::text`,
     ["1999-01-01T00:00:00.000Z", wf]
   );
 

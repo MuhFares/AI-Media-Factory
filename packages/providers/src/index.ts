@@ -47,8 +47,23 @@ export { ModelRouter, modelRouter } from './router.js';
 export type { ProviderLogger } from './provider.js';
 export { BaseLlmProvider, noopLogger } from './provider.js';
 
-export { OpenRouterProvider } from './openrouter.js';
+export { OpenRouterProvider, buildOpenRouterUrl } from './openrouter.js';
 export { AlibabaProvider } from './alibaba.js';
+export {
+  summarizeChatCompletionResponse,
+  extractVisibleText,
+  parseChatCompletionResponse,
+  ChatCompletionContentError,
+  buildStructuredRequest,
+  accumulateStreamDeltas,
+  STRUCTURED_OUTPUT_MODES,
+} from './structured-output.js';
+export type {
+  RawResponseMeta,
+  StructuredOutputMode,
+  StructuredRequestInput,
+  StreamDelta,
+} from './structured-output.js';
 
 // Backwards-compat shim for consumers that previously imported from './types'.
 export type * from './types.js';

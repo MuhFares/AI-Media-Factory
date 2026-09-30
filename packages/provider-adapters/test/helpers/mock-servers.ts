@@ -654,6 +654,10 @@ export interface RunPodVideoMockState {
   pollFailuresLeft: number;
   lastRunBody: Record<string, unknown> | null;
   lastRunHeaders: Record<string, string>;
+  ackDelayMs: number;
+  pollsBeforeComplete: number;
+  receiptByClientExecutionId: Map<string, Record<string, unknown>>;
+  generationJobsByClientExecutionId: Map<string, string>;
 }
 
 export function createRunPodVideoMock(): Promise<MockServer<RunPodVideoMockState>> {
@@ -667,7 +671,12 @@ export function createRunPodVideoMock(): Promise<MockServer<RunPodVideoMockState
     pollFailuresLeft: 0,
     lastRunBody: null,
     lastRunHeaders: {},
+    ackDelayMs: 0,
+    pollsBeforeComplete: 0,
+    receiptByClientExecutionId: new Map(),
+    generationJobsByClientExecutionId: new Map(),
   };
+  const lookupJobs = new Map<string, string>();
   const handler: http.RequestListener = async (req, res) => {
     const url = new URL(req.url ?? "/", "http://x");
     if (req.method === "POST" && url.pathname.endsWith("/run")) {
@@ -678,11 +687,30 @@ export function createRunPodVideoMock(): Promise<MockServer<RunPodVideoMockState
         json(res, state.runStatus, { error: "unauthorized" });
         return;
       }
-      json(res, 200, { id: "job-v123", status: "IN_QUEUE" });
+      const input = state.lastRunBody.input as Record<string, unknown>;
+      if (input.operation === "lookup_receipt") {
+        const lookupId = `lookup-${state.runRequests}`;
+        lookupJobs.set(lookupId, String(input.client_execution_id));
+        if (state.ackDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, state.ackDelayMs));
+        json(res, 200, { id: lookupId, status: "IN_QUEUE" });
+        return;
+      }
+      const clientId = typeof input.client_execution_id === "string" ? input.client_execution_id : "anonymous";
+      const jobId = state.generationJobsByClientExecutionId.get(clientId) ?? `job-v${state.generationJobsByClientExecutionId.size + 123}`;
+      state.generationJobsByClientExecutionId.set(clientId, jobId);
+      if (state.ackDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, state.ackDelayMs));
+      json(res, 200, { id: jobId, status: "IN_QUEUE" });
       return;
     }
     if (req.method === "GET" && url.pathname.includes("/status/")) {
       state.pollRequests += 1;
+      const statusId = decodeURIComponent(url.pathname.split("/status/")[1] ?? "");
+      const lookupIdentity = lookupJobs.get(statusId);
+      if (lookupIdentity !== undefined) {
+        const receipt = state.receiptByClientExecutionId.get(lookupIdentity) ?? null;
+        json(res, 200, { id: statusId, status: "COMPLETED", output: { found: receipt !== null, receipt } });
+        return;
+      }
       if (state.pollFailuresLeft > 0) {
         state.pollFailuresLeft -= 1;
         json(res, 500, { error: "boom" });
@@ -690,6 +718,11 @@ export function createRunPodVideoMock(): Promise<MockServer<RunPodVideoMockState
       }
       if (state.pollStatus === "FAILED" || state.pollStatus === "CANCELLED") {
         json(res, 200, { id: "job-v123", status: state.pollStatus, error: "job failed" });
+        return;
+      }
+      if (state.pollsBeforeComplete > 0) {
+        state.pollsBeforeComplete -= 1;
+        json(res, 200, { id: statusId, status: "IN_PROGRESS" });
         return;
       }
       if (state.completeMode === "no-video") {

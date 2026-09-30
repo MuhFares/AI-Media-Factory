@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Research Agent types.
  */
 
@@ -31,6 +31,21 @@ export interface ResearchAgentInput {
    * (candidateStories/evidenceRisks/status plus the base report fields).
    */
   synthesisContract?: string;
+  /** Structured business/content objective used by Intelligence V2 direction. */
+  researchObjective?: ResearchObjective;
+  /** Canonical runtime capability inventory; desired capabilities never imply availability. */
+  capabilityInventory?: CapabilitySupportEntry[];
+  /**
+   * Authorized retrieval call envelope for this execution.  V2 planning caps
+   * total discovery + verification calls to this value.  When absent the agent
+   * falls back to its architectural maximum (MAX_DISCOVERY_REQUESTS +
+   * MAX_VERIFICATION_REQUESTS).  The caller computes:
+   *
+   *   effectiveEnvelope = min(architecturalMax, missionAuthorizedMax, remainingBudget)
+   *
+   * and passes the result here BEFORE the direction LLM runs.
+   */
+  maxRetrievalCallsAvailable?: number;
   /**
    * Canonical project context supplied by the caller (brand/strategy facts with
    * provenance). The agent includes it in its prompt; it never improvises
@@ -173,8 +188,8 @@ export interface ResearchCandidateStory {
   keyClaims?: string[];
   /** Source ids supporting this candidate. */
   sourceIds?: number[];
-  /** Alternate evidence-id references (stable source/evidence IDs). */
-  supportingEvidenceIds?: number[];
+  /** Stable persisted execution-evidence identities supporting this candidate. */
+  supportingEvidenceIds?: string[];
   /** Per-candidate source-quality summary. */
   sourceQualitySummary?: string;
   /** Visual potential note. */
@@ -187,6 +202,18 @@ export interface ResearchCandidateStory {
   evidenceRisks?: string[];
   /** Verification status (e.g. verified, needs-verification, unverified). */
   verificationStatus?: string;
+  /** Content-opportunity assessment, separate from factual verification. */
+  contentOpportunityAssessment?: ContentOpportunityAssessment;
+  /** Factual verification outcome, separate from opportunity. */
+  factualVerification?: FactualVerification;
+  /** Trend evidence with provenance (never invented). */
+  trendEvidence?: { signal: string; observedAt: string | null; source: string }[];
+  /** Evergreen evidence notes. */
+  evergreenEvidence?: string[];
+  /** Market relevance note. */
+  marketRelevance?: string | null;
+  /** Whether research recommends this candidate for production. */
+  recommendedForProduction?: boolean;
 }
 
 /** Bounded per-call LLM usage for budget attribution. */
@@ -230,4 +257,180 @@ export interface ResearchExecutionInput {
 export interface ResearchExecutionOutput {
   output: ResearchReport;
   response: ExecutionResponse;
+}
+
+/** A structured research objective (intelligence V2 entry point). */
+export interface ResearchObjective {
+  /** Owning project id. */
+  projectId: string;
+  /** Consumer brand. */
+  brand: string;
+  /** Content pillar (e.g. Historical POV, Original Fantasy). */
+  contentPillar: string;
+  /** Factual mode: historical claims need verification, fantasy does not. */
+  factualMode: "HISTORICAL_POV" | "ORIGINAL_FANTASY";
+  /** Target platforms. */
+  platforms: string[];
+  /** Market/geography (null = unspecified; never inferred). */
+  market: string | null;
+  /** Language. */
+  language: string | null;
+  /** Target audience. */
+  audience: string | null;
+  /** Content format. */
+  format: string | null;
+  /** Business objective in plain language. */
+  businessObjective: string;
+  /** Topic constraints. */
+  topicConstraints: string[];
+  /** Trend preference. */
+  trendPreference: "TREND_LED" | "EVERGREEN" | "HYBRID";
+  /** Desired content count. */
+  desiredContentCount: number;
+  /** Owner constraints. */
+  ownerConstraints: string[];
+}
+
+/** One discovery lane in a research mission. */
+export interface DiscoveryLane {
+  /** Lane identity (canonical lane id or mission-scoped custom id). */
+  laneId: string;
+  /** What this lane investigates. */
+  purpose: string;
+  /** Query guidance for retrieval (never a hardcoded winner). */
+  queryGuidance: string;
+  /** Desired capability id. */
+  desiredCapability: string;
+  /** Actual capability id to invoke (may differ when degraded). */
+  actualCapability: string;
+  /** Max retrieval calls for this lane. */
+  maxCalls: number;
+  /** Expected output type. */
+  expectedOutput: string;
+}
+
+/** Capability support assessment for one desired source type. */
+export interface CapabilitySupportEntry {
+  /** Desired source type (e.g. INSTAGRAM_DISCOVERY, WEB_SEARCH). */
+  sourceType: string;
+  /** Support level. */
+  status: "SUPPORTED" | "PARTIALLY_SUPPORTED" | "UNSUPPORTED";
+  /** How it is actually served. */
+  via: string[];
+  /** Explicit limitations. */
+  limitations: string[];
+}
+
+/** A structured research mission (contract amf-research-mission-v1). */
+export interface ResearchMission {
+  /** Stable contract identity echo. */
+  taskId: string;
+  /** Contract stage echo. */
+  stage: string;
+  /** Mission identity. */
+  missionId: string;
+  /** Objective text. */
+  objective: string;
+  /** Market (null = global/unspecified). */
+  market: string | null;
+  /** Geography (null = unspecified, never inferred). */
+  geography: string | null;
+  /** Language. */
+  language: string | null;
+  /** Platforms. */
+  platforms: string[];
+  /** Content pillar. */
+  contentPillar: string;
+  /** Factual mode. */
+  factualMode: "HISTORICAL_POV" | "ORIGINAL_FANTASY";
+  /** Audience. */
+  audience: string | null;
+  /** Trend mode. */
+  trendMode: "TREND_LED" | "EVERGREEN" | "HYBRID";
+  /** Time horizon (ISO date bounds or null). */
+  timeHorizon: { from: string | null; to: string | null };
+  /** Execution date (ISO) for anniversary/seasonal reasoning. */
+  currentDate: string;
+  /** Discovery lanes (1..5). */
+  discoveryLanes: DiscoveryLane[];
+  /** Desired source types. */
+  desiredSourceTypes: string[];
+  /** Capability support actually available. */
+  availableCapabilities: CapabilitySupportEntry[];
+  /** Desired-but-unavailable capabilities with reasons. */
+  unavailableDesiredCapabilities: { sourceType: string; reason: string }[];
+  /** Search priorities. */
+  searchPriorities: string[];
+  /** Verification requirements. */
+  verificationRequirements: string[];
+  /** Stop conditions. */
+  stopConditions: string[];
+  /** Risk notes. */
+  riskNotes: string[];
+}
+
+/** A candidate opportunity from discovery evidence (pre-verification). */
+export interface CandidateOpportunity {
+  /** Stable candidate identity within this report. */
+  candidateId: string;
+  /** Candidate topic (arose from evidence, never hardcoded). */
+  topic: string;
+  /** Candidate type. */
+  candidateType: string;
+  /** Content pillar. */
+  contentPillar: string;
+  /** Market relevance note. */
+  marketRelevance: string | null;
+  /** Trend signals (only provider-returned evidence, never invented). */
+  trendSignals: { signal: string; provenance: string; observedAt: string | null }[];
+  /** Evergreen signals. */
+  evergreenSignals: string[];
+  /** Factual angle. */
+  factualAngle: string;
+  /** Why interesting. */
+  whyInteresting: string;
+  /** Visual potential. */
+  visualPotential: string;
+  /** Short-form potential. */
+  shortFormPotential: string;
+  /** Discovery evidence ids backing this candidate. */
+  discoveryEvidenceIds: (string | number)[];
+  /** Risks. */
+  risks: string[];
+  /** Verification questions for the verification planner. */
+  verificationQuestions: string[];
+  /** Whether verification is required (factual mode). */
+  verificationRequired: boolean;
+}
+
+/** Verification plan for one candidate (deterministic compiler output). */
+export interface CandidateVerificationPlan {
+  /** Candidate identity. */
+  candidateId: string;
+  /** Claims requiring verification. */
+  claimsToVerify: string[];
+  /** Targeted verification queries. */
+  verificationQueries: string[];
+  /** Preferred authority classes. */
+  preferredAuthorityClasses: string[];
+  /** Minimum evidence rule description. */
+  minimumEvidenceRule: string;
+  /** Risks. */
+  risks: string[];
+}
+
+/** Content-opportunity assessment, separate from factual verification. */
+export interface ContentOpportunityAssessment {
+  /** Opportunity level. */
+  level: "HIGH" | "MEDIUM" | "LOW";
+  /** Basis (which signals, with provenance). */
+  basis: string;
+}
+
+/** Factual verification status, separate from opportunity. */
+export interface FactualVerification {
+  /** Verification status. */
+  status: "STRONG" | "PARTIAL" | "INCOMPLETE";
+  /** Basis. */
+  basis: string;
 }

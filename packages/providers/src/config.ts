@@ -123,7 +123,7 @@ export const MODEL_CATALOG: Record<string, ModelConfig> = {
     id: 'nvidia/nemotron-3-super-120b-a12b:free',
     name: 'Nemotron 3 Super 120B (Free)',
     contextLength: 131072,
-    maxOutputTokens: 4096,
+    maxOutputTokens: 8192,
     pricing: { prompt: 0, completion: 0 },
     capabilities: { streaming: true, structuredOutput: true, functionCalling: true, vision: false },
     tier: 'free',

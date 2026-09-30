@@ -9,10 +9,11 @@ import type { Scheduler } from "../execution/scheduler.js";
 export class DefaultScheduler implements Scheduler {
   readySteps(instance: WorkflowInstance): StepId[] {
     const { steps, ready } = instance;
-    // Return steps that are ready to run (in ready array and not completed/running)
+    // Failed steps require an explicit recovery operation before re-queueing.
+    // This prevents deterministic contract failures from spinning forever.
     return ready.filter((stepId) => {
       const stepRecord = steps.find((s) => s.stepId === stepId);
-      return stepRecord && (stepRecord.status === "pending" || stepRecord.status === "failed");
+      return stepRecord?.status === "pending";
     });
   }
 

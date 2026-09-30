@@ -24,6 +24,7 @@ export interface WorkflowSubmission {
   readonly correlationId: string | null;
   readonly brandId: string | null;
   readonly definition: WorkflowDefinition;
+  readonly commandContext: Record<string, Json> | null;
   readonly status: string;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -37,6 +38,9 @@ export interface WorkflowJob {
   readonly status: "queued" | "running" | "succeeded" | "failed";
   readonly attempts: number;
   readonly claimedAt: string | null;
+  readonly claimedByWorker: string | null;
+  readonly leaseHeartbeatAt: string | null;
+  readonly leaseKind: string;
   readonly error: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -49,6 +53,7 @@ export interface SubmitWorkflowInput {
   readonly correlationId: string | null;
   readonly brandId: string | null;
   readonly definition: WorkflowDefinition;
+  readonly commandContext?: Record<string, Json>;
   readonly status?: string;
 }
 
@@ -69,8 +74,8 @@ export class PostgresQueue {
     const now = new Date().toISOString();
     const res = await this.pool.query(
       `INSERT INTO workflow_submissions
-         (submission_key, workflow_id, directive, correlation_id, brand_id, definition, status, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
+         (submission_key, workflow_id, directive, correlation_id, brand_id, definition, command_context, status, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)
        ON CONFLICT (submission_key) DO NOTHING
        RETURNING submission_key`,
       [
@@ -80,6 +85,7 @@ export class PostgresQueue {
         input.correlationId,
         input.brandId,
         JSON.stringify(input.definition),
+        input.commandContext === undefined ? null : JSON.stringify(input.commandContext),
         input.status ?? "submitted",
         now,
       ]
@@ -89,7 +95,7 @@ export class PostgresQueue {
 
   async loadSubmissionByWorkflow(workflowId: Uuid): Promise<WorkflowSubmission | null> {
     const res = await this.pool.query(
-      `SELECT submission_key, workflow_id, directive, correlation_id, brand_id, definition, status, created_at, updated_at
+      `SELECT submission_key, workflow_id, directive, correlation_id, brand_id, definition, command_context, status, created_at, updated_at
        FROM workflow_submissions WHERE workflow_id = $1`,
       [workflowId]
     );
@@ -101,7 +107,7 @@ export class PostgresQueue {
       directive: r.directive,
       correlationId: r.correlation_id,
       brandId: r.brand_id,
-      definition: JSON_PARSE(r.definition),
+      definition: JSON_PARSE(r.definition), commandContext: r.command_context === null ? null : JSON_PARSE(r.command_context),
       status: r.status,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
@@ -110,7 +116,7 @@ export class PostgresQueue {
 
   async loadSubmissionByKey(submissionKey: string): Promise<WorkflowSubmission | null> {
     const res = await this.pool.query(
-      `SELECT submission_key, workflow_id, directive, correlation_id, brand_id, definition, status, created_at, updated_at
+      `SELECT submission_key, workflow_id, directive, correlation_id, brand_id, definition, command_context, status, created_at, updated_at
        FROM workflow_submissions WHERE submission_key = $1`,
       [submissionKey]
     );
@@ -122,7 +128,7 @@ export class PostgresQueue {
       directive: r.directive,
       correlationId: r.correlation_id,
       brandId: r.brand_id,
-      definition: JSON_PARSE(r.definition),
+      definition: JSON_PARSE(r.definition), commandContext: r.command_context === null ? null : JSON_PARSE(r.command_context),
       status: r.status,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
@@ -152,10 +158,11 @@ export class PostgresQueue {
    * Atomically claim the next queued job. Returns null when the queue is empty.
    * Concurrency-safe: only one worker claims a given job (FOR UPDATE SKIP LOCKED).
    */
-  async claimNextJob(): Promise<WorkflowJob | null> {
+  async claimNextJob(workerInstanceId?: string): Promise<WorkflowJob | null> {
     const now = new Date().toISOString();
     const res = await this.pool.query(
-      `UPDATE workflow_jobs SET status = 'running', claimed_at = $1::text, attempts = attempts + 1, updated_at = $1::text
+      `UPDATE workflow_jobs SET status = 'running', claimed_at = $1::text, claimed_by_worker=$2::text,
+         lease_heartbeat_at=$1::text, attempts = attempts + 1, updated_at = $1::text
        WHERE job_id = (
          SELECT job_id FROM workflow_jobs
          WHERE status = 'queued'
@@ -163,8 +170,8 @@ export class PostgresQueue {
          LIMIT 1
          FOR UPDATE SKIP LOCKED
        )
-       RETURNING job_id, workflow_id, submission_key, status, attempts, claimed_at, error, created_at, updated_at`,
-      [now]
+       RETURNING job_id, workflow_id, submission_key, status, attempts, claimed_at, claimed_by_worker, lease_heartbeat_at, lease_kind, error, created_at, updated_at`,
+      [now, workerInstanceId ?? null]
     );
     if (res.rowCount === 0) return null;
     return this.mapJob(res.rows[0]);
@@ -173,9 +180,20 @@ export class PostgresQueue {
   /** Acknowledge a job as succeeded (or failed with an error). */
   async acknowledge(jobId: number, status: "succeeded" | "failed", error?: string): Promise<void> {
     await this.pool.query(
-      `UPDATE workflow_jobs SET status = $2::text, error = $3::text, updated_at = $4::text WHERE job_id = $1::bigint`,
+      `UPDATE workflow_jobs SET status = $2::text, error = $3::text, lease_heartbeat_at=NULL, updated_at = $4::text WHERE job_id = $1::bigint`,
       [jobId, status, error ?? null, new Date().toISOString()]
     );
+  }
+
+  /** Extend a claimed job lease. A different worker can never renew it. */
+  async heartbeatJob(jobId: number, workerInstanceId: string): Promise<boolean> {
+    const now = new Date().toISOString();
+    const result = await this.pool.query(
+      `UPDATE workflow_jobs SET lease_heartbeat_at=$3,updated_at=$3
+       WHERE job_id=$1 AND status='running' AND claimed_by_worker=$2 RETURNING job_id`,
+      [jobId, workerInstanceId, now],
+    );
+    return (result.rowCount ?? 0) === 1;
   }
 
   /**
@@ -185,18 +203,24 @@ export class PostgresQueue {
    */
   async recoverOrphanedJobs(staleMs: number): Promise<number> {
     const cutoff = new Date(Date.now() - staleMs).toISOString();
+    const workerCutoff = new Date(Date.now() - Math.max(staleMs, 300_000)).toISOString();
     const res = await this.pool.query(
-      `UPDATE workflow_jobs SET status = 'queued', claimed_at = NULL, updated_at = $1::text
-       WHERE status = 'running' AND (claimed_at IS NULL OR claimed_at < $1::text)
+      `UPDATE workflow_jobs j SET status='queued',claimed_at=NULL,claimed_by_worker=NULL,lease_heartbeat_at=NULL,updated_at=$1::text
+       WHERE j.status='running'
+         AND COALESCE(j.lease_heartbeat_at,j.claimed_at) < $1::text
+         AND (j.claimed_by_worker IS NULL OR NOT EXISTS (
+           SELECT 1 FROM amf_worker_presence p
+           WHERE p.worker_instance_id=j.claimed_by_worker AND p.last_heartbeat_at >= $2::text
+         ))
        RETURNING job_id`,
-      [cutoff]
+      [cutoff, workerCutoff]
     );
     return res.rowCount ?? 0;
   }
 
   async listJobsByWorkflow(workflowId: Uuid): Promise<WorkflowJob[]> {
     const res = await this.pool.query(
-      `SELECT job_id, workflow_id, submission_key, status, attempts, claimed_at, error, created_at, updated_at
+      `SELECT job_id, workflow_id, submission_key, status, attempts, claimed_at, claimed_by_worker, lease_heartbeat_at, lease_kind, error, created_at, updated_at
        FROM workflow_jobs WHERE workflow_id = $1 ORDER BY job_id`,
       [workflowId]
     );
@@ -205,7 +229,7 @@ export class PostgresQueue {
 
   async getJob(jobId: number): Promise<WorkflowJob | null> {
     const res = await this.pool.query(
-      `SELECT job_id, workflow_id, submission_key, status, attempts, claimed_at, error, created_at, updated_at
+      `SELECT job_id, workflow_id, submission_key, status, attempts, claimed_at, claimed_by_worker, lease_heartbeat_at, lease_kind, error, created_at, updated_at
        FROM workflow_jobs WHERE job_id = $1::bigint`,
       [jobId]
     );
@@ -221,6 +245,9 @@ export class PostgresQueue {
       status: r.status,
       attempts: r.attempts,
       claimedAt: r.claimed_at,
+      claimedByWorker: r.claimed_by_worker ?? null,
+      leaseHeartbeatAt: r.lease_heartbeat_at ?? null,
+      leaseKind: r.lease_kind ?? "STANDARD",
       error: r.error,
       createdAt: r.created_at,
       updatedAt: r.updated_at,

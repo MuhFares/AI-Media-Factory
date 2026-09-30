@@ -20,6 +20,73 @@ export interface PlannerInput {
   maxSteps?: number;
   /** Preferred agent capabilities to use. */
   preferredCapabilities?: string[];
+  /** Optional typed production stage. Omitted for the legacy execution-plan mode. */
+  stage?: PlannerStage;
+  topic?: string;
+  audience?: string;
+  platform?: string;
+  toneConstraints?: string[];
+  researchQuestions?: string[];
+  researchObjectives?: string[];
+  knownRestrictions?: string[];
+  desiredDeliverables?: string[];
+  initialPlan?: InitialContentPlan;
+  researchResult?: ResearchResultForSynthesis;
+}
+
+export type PlannerStage = "INITIAL_CONTENT_PLAN" | "POST_RESEARCH_SYNTHESIS";
+
+export interface InitialContentPlan {
+  planId: Uuid;
+  tasks: never[];
+  stage: "INITIAL_CONTENT_PLAN";
+  objective: string;
+  topic: string;
+  audience: string;
+  platform: string;
+  toneConstraints: string[];
+  researchQuestions: string[];
+  researchObjectives: string[];
+  knownRestrictions: string[];
+  desiredDeliverables: string[];
+  factualClaims: never[];
+}
+
+export interface ResearchResultForSynthesis {
+  reportId: Uuid;
+  summary: string;
+  sources: Array<{ id: number; title: string; url: string; snippet?: string }>;
+  citations?: Array<{ sourceId: number; text: string }>;
+  unknowns?: string[];
+  provenance?: string[];
+}
+
+export interface EvidenceBackedClaim {
+  text: string;
+  status: "SUPPORTED" | "UNSUPPORTED" | "UNCERTAIN";
+  sourceIds: number[];
+  rationale: string;
+}
+
+export interface EvidenceBackedContentBrief {
+  briefId: Uuid;
+  stage: "POST_RESEARCH_SYNTHESIS";
+  objective: string;
+  finalAngle: string;
+  keyPoints: string[];
+  claims: EvidenceBackedClaim[];
+  uncertainties: string[];
+  evidenceRefs: number[];
+  hookDirection: string;
+  messageProgression: string[];
+  audienceFraming: string;
+  toneConstraints: string[];
+  writerInstructions: string[];
+  originalityConstraints: string[];
+  platformConstraints: string[];
+  researchSources: Array<{ sourceId: number; title: string; url: string; snippet?: string }>;
+  warnings: string[];
+  status: "completed" | "blocked";
 }
 
 /** Constraints that guide the planning process. */

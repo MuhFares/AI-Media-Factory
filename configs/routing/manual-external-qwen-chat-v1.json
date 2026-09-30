@@ -1,0 +1,12 @@
+{
+  "route": "MANUAL_EXTERNAL_GENERATION",
+  "external_tool": "QWEN_CHAT",
+  "provider_cost_usd": 0,
+  "human_intervention_required": true,
+  "automation_level": "MANUAL",
+  "cost_classification": "MANUAL_EXTERNAL_ZERO_PROVIDER_COST",
+  "evidence_classification": "MANUAL_EXTERNAL_BENCHMARK_EVIDENCE",
+  "cairo_egypt_fidelity": "NOT_APPROVED",
+  "api_integration": false,
+  "notes": "Qwen Chat is one current manual implementation of the generic route; zero provider/API cost is not zero operational or human cost."
+}

@@ -116,6 +116,7 @@ const sse = (model, payload, cost) => {
 
 async function createScratchDb(dbName) {
   const admin = new pg.Pool({ connectionString: process.env.DATABASE_URL.replace("/ai_media_factory", "/postgres") });
+  await admin.query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()", [dbName]);
   await admin.query(`DROP DATABASE IF EXISTS ${dbName}`);
   await admin.query(`CREATE DATABASE ${dbName}`);
   const parsed = new URL(process.env.DATABASE_URL);
@@ -128,6 +129,7 @@ async function createScratchDb(dbName) {
 async function dropScratchDb(admin, pool, dbName) {
   if (pool) await pool.end();
   if (admin) {
+    await admin.query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()", [dbName]);
     await admin.query(`DROP DATABASE IF EXISTS ${dbName}`);
     await admin.end();
   }
@@ -157,7 +159,7 @@ async function seedInfra(pool, researchLimit, textLimit) {
   );
 }
 
-async function seedScenario(pool, persistence, queue, suffix) {
+async function seedScenario(pool, persistence, queue, suffix, options = {}) {
   const workflowId = `wf-e2e-bounded-${suffix}`;
   const correlationId = `corr-e2e-bounded-${suffix}`;
   const contentId = `content-e2e-bounded-${suffix}`;
@@ -178,6 +180,7 @@ async function seedScenario(pool, persistence, queue, suffix) {
     audience: "curious adults",
     platform: "youtube",
     productionBrief: { topic: TOPIC, objective: OBJECTIVE, brandProject: PROJECT, targetAudience: "curious adults", targetPlatform: "youtube" },
+    ...(options.researchIntelligenceVersion ? { researchIntelligenceVersion: options.researchIntelligenceVersion } : {}),
   };
   await queue.submit({
     submissionKey: `e2e-bounded-${suffix}`,
@@ -266,14 +269,50 @@ async function seedScenario(pool, persistence, queue, suffix) {
   return { workflowId, correlationId, definition, researchStep, orchestratorStep };
 }
 
-function makeBoundary(persistence, pool) {
+function v2Mission(stageId, social = false) {
+  return {
+    taskId: `research-${stageId}`, stage: stageId, missionId: `mission-${stageId}`, objective: OBJECTIVE,
+    market: null, geography: null, language: "English", platforms: social ? ["YouTube Shorts", "Instagram"] : ["YouTube Shorts"],
+    contentPillar: "Historical POV", factualMode: "HISTORICAL_POV", audience: "curious adults", trendMode: "HYBRID",
+    timeHorizon: { from: null, to: null }, currentDate: "2026-09-25",
+    discoveryLanes: [
+      { laneId: "HISTORICAL_OPPORTUNITY", purpose: "Find named factual candidates", queryGuidance: "museum documented ancient water engineering", desiredCapability: "WEB_SEARCH", actualCapability: "web.search", maxCalls: 1, expectedOutput: "sources" },
+      ...(social ? [{ laneId: "SOCIAL_CONTENT_SIGNAL", purpose: "Desired social signal", queryGuidance: "ancient water engineering reels", desiredCapability: "INSTAGRAM_DISCOVERY", actualCapability: "social.discovery", maxCalls: 1, expectedOutput: "signals" }] : []),
+    ],
+    desiredSourceTypes: social ? ["WEB_SEARCH", "INSTAGRAM_DISCOVERY"] : ["WEB_SEARCH"], availableCapabilities: [], unavailableDesiredCapabilities: [],
+    searchPriorities: ["named candidates"], verificationRequirements: ["institutional corroboration"], stopConditions: ["bounded calls"], riskNotes: [],
+  };
+}
+
+function v2UnsupportedOnlyMission(stageId) {
+  const base = v2Mission(stageId, true);
+  return {
+    ...base,
+    discoveryLanes: [
+      { laneId: "instagram-discovery", purpose: "Record Instagram capability availability", queryGuidance: "Do not infer Instagram trends", desiredCapability: "INSTAGRAM_DISCOVERY", actualCapability: "UNSUPPORTED", maxCalls: 1, expectedOutput: "capability limitation" },
+      { laneId: "youtube-discovery", purpose: "Record YouTube capability availability", queryGuidance: "Do not infer YouTube trends", desiredCapability: "YOUTUBE_DISCOVERY", actualCapability: "UNSUPPORTED", maxCalls: 1, expectedOutput: "capability limitation" },
+    ],
+    desiredSourceTypes: ["INSTAGRAM_DISCOVERY", "YOUTUBE_DISCOVERY"],
+  };
+}
+
+function v2Grounded(stageId) {
+  const base = synthesisGrounded(stageId);
+  return { ...base, candidateStories: base.candidateStories.map((candidate) => ({ ...candidate, contentOpportunityAssessment: { level: "MEDIUM", basis: "Evergreen discovery evidence" }, factualVerification: { status: "STRONG", basis: "Institutional and reputable references" }, recommendedForProduction: true })) };
+}
+
+function v2Insufficient(stageId) {
+  return { ...synthesisGrounded(stageId), candidateStories: [], confidence: 0.3, evidenceRisks: ["No candidate met the verification rule"], status: "insufficient_evidence" };
+}
+
+function makeBoundary(persistence, pool, searchResults = FACTUAL_RESULTS) {
   const realBoundary = buildProviderBoundary({ persistence, pool });
   const registry = createCapabilityRegistry({
     capabilities: [{ capabilityId: WEB_SEARCH_CAPABILITY_ID, description: "Governed web search", inputSchema: { type: "object" }, outputSchema: { type: "object" } }],
     grants: [{ agentId: "research", capabilityIds: [WEB_SEARCH_CAPABILITY_ID] }],
   });
   const searchExecutor = new WebSearchCapabilityExecutor(
-    { search: async () => ({ providerId: "e2e-factual-fixture", results: FACTUAL_RESULTS }) },
+    { search: async () => ({ providerId: "e2e-factual-fixture", results: searchResults }) },
     registry,
     { maxResults: 5, maxQueryLength: 200 }
   );
@@ -318,7 +357,7 @@ test("USABLE research stops after research with artifact persisted and CEO at ze
       recoveryAuthorization: "OWNER_APPROVED",
       targetStepId: researchStep.id,
       preserveCompletedStepIds: [orchestratorStep.id],
-      requiredArtifactsByStep: { [orchestratorStep.id]: "execution_plan" },
+      requiredArtifactsByStep: { [orchestratorStep.id]: { artifactKind: "execution_plan" } },
       stopAfterStepId: researchStep.id,
     };
     const first = await dispatcher.dispatch(input);
@@ -399,13 +438,209 @@ test("USABLE research stops after research with artifact persisted and CEO at ze
     assert.equal(await runtime.worker.runOnce(), false);
     const budgetsAfter = await pool.query("SELECT call_kind,consumed_count FROM production_phase_call_budgets WHERE project_id='morroway' AND phase='PRE_MEDIA_PHASE' ORDER BY call_kind");
     assert.deepEqual(budgetsAfter.rows.map((row) => [row.call_kind, Number(row.consumed_count)]), [["research", 1], ["text_agent", 2]]);
+  } catch (error) {
+    const diagnostic = { scenario: "V1_USABLE_BOUNDED", exceptionType: error?.constructor?.name ?? typeof error, message: String(error?.message ?? error).slice(0, 1000), stack: String(error?.stack ?? "").slice(0, 4000) };
+    try {
+      diagnostic.submissions = (await pool.query("SELECT workflow_id,status,error,updated_at FROM workflow_submissions ORDER BY updated_at DESC LIMIT 5")).rows;
+      diagnostic.workflows = (await pool.query("SELECT workflow_id,state,last_checkpoint_ref,context FROM workflow_instances ORDER BY updated_at DESC LIMIT 5")).rows;
+      diagnostic.steps = (await pool.query("SELECT workflow_id,step_id,status,attempts,error FROM workflow_steps ORDER BY workflow_id,step_id")).rows;
+      diagnostic.artifacts = (await pool.query("SELECT artifact_id,kind,status,producer_agent,workflow_id FROM artifacts ORDER BY created_at")).rows;
+      diagnostic.reservations = (await pool.query("SELECT role,call_kind,status,idempotency_key FROM production_call_reservations ORDER BY reserved_at")).rows;
+      diagnostic.jobs = (await pool.query("SELECT id,workflow_id,status,attempts,error FROM workflow_jobs ORDER BY id")).rows;
+    } catch (diagnosticError) {
+      diagnostic.diagnosticFailure = String(diagnosticError?.message ?? diagnosticError).slice(0, 1000);
+    }
+    console.error("BOUNDED_RESEARCH_E2E_DIAGNOSTIC", JSON.stringify(diagnostic));
+    throw error;
   } finally {
     global.fetch = originalFetch;
     if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
     else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
     await dropScratchDb(admin, pool, dbName);
   }
-}, { timeout: 300000 });
+}, { timeout: 300000, concurrency: false });
+
+test("V2 insufficient evidence and unsupported social remain honest at bounded stop", async () => {
+  const dbName = "amf_e2e_bounded_v2_insufficient";
+  const { admin, pool } = await createScratchDb(dbName);
+  const originalFetch = global.fetch;
+  const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
+  try {
+    await seedInfra(pool, 10, 2);
+    const persistence = new PostgresPersistence(pool);
+    const queue = new PostgresQueue(pool);
+    const { workflowId, researchStep, orchestratorStep } = await seedScenario(pool, persistence, queue, "v2-insufficient", { researchIntelligenceVersion: "V2" });
+    const dispatcher = new PostgresRecoveryDispatcher(pool, persistence);
+    await dispatcher.dispatch({ authorizationKey: "e2e-v2-insufficient-v1", workflowId, recoveryOfExecutionId: "exec-rec-v2-insufficient", originalExecutionId: "exec-orig-v2-insufficient", recoveryReason: "E2E_V2_INSUFFICIENT", recoveryAuthorization: "OWNER_APPROVED", targetStepId: researchStep.id, preserveCompletedStepIds: [orchestratorStep.id], requiredArtifactsByStep: { [orchestratorStep.id]: { artifactKind: "execution_plan" } }, stopAfterStepId: researchStep.id });
+    process.env.OPENROUTER_API_KEY = "e2e-fixture-key";
+    global.fetch = async (url, options) => {
+      const target = String(url);
+      if (!target.includes("openrouter")) throw new Error(`REAL_EGRESS_BLOCKED:${target.slice(0, 80)}`);
+      if (target.includes("auth/key")) return new Response(JSON.stringify({ data: { label: "e2e" } }), { status: 200 });
+      const body = JSON.stringify(JSON.parse(options.body));
+      return sse(RESEARCH_MODEL, body.includes("Research Direction") ? v2Mission(researchStep.id, true) : v2Insufficient(researchStep.id), PLAN_COST);
+    };
+    const runtime = await createProductionWorker({ pool, providerBoundary: makeBoundary(persistence, pool), orphanStaleMs: Number.MAX_SAFE_INTEGER });
+    assert.equal(await runtime.worker.runOnce(), true);
+    const terminal = await queue.loadSubmissionByWorkflow(workflowId);
+    const debugWorkflow = await persistence.loadWorkflow(workflowId);
+    const debugExecutions = await persistence.listExecutionProvenance(workflowId);
+    const debugJobs = (await pool.query("SELECT status,error FROM workflow_jobs WHERE workflow_id=$1 ORDER BY created_at", [workflowId])).rows;
+    assert.equal(terminal?.status, "bounded_stop", JSON.stringify({ submission: terminal, state: debugWorkflow.state, steps: debugWorkflow.steps, data: debugWorkflow.context.data, executions: debugExecutions, jobs: debugJobs }));
+    const instance = await persistence.loadWorkflow(workflowId);
+    assert.equal(instance.state, "PAUSED");
+    assert.equal(instance.context.data.boundedStop.stopAfterStepId, researchStep.id);
+    const report = (await persistence.listArtifacts(workflowId)).find((artifact) => artifact.kind === "research_report" && artifact.status === "completed");
+    assert.ok(report);
+    assert.equal(report.payload.researchStatus, "INSUFFICIENT_EVIDENCE");
+    assert.equal(report.payload.evidenceQuality.ceoEligible, false);
+    assert.equal(report.payload.candidateStories.length, 0);
+    assert.equal(report.payload.socialDiscovery.some((entry) => entry.status === "blocked" && entry.reasonCode === "CAPABILITY_NOT_REGISTERED"), true);
+    assert.equal((await persistence.listExecutionProvenance(workflowId)).filter((record) => record.agentId === "ceo").length, 0);
+  } finally {
+    global.fetch = originalFetch;
+    if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
+    await dropScratchDb(admin, pool, dbName);
+  }
+}, { timeout: 300000, concurrency: false });
+
+test("V2 unsupported-only lanes persist an honest empty artifact and stop for Owner review", async () => {
+  const dbName = "amf_e2e_bounded_v2_no_supported_lane";
+  const { admin, pool } = await createScratchDb(dbName);
+  const originalFetch = global.fetch;
+  const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
+  try {
+    await seedInfra(pool, 4, 2);
+    const persistence = new PostgresPersistence(pool);
+    const queue = new PostgresQueue(pool);
+    const { workflowId, researchStep, orchestratorStep } = await seedScenario(pool, persistence, queue, "v2-no-supported", { researchIntelligenceVersion: "V2" });
+    await new PostgresRecoveryDispatcher(pool, persistence).dispatch({ authorizationKey: "e2e-v2-no-supported-v1", workflowId, recoveryOfExecutionId: "exec-rec-v2-no-supported", originalExecutionId: "exec-orig-v2-no-supported", recoveryReason: "E2E_V2_NO_SUPPORTED", recoveryAuthorization: "OWNER_APPROVED", targetStepId: researchStep.id, preserveCompletedStepIds: [orchestratorStep.id], requiredArtifactsByStep: { [orchestratorStep.id]: { artifactKind: "execution_plan" } }, stopAfterStepId: researchStep.id });
+    process.env.OPENROUTER_API_KEY = "e2e-fixture-key";
+    global.fetch = async (url, options) => {
+      const target = String(url);
+      if (!target.includes("openrouter")) throw new Error(`REAL_EGRESS_BLOCKED:${target.slice(0, 80)}`);
+      if (target.includes("auth/key")) return new Response(JSON.stringify({ data: { label: "e2e" } }), { status: 200 });
+      const body = JSON.stringify(JSON.parse(options.body));
+      return sse(RESEARCH_MODEL, body.includes("Research Direction") ? v2UnsupportedOnlyMission(researchStep.id) : v2Insufficient(researchStep.id), PLAN_COST);
+    };
+    const runtime = await createProductionWorker({ pool, providerBoundary: makeBoundary(persistence, pool), orphanStaleMs: Number.MAX_SAFE_INTEGER });
+    assert.equal(await runtime.worker.runOnce(), true);
+    assert.equal((await queue.loadSubmissionByWorkflow(workflowId))?.status, "bounded_stop");
+    const instance = await persistence.loadWorkflow(workflowId);
+    assert.equal(instance.state, "PAUSED");
+    assert.equal(instance.steps.find((step) => step.stepId === researchStep.id).status, "completed");
+    const report = (await persistence.listArtifacts(workflowId)).find((artifact) => artifact.kind === "research_report" && artifact.status === "completed");
+    assert.ok(report);
+    assert.deepEqual(report.payload.candidateStories, []);
+    assert.equal(report.payload.executionStatus, "COMPLETED");
+    assert.equal(report.payload.evidenceStatus, "INSUFFICIENT_EVIDENCE");
+    assert.equal(report.payload.researchStatus, "INSUFFICIENT_EVIDENCE");
+    assert.equal(report.payload.retrievalPlanning.status, "NO_SUPPORTED_CAPABILITY");
+    assert.deepEqual(report.payload.retrievalPlan, []);
+    assert.equal((await persistence.listExecutionProvenance(workflowId)).filter((record) => record.agentId === "ceo").length, 0);
+    const reservations = (await pool.query("SELECT call_kind,status FROM production_call_reservations WHERE workflow_id=$1 ORDER BY reserved_at", [workflowId])).rows;
+    assert.equal(reservations.filter((row) => row.call_kind === "research" && row.status === "RELEASED_BEFORE_SUBMISSION").length, 4);
+    assert.equal(reservations.filter((row) => row.call_kind === "research" && row.status === "CONSUMED").length, 0);
+  } finally {
+    global.fetch = originalFetch;
+    if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
+    await dropScratchDb(admin, pool, dbName);
+  }
+}, { timeout: 300000, concurrency: false });
+
+test("V2 supported web retrieval returning zero results completes insufficient at Owner review", async () => {
+  const dbName = "amf_e2e_bounded_v2_zero_results";
+  const { admin, pool } = await createScratchDb(dbName);
+  const originalFetch = global.fetch;
+  const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
+  try {
+    await seedInfra(pool, 4, 2);
+    const persistence = new PostgresPersistence(pool);
+    const queue = new PostgresQueue(pool);
+    const { workflowId, researchStep, orchestratorStep } = await seedScenario(pool, persistence, queue, "v2-zero-results", { researchIntelligenceVersion: "V2" });
+    await new PostgresRecoveryDispatcher(pool, persistence).dispatch({ authorizationKey: "e2e-v2-zero-results-v1", workflowId, recoveryOfExecutionId: "exec-rec-v2-zero-results", originalExecutionId: "exec-orig-v2-zero-results", recoveryReason: "E2E_V2_ZERO_RESULTS", recoveryAuthorization: "OWNER_APPROVED", targetStepId: researchStep.id, preserveCompletedStepIds: [orchestratorStep.id], requiredArtifactsByStep: { [orchestratorStep.id]: { artifactKind: "execution_plan" } }, stopAfterStepId: researchStep.id });
+    process.env.OPENROUTER_API_KEY = "e2e-fixture-key";
+    global.fetch = async (url, options) => {
+      const target = String(url);
+      if (!target.includes("openrouter")) throw new Error(`REAL_EGRESS_BLOCKED:${target.slice(0, 80)}`);
+      if (target.includes("auth/key")) return new Response(JSON.stringify({ data: { label: "e2e" } }), { status: 200 });
+      const body = JSON.stringify(JSON.parse(options.body));
+      return sse(RESEARCH_MODEL, body.includes("Research Direction") ? v2Mission(researchStep.id) : v2Insufficient(researchStep.id), PLAN_COST);
+    };
+    const runtime = await createProductionWorker({ pool, providerBoundary: makeBoundary(persistence, pool, []), orphanStaleMs: Number.MAX_SAFE_INTEGER });
+    assert.equal(await runtime.worker.runOnce(), true);
+    assert.equal((await queue.loadSubmissionByWorkflow(workflowId))?.status, "bounded_stop");
+    const report = (await persistence.listArtifacts(workflowId)).find((artifact) => artifact.kind === "research_report" && artifact.status === "completed");
+    assert.ok(report);
+    assert.equal(report.payload.researchStatus, "INSUFFICIENT_EVIDENCE");
+    assert.equal(report.payload.evidenceQuality.evidenceStatus, "INSUFFICIENT_EVIDENCE");
+    assert.equal(report.payload.evidenceQuality.ceoEligible, false);
+    assert.deepEqual(report.payload.candidateStories, []);
+    assert.equal((await persistence.listExecutionProvenance(workflowId)).filter((record) => record.agentId === "ceo").length, 0);
+  } finally {
+    global.fetch = originalFetch;
+    if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
+    await dropScratchDb(admin, pool, dbName);
+  }
+}, { timeout: 300000, concurrency: false });
+
+test("V2 direction through verification reaches durable bounded stop with CEO at zero", async () => {
+  const dbName = "amf_e2e_bounded_v2";
+  const { admin, pool } = await createScratchDb(dbName);
+  const transports = [];
+  const originalFetch = global.fetch;
+  const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
+  try {
+    await seedInfra(pool, 10, 2);
+    const persistence = new PostgresPersistence(pool);
+    const queue = new PostgresQueue(pool);
+    const { workflowId, researchStep, orchestratorStep } = await seedScenario(pool, persistence, queue, "v2", { researchIntelligenceVersion: "V2" });
+    const dispatcher = new PostgresRecoveryDispatcher(pool, persistence);
+    await dispatcher.dispatch({ authorizationKey: "e2e-v2-v1", workflowId, recoveryOfExecutionId: "exec-rec-v2", originalExecutionId: "exec-orig-v2", recoveryReason: "E2E_V2", recoveryAuthorization: "OWNER_APPROVED", targetStepId: researchStep.id, preserveCompletedStepIds: [orchestratorStep.id], requiredArtifactsByStep: { [orchestratorStep.id]: { artifactKind: "execution_plan" } }, stopAfterStepId: researchStep.id });
+    process.env.OPENROUTER_API_KEY = "e2e-fixture-key";
+    global.fetch = async (url, options) => {
+      const target = String(url);
+      if (!target.includes("openrouter")) throw new Error(`REAL_EGRESS_BLOCKED:${target.slice(0, 80)}`);
+      if (target.includes("auth/key")) return new Response(JSON.stringify({ data: { label: "e2e" } }), { status: 200 });
+      const submitted = JSON.parse(options.body);
+      const body = JSON.stringify(submitted);
+      const direction = body.includes("Research Direction");
+      const final = body.includes("Final research synthesis");
+      transports.push({ direction, final, model: submitted.model });
+      return sse(RESEARCH_MODEL, direction ? v2Mission(researchStep.id) : v2Grounded(researchStep.id), direction ? PLAN_COST : SYNTHESIS_COST);
+    };
+    const runtime = await createProductionWorker({ pool, providerBoundary: makeBoundary(persistence, pool), orphanStaleMs: Number.MAX_SAFE_INTEGER });
+    assert.equal(await runtime.worker.runOnce(), true);
+    await waitForSubmission(queue, workflowId, "bounded_stop");
+    assert.equal(transports.filter((entry) => entry.direction).length, 1);
+    assert.equal(transports.filter((entry) => entry.final).length, 1);
+    const instance = await persistence.loadWorkflow(workflowId);
+    assert.equal(instance.state, "PAUSED");
+    assert.equal(instance.context.data.boundedStop.stopAfterStepId, researchStep.id);
+    assert.equal(instance.steps.find((step) => step.stepId === researchStep.id).status, "completed");
+    assert.ok(instance.ready.length > 0);
+    const artifacts = await persistence.listArtifacts(workflowId);
+    const report = artifacts.find((artifact) => artifact.kind === "research_report" && artifact.status === "completed");
+    assert.ok(report);
+    assert.equal(report.payload.candidateStories[0].recommendedForProduction, true);
+    const executions = await persistence.listExecutionProvenance(workflowId);
+    assert.equal(executions.filter((record) => record.agentId === "ceo").length, 0);
+    const reservations = (await pool.query("SELECT call_kind,status FROM production_call_reservations WHERE workflow_id=$1 ORDER BY reserved_at", [workflowId])).rows;
+    // With envelope fix: effective = min(6, 4, remaining) = 4 reserved.
+    // The mission plans 1 discovery + 3 verification = 4 used. All consumed, none released.
+    const researchConsumed = reservations.filter((row) => row.call_kind === "research" && row.status === "CONSUMED");
+    const researchReleased = reservations.filter((row) => row.call_kind === "research" && row.status === "RELEASED_BEFORE_SUBMISSION");
+    assert.equal(researchConsumed.length + researchReleased.length, 4, `expected exactly 4 research reservations (effective envelope), got ${researchConsumed.length} consumed + ${researchReleased.length} released`);
+    assert.ok(researchConsumed.length >= 1, "at least discovery must be consumed");
+    const reloaded = await new PostgresPersistence(pool).loadWorkflow(workflowId);
+    assert.equal(reloaded.state, "PAUSED");
+    assert.equal(reloaded.context.data.boundedStop.stopAfterStepId, researchStep.id);
+  } finally {
+    global.fetch = originalFetch;
+    if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
+    await dropScratchDb(admin, pool, dbName);
+  }
+}, { timeout: 300000, concurrency: false });
 
 test("RETRY attempt B on the same workflow persists distinct evidence", async () => {
   // NOTE: runs against the SAME scratch database as the USABLE attempt above
@@ -445,7 +680,7 @@ test("RETRY attempt B on the same workflow persists distinct evidence", async ()
         recoveryAuthorization: "OWNER_APPROVED",
         targetStepId: researchStep.id,
         preserveCompletedStepIds: [orchestratorStep.id],
-        requiredArtifactsByStep: { [orchestratorStep.id]: "execution_plan" },
+        requiredArtifactsByStep: { [orchestratorStep.id]: { artifactKind: "execution_plan" } },
         stopAfterStepId: researchStep.id,
       });
       const runtime = await createProductionWorker({ pool, providerBoundary: makeBoundary(persistence, pool), orphanStaleMs: Number.MAX_SAFE_INTEGER });
@@ -481,7 +716,7 @@ test("RETRY attempt B on the same workflow persists distinct evidence", async ()
     else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
     await dropScratchDb(admin, pool, dbName);
   }
-}, { timeout: 300000 });
+}, { timeout: 300000, concurrency: false });
 
 test("NEEDS research fails closed without CEO", async () => {
   const dbName = "amf_e2e_bounded_needs";
@@ -504,7 +739,7 @@ test("NEEDS research fails closed without CEO", async () => {
       recoveryAuthorization: "OWNER_APPROVED",
       targetStepId: researchStep.id,
       preserveCompletedStepIds: [orchestratorStep.id],
-      requiredArtifactsByStep: { [orchestratorStep.id]: "execution_plan" },
+      requiredArtifactsByStep: { [orchestratorStep.id]: { artifactKind: "execution_plan" } },
       stopAfterStepId: researchStep.id,
     });
     process.env.OPENROUTER_API_KEY = "e2e-fixture-key";
@@ -539,5 +774,4 @@ test("NEEDS research fails closed without CEO", async () => {
     else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
     await dropScratchDb(admin, pool, dbName);
   }
-}, { timeout: 300000 });
-
+}, { timeout: 300000, concurrency: false });

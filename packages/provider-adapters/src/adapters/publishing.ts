@@ -29,6 +29,7 @@ import type {
   PublishingProviderResponse,
   PublishRequest,
 } from "@ai-media-factory/tool-framework";
+import { mediaTransportFingerprint, preflightMediaTransport, readVerifiedLocalMedia } from "@ai-media-factory/tool-framework";
 import type { PublishSessionStore } from "@ai-media-factory/database";
 import { sendHttp, sendHttpWithRetry } from "../core/http.js";
 import { providerConfigError, providerValidationError } from "../core/errors.js";
@@ -86,15 +87,11 @@ export class YouTubePublishAdapter implements PublishingProvider {
   }
 
   async publish(request: PublishRequest): Promise<PublishingProviderResponse> {
-    if (!/^https?:\/\//i.test(request.assetId)) {
-      throw providerValidationError(
-        this.providerId,
-        "publish",
-        "assetId must be a downloadable http(s) URL of the media to publish",
-      );
-    }
+    try { await preflightMediaTransport(request.mediaTransportRef, request.finalMediaSha256); }
+    catch (error) { throw providerValidationError(this.providerId, "publish", error instanceof Error ? error.message : "MEDIA_TRANSPORT_PREFLIGHT_FAILED"); }
+    const title = assertYouTubeTitle(request.title);
     const visibility = request.options?.visibility ?? "private";
-    const marker = markerFor(request.assetId, request.title, visibility);
+    const marker = markerFor(request.finalMediaArtifactId, request.finalMediaSha256, title, visibility);
 
     // 1) Durable session recovery: a provider-confirmed publication for this
     //    logical request must be returned as-is (idempotent retry after crash).
@@ -110,7 +107,14 @@ export class YouTubePublishAdapter implements PublishingProvider {
         };
       }
       if (session !== null && session.status === "pending" && session.sessionUri !== undefined) {
-        const resumed = await this.uploadBytes(session.sessionUri, request.assetId);
+        const expectedFingerprint = mediaTransportFingerprint(request.mediaTransportRef);
+        if (session.finalMediaArtifactId !== request.finalMediaArtifactId
+          || session.finalMediaSha256 !== request.finalMediaSha256
+          || session.transportType !== request.mediaTransportRef.type
+          || session.transportFingerprint !== expectedFingerprint) {
+          throw providerValidationError(this.providerId, "publish", "PUBLISH_SESSION_IDENTITY_MISMATCH");
+        }
+        const resumed = await this.uploadBytes(session.sessionUri, request.mediaTransportRef, request.finalMediaSha256);
         return this.confirmed(request, resumed, marker);
       }
     }
@@ -138,12 +142,17 @@ export class YouTubePublishAdapter implements PublishingProvider {
 
     // 3) Fresh resumable upload.
     const description = this.buildDescription(request, marker);
-    const body = await this.downloadMedia(request.assetId);
-    const sessionUri = await this.initUpload(visibility, description, body.byteLength, request);
+    const body = await this.loadMedia(request.mediaTransportRef, request.finalMediaSha256);
+    const sessionUri = await this.initUpload(visibility, title, description, body.byteLength, request.tags);
     if (this.publishSessionStore !== undefined) {
-      await this.publishSessionStore.savePending(marker, sessionUri);
+      await this.publishSessionStore.savePending(marker, sessionUri, {
+        finalMediaArtifactId: request.finalMediaArtifactId,
+        finalMediaSha256: request.finalMediaSha256,
+        transportType: request.mediaTransportRef.type,
+        transportFingerprint: mediaTransportFingerprint(request.mediaTransportRef),
+      });
     }
-    const video = await this.uploadBytes(sessionUri, request.assetId, body);
+    const video = await this.uploadBytes(sessionUri, request.mediaTransportRef, request.finalMediaSha256, body);
     return this.confirmed(request, video, marker);
   }
 
@@ -220,7 +229,19 @@ export class YouTubePublishAdapter implements PublishingProvider {
     return null;
   }
 
-  private async downloadMedia(assetUrl: string): Promise<Uint8Array> {
+  private async loadMedia(transport: PublishRequest["mediaTransportRef"], expectedSha256: string): Promise<Uint8Array> {
+    if (transport.type === "LOCAL_FILE") {
+      try {
+        const bytes = await readVerifiedLocalMedia(transport, expectedSha256);
+        if (bytes.byteLength > this.maxUploadBytes) throw new Error(`The asset exceeds the configured ${this.maxUploadBytes} byte upload limit`);
+        return bytes;
+      }
+      catch (error) { throw providerValidationError(this.providerId, "media-load", error instanceof Error ? error.message : "LOCAL_FILE_TRANSPORT_FAILED"); }
+    }
+    if (transport.type === "PROVIDER_MATERIALIZED") {
+      throw providerValidationError(this.providerId, "media-load", "PROVIDER_MATERIALIZED_TRANSPORT_UNSUPPORTED");
+    }
+    const assetUrl = transport.url;
     const res = await sendHttpWithRetry(
       {
         method: "GET",
@@ -246,17 +267,22 @@ export class YouTubePublishAdapter implements PublishingProvider {
         `The asset exceeds the configured ${this.maxUploadBytes} byte upload limit`,
       );
     }
+    const actualSha256 = createHash("sha256").update(bytes).digest("hex");
+    if (actualSha256 !== expectedSha256.toLowerCase()) {
+      throw providerValidationError(this.providerId, "download", "MEDIA_TRANSPORT_SHA256_MISMATCH");
+    }
     return bytes;
   }
 
   private async initUpload(
     visibility: "public" | "unlisted" | "private",
+    title: string,
     description: string,
     totalBytes: number,
-    request: PublishRequest,
+    tags: readonly string[] | undefined,
   ): Promise<string> {
-    const snippet: Record<string, unknown> = { title: request.title, description };
-    if (request.tags !== undefined && request.tags.length > 0) snippet.tags = [...request.tags];
+    const snippet: Record<string, unknown> = { title, description };
+    if (tags !== undefined && tags.length > 0) snippet.tags = [...tags];
     const url = new URL(`${this.baseUrl.replace(/\/$/, "")}/upload/youtube/v3/videos`);
     url.searchParams.set("uploadType", "resumable");
     url.searchParams.set("part", "snippet,status");
@@ -291,10 +317,11 @@ export class YouTubePublishAdapter implements PublishingProvider {
 
   private async uploadBytes(
     sessionUri: string,
-    assetUrl: string,
+    transport: PublishRequest["mediaTransportRef"],
+    expectedSha256: string,
     preloaded?: Uint8Array,
   ): Promise<{ id: string; publishedAt: string; url: string }> {
-    const body = preloaded ?? (await this.downloadMedia(assetUrl));
+    const body = preloaded ?? (await this.loadMedia(transport, expectedSha256));
     const res = await sendHttp(
       {
         method: "PUT",
@@ -342,13 +369,57 @@ export function watchUrl(videoId: string): string {
   return `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
 }
 
+/** YouTube video title limit (characters), enforced by the provider
+ *  (a 103-character validation title was rejected with invalidTitle). */
+export const YOUTUBE_TITLE_MAX_LENGTH = 100;
+
+/**
+ * Provider-boundary title validation. Fails BEFORE any provider call when
+ * the title is missing, empty/whitespace-only, non-string, or over the
+ * provider limit. Returns the trimmed title. Never invents, truncates, or
+ * substitutes fallback titles: invalid input throws.
+ */
+export function assertYouTubeTitle(title: unknown): string {
+  if (typeof title !== "string") {
+    throw providerValidationError("youtube", "publish", "TITLE_REQUIRED");
+  }
+  const trimmed = title.trim();
+  if (trimmed.length === 0) {
+    throw providerValidationError("youtube", "publish", "TITLE_EMPTY");
+  }
+  if (trimmed.length > YOUTUBE_TITLE_MAX_LENGTH) {
+    throw providerValidationError(
+      "youtube", "publish",
+      `TITLE_TOO_LONG:${trimmed.length}>${YOUTUBE_TITLE_MAX_LENGTH}`,
+    );
+  }
+  return trimmed;
+}
+
 /** Stable marker for one logical publication: asset + title + visibility. */
-export function markerFor(assetId: string, title: string, visibility: string): string {
-  const digest = createHash("sha256")
-    .update(`asset=${assetId}\ntitle=${title}\nvisibility=${visibility}`)
+export function markerFor(finalMediaArtifactId: string, finalMediaSha256: string, title: string, visibility: string): string {  const digest = createHash("sha256")
+    .update(`artifact=${finalMediaArtifactId}\nsha256=${finalMediaSha256.toLowerCase()}\ntitle=${title}\nvisibility=${visibility}`)
     .digest("hex")
     .slice(0, 16);
   return digest;
+}
+
+/**
+ * M4 private-visibility hard guard (fail-closed, provider-free).
+ * The validation proof may only ever request privacyStatus=private:
+ * any other requested visibility — public, unlisted, unset, or
+ * malformed — throws BEFORE any provider call. Case-sensitive exact
+ * match; the adapter default ("private") passes unchanged.
+ */
+export function requirePrivateVisibility(visibility: unknown): "private" {
+  if (visibility !== "private") {
+    throw providerValidationError(
+      "youtube",
+      "publish",
+      `PRIVATE_VISIBILITY_REQUIRED: got ${typeof visibility === "string" && visibility.length > 0 ? `'${visibility}'` : typeof visibility}`,
+    );
+  }
+  return "private";
 }
 
 /** Construct a YouTube publishing adapter from environment variables. */

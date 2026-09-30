@@ -15,14 +15,31 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test --test-concurrency=1"
+    "test": "node --test --test-concurrency=1",
+    "e2e": "node e2e/research-brave-pg.mjs",
+    "e2e:failures": "node e2e/provider-failures.mjs"
   },
   "dependencies": {
+    "@ai-media-factory/agent-registry": "*",
+    "@ai-media-factory/analytics-agent": "*",
+    "@ai-media-factory/brand-agent": "*",
     "@ai-media-factory/database": "*",
     "@ai-media-factory/orchestrator": "*",
+    "@ai-media-factory/provider-adapters": "*",
+    "@ai-media-factory/publisher-agent": "*",
+    "@ai-media-factory/qa-agent": "*",
+    "@ai-media-factory/research-agent": "*",
+    "@ai-media-factory/reviewer-agent": "*",
     "@ai-media-factory/runtime": "*",
+    "@ai-media-factory/seo-agent": "*",
     "@ai-media-factory/shared": "*",
+    "@ai-media-factory/director-agent": "*",
+    "@ai-media-factory/media-agent": "*",
+    "@ai-media-factory/thumbnail-agent": "*",
+    "@ai-media-factory/tool-framework": "*",
+    "@ai-media-factory/video-agent": "*",
     "@ai-media-factory/workflow-engine": "*",
+    "@ai-media-factory/writer-agent": "*",
     "pg": "^8.13.1"
   },
   "devDependencies": {

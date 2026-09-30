@@ -1,0 +1,13 @@
+{
+  "version": "flux-standard-24gb-endpoint-v1",
+  "endpointId": "7msusuancyl74c",
+  "provider": "self-hosted-image",
+  "runtime": "RunPod Serverless ComfyUI 5.8.7",
+  "gpu_class": "standard-24GB (actual GPU type unavailable from endpoint metadata)",
+  "usd_per_gpu_hour": 0.69,
+  "pricing_source": "USER_CONFIRMED_INFRASTRUCTURE_RATE",
+  "effective_from": "2026-08-31",
+  "effective_to": null,
+  "billing_model": "GPU_TIME_PER_SECOND",
+  "notes": "Current standard-24GB endpoint rate supplied and confirmed by the user. Endpoint management metadata returned 401, so GPU subtype remains unknown; validate against billing history before production routing."
+}

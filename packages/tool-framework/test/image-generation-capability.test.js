@@ -82,6 +82,39 @@ describe("ImageGenerationCapabilityExecutor", () => {
     strictEqual((await executor.execute(request({ prompt: "valid", height: 3000 }))).status, "blocked");
   });
 
+  it("transports a bounded approved-size prompt unchanged while still rejecting pathological payloads", async () => {
+    let received;
+    const longPrompt = ("Cairo street documentary; " + "grounded detail; ".repeat(120)).trim();
+    const resolver = { resolve: () => descriptor, isAuthorized: () => true };
+    const executor = new ImageGenerationCapabilityExecutor({
+      generate: async (value) => { received = value; return response(); },
+    }, resolver, { maxPromptLength: 4000, maxNegativePromptLength: 1000, maxWidth: 2048, maxHeight: 2048, allowedAspectRatios: ["9:16"] });
+    strictEqual(longPrompt.length > 1000, true);
+    strictEqual((await executor.execute(request({ prompt: longPrompt, aspectRatio: "9:16" }))).status, "success");
+    strictEqual(received.prompt, longPrompt);
+    strictEqual((await executor.execute(request({ prompt: "x".repeat(4001), aspectRatio: "9:16" }))).status, "blocked");
+  });
+
+  it("passes a validated reference URL unchanged to the provider", async () => {
+    let received;
+    const referenceImageUrl = "https://cdn.example.com/reference.png?sig=redacted";
+    const { executor } = setup(async (value) => { received = value; return response(); });
+    const result = await executor.execute(request({ prompt: "controlled variation", referenceImageUrl, referenceImageMimeType: "image/png", strength: 0.55 }));
+    strictEqual(result.status, "success");
+    strictEqual(received.referenceImageUrl, referenceImageUrl);
+    strictEqual(received.referenceImageMimeType, "image/png");
+    strictEqual(received.strength, 0.55);
+  });
+
+  it("rejects local, non-HTTPS, ambiguous, and untyped reference transports before provider", async () => {
+    const { executor, calls } = setup(async () => response());
+    strictEqual((await executor.execute(request({ prompt: "x", referenceImageUrl: "C:\\local\\ref.png", referenceImageMimeType: "image/png" }))).status, "blocked");
+    strictEqual((await executor.execute(request({ prompt: "x", referenceImageUrl: "http://cdn.example/ref.png", referenceImageMimeType: "image/png" }))).status, "blocked");
+    strictEqual((await executor.execute(request({ prompt: "x", referenceImageUrl: "https://cdn.example/ref.png" }))).status, "blocked");
+    strictEqual((await executor.execute(request({ prompt: "x", referenceImageUrl: "https://cdn.example/ref.png", referenceImageBase64: "abc", referenceImageMimeType: "image/png" }))).status, "blocked");
+    strictEqual(calls.length, 0);
+  });
+
   it("represents provider failures as FAILED with failure evidence", async () => {
     const { executor } = setup(async () => { throw new Error("provider unavailable"); });
     const result = await executor.execute(request({ prompt: "failure" }));
@@ -111,5 +144,20 @@ describe("ImageGenerationCapabilityExecutor", () => {
     strictEqual(result.status, "success");
     strictEqual(calls.length, 1);
     strictEqual(calls[0].prompt.includes("curl"), true);
+  });
+
+  it("enforces the evidence-backed 3000-char AMF prompt budget fail-closed", async () => {
+    const { IMAGE_PROMPT_MAX_CHARS, IMAGE_NEGATIVE_PROMPT_MAX_CHARS } = await import("../dist/image-generation/image-generation-capability.js");
+    strictEqual(IMAGE_PROMPT_MAX_CHARS, 3000);
+    strictEqual(IMAGE_NEGATIVE_PROMPT_MAX_CHARS, 1000);
+    let received;
+    const resolver = { resolve: () => descriptor, isAuthorized: () => true };
+    const executor = new ImageGenerationCapabilityExecutor({
+      generate: async (value) => { received = value; return response(); },
+    }, resolver, { maxPromptLength: IMAGE_PROMPT_MAX_CHARS, maxNegativePromptLength: IMAGE_NEGATIVE_PROMPT_MAX_CHARS, maxWidth: 2048, maxHeight: 2048, allowedAspectRatios: ["9:16"] });
+    const within = `scene ${"x".repeat(2900)}`;
+    strictEqual((await executor.execute(request({ prompt: within, aspectRatio: "9:16" }))).status, "success");
+    strictEqual(received.prompt, within, "within-budget prompts pass byte-exactly, never sliced");
+    strictEqual((await executor.execute(request({ prompt: "x".repeat(3001), aspectRatio: "9:16" }))).status, "blocked");
   });
 });

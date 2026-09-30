@@ -61,6 +61,26 @@ CREATE TABLE IF NOT EXISTS artifacts (
 );
 CREATE INDEX IF NOT EXISTS idx_artifacts_workflow ON artifacts (workflow_id);
 
+-- Append-only audit history for narrowly authorized artifact integrity repairs.
+-- The artifact keeps its canonical identity; the complete prior and repaired
+-- payloads plus hashes make the in-place revision reviewable and replay-safe.
+CREATE TABLE IF NOT EXISTS artifact_integrity_repairs (
+  repair_id          TEXT PRIMARY KEY,
+  artifact_id        TEXT NOT NULL,
+  workflow_id        TEXT NOT NULL,
+  recovery_execution_id TEXT NOT NULL,
+  repair_kind        TEXT NOT NULL,
+  prior_payload      JSONB NOT NULL,
+  repaired_payload   JSONB NOT NULL,
+  prior_payload_hash TEXT NOT NULL,
+  repaired_payload_hash TEXT NOT NULL,
+  receipt            JSONB NOT NULL,
+  created_at         TEXT NOT NULL,
+  UNIQUE (artifact_id, repair_kind)
+);
+CREATE INDEX IF NOT EXISTS idx_artifact_integrity_repairs_workflow
+  ON artifact_integrity_repairs (workflow_id, created_at);
+
 CREATE TABLE IF NOT EXISTS capability_executions (
   result_id      TEXT PRIMARY KEY,
   workflow_id    TEXT NOT NULL,
@@ -252,6 +272,13 @@ CREATE TABLE IF NOT EXISTS review_resume_dispatches (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_review_resume_dispatches_task ON review_resume_dispatches (task_id, revision_version);
+-- One failed Review execution represents one Owner authorization opportunity.
+-- Historical rows predate this invariant and deliberately remain immutable;
+-- NULL permits those rows to coexist, while every new dispatch persists the
+-- deterministic identity and is protected across processes.
+ALTER TABLE review_resume_dispatches ADD COLUMN IF NOT EXISTS idempotency_identity TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_review_resume_idempotency_identity
+  ON review_resume_dispatches (idempotency_identity);
 
 -- Execution-scoped temporary Review model override provenance for a review
 -- resume. Nullable: absent = the canonical control-plane configuration is
@@ -388,6 +415,9 @@ CREATE TABLE IF NOT EXISTS amf_worker_presence (
   started_at TEXT NOT NULL,
   last_heartbeat_at TEXT NOT NULL
 );
+ALTER TABLE amf_worker_presence ADD COLUMN IF NOT EXISTS process_id INTEGER;
+ALTER TABLE amf_worker_presence ADD COLUMN IF NOT EXISTS singleton_key TEXT;
+ALTER TABLE amf_worker_presence ADD COLUMN IF NOT EXISTS worker_role TEXT;
 
 CREATE TABLE IF NOT EXISTS control_configuration_events (
   event_id TEXT PRIMARY KEY,
@@ -475,6 +505,46 @@ CREATE TABLE IF NOT EXISTS credential_bindings (
 );
 CREATE INDEX IF NOT EXISTS idx_cred_project ON credential_bindings (project_id);
 
+-- Program 5 credential health.  Raw credential material never enters these
+-- tables: checks persist only an opaque binding identity plus safe verifier
+-- classifications/fingerprints. request_key provides exactly-once Owner action
+-- semantics even when a browser repeats a request.
+CREATE TABLE IF NOT EXISTS credential_health_checks (
+  check_id        TEXT PRIMARY KEY,
+  request_key     TEXT NOT NULL UNIQUE,
+  project_id      TEXT NOT NULL,
+  binding_id      TEXT NOT NULL,
+  channel_id      TEXT,
+  provider        TEXT NOT NULL,
+  action          TEXT NOT NULL,
+  status          TEXT NOT NULL,
+  result          JSONB,
+  actor           TEXT NOT NULL,
+  reason          TEXT NOT NULL,
+  created_at      TEXT NOT NULL,
+  completed_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_credential_health_checks_project
+  ON credential_health_checks(project_id,created_at DESC);
+CREATE TABLE IF NOT EXISTS credential_binding_health (
+  binding_id                    TEXT PRIMARY KEY,
+  project_id                    TEXT NOT NULL,
+  channel_id                    TEXT,
+  provider                      TEXT NOT NULL,
+  health_state                  TEXT NOT NULL,
+  scope_state                   TEXT NOT NULL,
+  channel_identity_state        TEXT NOT NULL,
+  verified_external_channel_id  TEXT,
+  reason_code                   TEXT,
+  evidence_fingerprint          TEXT NOT NULL,
+  last_verified_at              TEXT NOT NULL,
+  fresh_until                   TEXT NOT NULL,
+  check_id                      TEXT NOT NULL,
+  updated_at                    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_credential_binding_health_project
+  ON credential_binding_health(project_id,updated_at DESC);
+
 -- -----------------------------------------------------------------------------
 -- Phase 1: async workflow submission + job queue (Postgres-backed).
 --  - workflow_submissions: durable, idempotent submission record keyed by the
@@ -512,6 +582,12 @@ CREATE TABLE IF NOT EXISTS workflow_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_workflow_jobs_status ON workflow_jobs (status);
 CREATE INDEX IF NOT EXISTS idx_workflow_jobs_workflow ON workflow_jobs (workflow_id);
+-- Program 3: a running job carries the claiming worker and an independent job
+-- lease heartbeat. Long provider/media waits remain owned while the worker is
+-- healthy; reclamation requires both job lease expiry and dead/stale worker.
+ALTER TABLE workflow_jobs ADD COLUMN IF NOT EXISTS claimed_by_worker TEXT;
+ALTER TABLE workflow_jobs ADD COLUMN IF NOT EXISTS lease_heartbeat_at TEXT;
+ALTER TABLE workflow_jobs ADD COLUMN IF NOT EXISTS lease_kind TEXT NOT NULL DEFAULT 'STANDARD';
 
 -- Owner-authorized recoveries are a separate durable command from the original
 -- workflow submission.  The authorization key is the idempotency boundary: a
@@ -529,7 +605,66 @@ CREATE TABLE IF NOT EXISTS workflow_recovery_dispatches (
   job_id BIGINT,
   created_at TEXT NOT NULL
 );
+ALTER TABLE workflow_recovery_dispatches ADD COLUMN IF NOT EXISTS dispatch_status TEXT NOT NULL DEFAULT 'PENDING';
+ALTER TABLE workflow_recovery_dispatches ADD COLUMN IF NOT EXISTS dispatch_error_code TEXT;
+ALTER TABLE workflow_recovery_dispatches ADD COLUMN IF NOT EXISTS reconciled_at TEXT;
+ALTER TABLE workflow_recovery_dispatches ADD COLUMN IF NOT EXISTS reconciliation JSONB NOT NULL DEFAULT '{}';
+UPDATE workflow_recovery_dispatches SET dispatch_status='DISPATCHED' WHERE job_id IS NOT NULL AND dispatch_status='PENDING';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_recovery_execution ON workflow_recovery_dispatches (recovery_execution_id);
+
+-- Research V2 targeted-verification-only dispatches.  These jobs reuse the
+-- canonical queue but never rewind or resume the normal Research workflow.
+CREATE TABLE IF NOT EXISTS targeted_verification_dispatches (
+  dispatch_id TEXT PRIMARY KEY,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  project_id TEXT NOT NULL,
+  workflow_id TEXT NOT NULL,
+  artifact_id TEXT NOT NULL,
+  selected_candidate_ids JSONB NOT NULL,
+  verification_objectives JSONB NOT NULL DEFAULT '{}',
+  max_verification_retrieval_calls INTEGER NOT NULL CHECK(max_verification_retrieval_calls > 0),
+  max_reevaluation_text_calls INTEGER NOT NULL CHECK(max_reevaluation_text_calls = 1),
+  authorization_status TEXT NOT NULL,
+  status TEXT NOT NULL,
+  job_id BIGINT,
+  revision_id TEXT,
+  error_code TEXT,
+  provenance JSONB NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_targeted_verification_job
+  ON targeted_verification_dispatches(job_id) WHERE job_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_targeted_verification_workflow
+  ON targeted_verification_dispatches(workflow_id, created_at);
+
+-- Reevaluation-only recovery after all candidate-specific retrievals have
+-- completed. This is deliberately distinct from a targeted retrieval
+-- dispatch: it may create one text reservation and can never enqueue another
+-- web.search leg.
+CREATE TABLE IF NOT EXISTS targeted_verification_reevaluation_recoveries (
+  recovery_id TEXT PRIMARY KEY,
+  authorization_key TEXT NOT NULL UNIQUE,
+  source_dispatch_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  content_id TEXT NOT NULL,
+  workflow_id TEXT NOT NULL,
+  artifact_id TEXT NOT NULL,
+  selected_candidate_ids JSONB NOT NULL,
+  max_reevaluation_text_calls INTEGER NOT NULL CHECK(max_reevaluation_text_calls = 1),
+  status TEXT NOT NULL,
+  job_id BIGINT,
+  revision_id TEXT,
+  route_snapshot JSONB,
+  error_code TEXT,
+  provenance JSONB NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_targeted_reevaluation_recovery_job
+  ON targeted_verification_reevaluation_recoveries(job_id) WHERE job_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_targeted_reevaluation_recovery_source
+  ON targeted_verification_reevaluation_recoveries(source_dispatch_id, created_at);
 
 -- -----------------------------------------------------------------------------
 -- Phase 2: durable provider publishing record (publish.youtube).
@@ -578,6 +713,10 @@ CREATE TABLE IF NOT EXISTS provider_upload_sessions (
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL
 );
+ALTER TABLE provider_upload_sessions ADD COLUMN IF NOT EXISTS final_media_artifact_id TEXT;
+ALTER TABLE provider_upload_sessions ADD COLUMN IF NOT EXISTS final_media_sha256 TEXT;
+ALTER TABLE provider_upload_sessions ADD COLUMN IF NOT EXISTS transport_type TEXT;
+ALTER TABLE provider_upload_sessions ADD COLUMN IF NOT EXISTS transport_fingerprint TEXT;
 
 -- Provider-neutral voice catalog. Provider facts and project evaluations are
 -- kept separate in JSONB so unknown metadata remains null/unknown.
@@ -808,6 +947,12 @@ CREATE INDEX IF NOT EXISTS idx_perf_obs_project ON performance_observations (pro
 -- Program 5: channel attribution on observations (nullable; absent stays absent).
 -- Kept adjacent to the table creation so fresh-database bootstrap applies in order.
 ALTER TABLE performance_observations ADD COLUMN IF NOT EXISTS channel_id TEXT;
+-- Program 4 canonical media/publication join. Nullable for historical and
+-- validation-fixture observations; required by the governed-run store contract.
+ALTER TABLE performance_observations ADD COLUMN IF NOT EXISTS content_id TEXT;
+ALTER TABLE performance_observations ADD COLUMN IF NOT EXISTS published_report_id TEXT;
+ALTER TABLE performance_observations ADD COLUMN IF NOT EXISTS final_media_sha256 TEXT;
+ALTER TABLE performance_observations ADD COLUMN IF NOT EXISTS analytics_provider_id TEXT;
 CREATE TABLE IF NOT EXISTS learning_records (
   learning_id            TEXT PRIMARY KEY,
   project_id             TEXT NOT NULL,
@@ -1212,6 +1357,39 @@ CREATE TABLE IF NOT EXISTS production_call_reservations (
 );
 CREATE INDEX IF NOT EXISTS idx_production_call_reservations_workflow
   ON production_call_reservations(workflow_id,reserved_at);
+
+-- Program 5 Owner Autonomy.  These rows record Owner-facing product actions;
+-- they do not duplicate workflow, routing, budget, channel, or learning truth.
+-- The canonical domain tables remain authoritative and this log supplies the
+-- immutable who/when/why envelope required by the control platform.
+CREATE TABLE IF NOT EXISTS owner_control_audit_events (
+  event_id       TEXT PRIMARY KEY,
+  project_id     TEXT NOT NULL,
+  action         TEXT NOT NULL,
+  subject_type   TEXT NOT NULL,
+  subject_id     TEXT NOT NULL,
+  actor          TEXT NOT NULL,
+  reason         TEXT NOT NULL,
+  before_state   JSONB,
+  after_state    JSONB,
+  metadata       JSONB NOT NULL DEFAULT '{}',
+  created_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_owner_control_audit_project
+  ON owner_control_audit_events(project_id,created_at DESC);
+
+CREATE TABLE IF NOT EXISTS next_cycle_owner_decisions (
+  decision_id    TEXT PRIMARY KEY,
+  proposal_id    TEXT NOT NULL,
+  project_id     TEXT NOT NULL,
+  decision       TEXT NOT NULL CHECK (decision IN ('APPROVE','REJECT','DEFER','REQUEST_CHANGES')),
+  rationale      TEXT NOT NULL,
+  actor          TEXT NOT NULL,
+  created_at     TEXT NOT NULL,
+  UNIQUE(proposal_id)
+);
+CREATE INDEX IF NOT EXISTS idx_next_cycle_owner_decisions_project
+  ON next_cycle_owner_decisions(project_id,created_at DESC);
 INSERT INTO production_phase_call_budgets(project_id,phase,call_kind,limit_count,reserved_count,consumed_count,max_retries,active,updated_at)
 SELECT 'morroway','PRE_MEDIA_PHASE',v.call_kind,v.limit_count,0,0,0,TRUE,'2026-09-25T00:00:00.000Z'
 FROM (VALUES ('research',1),('text_agent',10)) AS v(call_kind,limit_count)

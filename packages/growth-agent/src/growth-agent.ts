@@ -1,17 +1,19 @@
 /**
  * Growth Agent implementation.
  *
- * Deterministic decision/recommendation specialist. It validates that a
- * completed analytics_report (with matching runtime evidence) is present in the
- * validated content chain, then derives growth recommendations entirely from
- * the metrics the analytics report actually supplied. It calls no capabilities,
- * performs no network/provider/fs work, imports no concrete agents, and never
- * invents metrics — every recommendation traces to a supplied metric key.
+ * Dual-mode specialist:
+ *  - POST_PUBLICATION (deterministic): validates analytics_report evidence and derives
+ *    winning/losing patterns + recommendations purely from supplied metrics.
+ *  - PRE_PUBLICATION (LLM): for the business strategy council, synthesizes
+ *    research, planner (execution_plan / evidence_backed_content_brief), writer,
+ *    seo, and brand evidence into a GrowthStrategyAnalysis via LLM (glm-5.3
+ *    via AgentRouter OPENAI_COMPATIBLE). No analytics_report is required in this
+ *    mode; every insight must trace to the supplied pre-publication evidence.
  */
 
 import type { AgentId, Json } from "@ai-media-factory/runtime";
-import type { CancellationToken, ExecutionContext, ExecutionResponse } from "@ai-media-factory/runtime";
-import { BaseAgent, type AgentExecutionInput, type AgentExecutionOutput } from "@ai-media-factory/runtime";
+import type { CancellationToken, ExecutionContext, ExecutionRequest, ExecutionResponse } from "@ai-media-factory/runtime";
+import { BaseAgent, BoundedStructuralValidationError, boundedStructuralDiagnostics, type AgentExecutionInput, type AgentExecutionOutput } from "@ai-media-factory/runtime";
 import type {
   GrowthConfig,
   GrowthDependencies,
@@ -30,8 +32,18 @@ import type {
 
 type JsonRecord = { [key: string]: Json };
 
-/** Default growth system message (informational; the agent is deterministic). */
-export const DEFAULT_GROWTH_SYSTEM_PROMPT = `You are a growth decision specialist. Analyze only the analytics metrics actually supplied in the validated analytics report. Never invent or assume a metric that was not supplied. Every recommendation must reference the exact metric keys that support it. If the analytics report is missing, malformed, or lacks execution evidence, return a blocked report.`;
+/** LLM system prompt for PRE_PUBLICATION strategy council. */
+export const DEFAULT_GROWTH_SYSTEM_PROMPT = `You are a growth strategy specialist for the business strategy council (PRE_PUBLICATION).
+
+You must:
+1. Analyze ONLY the supplied pre-publication evidence: research reports, planner execution plans / evidence-backed content briefs, writer reports, SEO reports, and brand gate reports.
+2. Never invent or assume analytics metrics (views, CTR, completion rate, revenue) that were not supplied — this is pre-publication.
+3. Propose growth opportunities, audience expansion angles, and positioning strategies grounded in the evidence.
+4. Every recommendation, experiment, and priority must reference the evidence that supports it.
+5. If the evidence is insufficient to form a strategy, return status "blocked" and do not fabricate.
+6. Output a valid JSON GrowthStrategyAnalysis (compatible with GrowthReport). Do not include explanatory text outside the JSON.`;
+
+export const DEFAULT_GROWTH_STRATEGY_PROMPT = DEFAULT_GROWTH_SYSTEM_PROMPT;
 
 const DEFAULT_THRESHOLDS: GrowthThresholds = {
   strongCompletionRate: 0.5,
@@ -75,6 +87,15 @@ interface Viability {
   reason: string;
 }
 
+const PRE_PUBLICATION_KINDS = new Set([
+  "research_report",
+  "execution_plan",
+  "evidence_backed_content_brief",
+  "writer_report",
+  "seo_report",
+  "brand_report",
+]);
+
 export class GrowthAgent extends BaseAgent {
   readonly id: AgentId = "growth";
   readonly name = "Growth Agent";
@@ -94,24 +115,227 @@ export class GrowthAgent extends BaseAgent {
     if (!isGrowthInput(input.input)) {
       throw new Error("Invalid growth input: expected a validated content chain");
     }
-    const viability = this.assessViability(input.input);
-    const analytics = this.findAnalytics(input.input);
-    const report = viability.ok && analytics !== undefined
-      ? this.buildRecommendation(input.input, viability, analytics)
-      : this.blockedReport(input.input, viability.reason);
-    const output: Json = this.toJson(report);
-    return {
-      output,
-      response: {
+    // Branch: POST_PUBLICATION (analytics present) => deterministic; PRE_PUBLICATION => LLM
+    const hasAnalytics = (input.input.validatedArtifacts ?? []).some((a) => a.kind === "analytics_report");
+    if (hasAnalytics) {
+      const viability = this.assessViability(input.input);
+      const analytics = this.findAnalytics(input.input);
+      const report = viability.ok && analytics !== undefined
+        ? this.buildRecommendation(input.input, viability, analytics)
+        : this.blockedReport(input.input, viability.reason);
+      const output: Json = this.toJson(report);
+      return {
         output,
-        raw: JSON.stringify(report, null, 2),
-        usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
-        model: this.growthConfig.model,
-        provider: "growth-deterministic",
-        latencyMs: 0,
-      },
+        response: {
+          output,
+          raw: JSON.stringify(report, null, 2),
+          usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+          model: this.growthConfig.model,
+          provider: "growth-deterministic",
+          latencyMs: 0,
+        },
+      };
+    }
+    // PRE_PUBLICATION LLM path — GrowthStrategyAnalysis via glm-5.3 (AgentRouter OPENAI_COMPATIBLE)
+    return this.executePrePublication(input, signal);
+  }
+
+  // -------------------------------------------------------------------------
+  // PRE_PUBLICATION LLM path
+  // -------------------------------------------------------------------------
+
+  private async executePrePublication(input: AgentExecutionInput, signal: CancellationToken): Promise<AgentExecutionOutput> {
+    signal.throwIfCancelled();
+    const growthInput = input.input as unknown as GrowthInput;
+    const artifacts = growthInput.validatedArtifacts ?? [];
+    // Validate that at least one pre-publication evidence is present
+    const hasEvidence = artifacts.some((a) => PRE_PUBLICATION_KINDS.has(a.kind));
+    // Fallback to deterministic blocked when LLM execution is not wired (preserves legacy tests without mocks)
+    const hasLlm = typeof (this.deps as unknown as { execute?: unknown }).execute === "function";
+    if (!hasEvidence || !hasLlm) {
+      const reason = !hasEvidence
+        ? "no pre-publication evidence was supplied; research/planner/writer/seo/brand evidence is required for strategy analysis."
+        : "strategy council LLM execution is not configured; no analytics_report present.";
+      const blocked = this.blockedReport(growthInput, reason);
+      const output: Json = this.toJson(blocked);
+      return {
+        output,
+        response: {
+          output,
+          raw: JSON.stringify(blocked, null, 2),
+          usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+          model: this.growthConfig.model,
+          provider: "growth-strategy-blocked",
+          latencyMs: 0,
+        },
+      };
+    }
+
+    const { report, response: executionResponse } = await this.createStrategyAnalysis(growthInput, artifacts, input.context, signal);
+    const output = this.toJson(report);
+    const response: ExecutionResponse = { ...executionResponse, output, raw: JSON.stringify(report, null, 2) };
+    return { output, response };
+  }
+
+  private async createStrategyAnalysis(
+    input: GrowthInput,
+    artifacts: readonly GrowthSourceArtifact[],
+    context: ExecutionContext,
+    signal: CancellationToken,
+  ): Promise<{ report: GrowthReport; response: ExecutionResponse }> {
+    signal.throwIfCancelled();
+    const prompt = this.buildStrategyPrompt(input, artifacts);
+    const request = this.buildExecutionRequest(prompt);
+    const response = await this.runExecution(context, request, signal);
+    return { report: this.parseGrowthResponse(response.output, input, artifacts), response };
+  }
+
+  private buildStrategyPrompt(input: GrowthInput, artifacts: readonly GrowthSourceArtifact[]): string {
+    const byKind = (kind: string) => artifacts.filter((a) => a.kind === kind);
+    const research = byKind("research_report");
+    const planner = artifacts.filter((a) => a.kind === "execution_plan" || a.kind === "evidence_backed_content_brief");
+    const writer = byKind("writer_report");
+    const seo = byKind("seo_report");
+    const brand = byKind("brand_report");
+    const describe = (list: readonly GrowthSourceArtifact[]) => list.length === 0 ? "(none)" : list.map((a) => `- ${a.kind}:${a.artifactId} status=${a.status} payload=${JSON.stringify(a.payload).slice(0, 1500)}`).join("\n");
+    const workflowId = artifacts[0]?.workflowId ?? "";
+    const correlationId = artifacts[0]?.correlationId ?? "";
+    return `${this.growthConfig.systemPrompt}
+
+PRE_PUBLICATION Growth Strategy Analysis (strategy council) — synthesize the supplied pre-publication evidence into a GrowthStrategyAnalysis.
+
+Objective:
+${input.objective}
+
+Task description:
+${input.taskDescription ?? "(none supplied)"}
+
+Workflow:
+workflowId=${workflowId} correlationId=${correlationId}
+
+RESEARCH evidence (grounding — do not invent metrics):
+${describe(research)}
+
+PLANNER evidence (execution_plan / evidence_backed_content_brief):
+${describe(planner)}
+
+WRITER evidence (writer_report):
+${describe(writer)}
+
+SEO evidence (seo_report):
+${describe(seo)}
+
+BRAND evidence (brand_report):
+${describe(brand)}
+
+Produce a valid GrowthReport / GrowthStrategyAnalysis JSON with:
+- recommendationId (set to exactly the requestId "${input.requestId}"),
+- objective (copy the objective above),
+- contentId (derive from writer or research payload if present, else empty string),
+- status ("completed" | "blocked"),
+- summary (concise strategy summary grounded in the evidence),
+- winningPatterns (array of { metric, value, observation } — use 0 for value if pre-pub, or omit if no metric),
+- losingPatterns (array of { metric, value, reason }),
+- recommendations (array of { id, action, rationale, basedOn, priority } — basedOn must reference evidence kinds or metrics actually supplied),
+- experiments (array of { id, hypothesis, expectedImpact, successMetric }),
+- priorities (array of { rank, focus, reason }),
+- confidence (0-1),
+- sourceArtifactReferences (array of { artifactId, kind } — include every supplied pre-publication artifact you used, never invent ids),
+- metadata (workflowId, correlationId, createdAt, agentVersion),
+- createdAt (ISO string)
+
+Keep the response compact: at most 2 recommendations, 2 experiments, 2 priorities, and 2 patterns in each pattern array. The summary must explicitly cover audience growth, distribution/platform role, retention, discoverability, growth loop, risk, and assumptions/unknowns.
+
+Constraints:
+- Do NOT require or invent analytics_report metrics; this is PRE_PUBLICATION.
+- Every recommendation must trace to at least one supplied evidence kind.
+- Do not invent artifact ids — use only the ids listed above.
+- If evidence is insufficient, return status "blocked" with empty arrays and confidence 0.
+- Output ONLY the JSON object, no explanatory text.`;
+  }
+
+  private buildExecutionRequest(prompt: string): ExecutionRequest {
+    return {
+      model: this.growthConfig.model,
+      system: this.growthConfig.systemPrompt,
+      messages: [
+        { role: "system", content: this.growthConfig.systemPrompt },
+        { role: "user", content: prompt },
+      ],
+      temperature: (this.growthConfig as unknown as { temperature?: number }).temperature ?? 0.3,
+      maxOutputTokens: (this.growthConfig as unknown as { maxOutputTokens?: number }).maxOutputTokens ?? 16384,
+      responseSchema: this.getGrowthResponseSchema(),
     };
   }
+
+  private getGrowthResponseSchema(): import("@ai-media-factory/runtime").JsonSchema {
+    return {
+      type: "object",
+      properties: {
+        recommendationId: { type: "string" },
+        objective: { type: "string" },
+        contentId: { type: "string" },
+        status: { type: "string", enum: ["completed", "blocked", "failed"] },
+        summary: { type: "string" },
+        winningPatterns: { type: "array", items: { type: "object", properties: { metric: { type: "string" }, value: { type: "number" }, observation: { type: "string" } }, required: ["metric", "value", "observation"] } },
+        losingPatterns: { type: "array", items: { type: "object", properties: { metric: { type: "string" }, value: { type: "number" }, reason: { type: "string" } }, required: ["metric", "value", "reason"] } },
+        recommendations: { type: "array", items: { type: "object", properties: { id: { type: "string" }, action: { type: "string" }, rationale: { type: "string" }, basedOn: { type: "array", items: { type: "string" } }, priority: { type: "string", enum: ["high", "medium", "low"] } }, required: ["id", "action", "rationale", "basedOn", "priority"] } },
+        experiments: { type: "array", items: { type: "object", properties: { id: { type: "string" }, hypothesis: { type: "string" }, expectedImpact: { type: "string" }, successMetric: { type: "string" } }, required: ["id", "hypothesis", "expectedImpact", "successMetric"] } },
+        priorities: { type: "array", items: { type: "object", properties: { rank: { type: "number" }, focus: { type: "string" }, reason: { type: "string" } }, required: ["rank", "focus", "reason"] } },
+        confidence: { type: "number" },
+        sourceArtifactReferences: { type: "array", items: { type: "object", properties: { artifactId: { type: "string" }, kind: { type: "string" } }, required: ["artifactId", "kind"] } },
+        metadata: { type: "object", properties: { workflowId: { type: "string" }, correlationId: { type: "string" }, createdAt: { type: "string" }, agentVersion: { type: "string" } } },
+        createdAt: { type: "string" },
+      },
+      required: ["recommendationId", "objective", "contentId", "status", "summary", "winningPatterns", "losingPatterns", "recommendations", "experiments", "priorities", "confidence", "sourceArtifactReferences", "metadata", "createdAt"],
+    };
+  }
+
+  private parseGrowthResponse(output: Json, input: GrowthInput, artifacts: readonly GrowthSourceArtifact[]): GrowthReport {
+    if (!isRecord(output)) throw new BoundedStructuralValidationError("Invalid growth response: report must be an object", boundedStructuralDiagnostics("growth", "GrowthReport", output, [{ path:"$",code:"wrong_type",expected:"object",actual:output }]));
+    // Do not allow parser defaults to manufacture a completed strategy report.
+    // Structural normalization belongs at the boundary; substantive analysis,
+    // evidence linkage, and recommendations must originate with the LLM.
+    const required = ["recommendationId", "objective", "contentId", "status", "summary", "winningPatterns", "losingPatterns", "recommendations", "experiments", "priorities", "confidence", "sourceArtifactReferences", "metadata", "createdAt"];
+    for (const key of required) {
+      if ((output as JsonRecord)[key] === undefined) throw new BoundedStructuralValidationError(`Invalid growth response: missing field ${key}`, boundedStructuralDiagnostics("growth", "GrowthReport", output, [{path:key,code:"missing_required"}], ["metadata"]));
+    }
+    const allowedIds = new Set(artifacts.map((a) => String(a.artifactId)));
+    const refs = Array.isArray(output.sourceArtifactReferences) ? output.sourceArtifactReferences : [];
+    for (const r of refs) {
+      if (!isRecord(r) || typeof r.artifactId !== "string" || typeof r.kind !== "string") throw new Error("Invalid growth response: invalid sourceArtifactReference");
+      if (!allowedIds.has(String(r.artifactId))) throw new Error("Invalid growth response: source reference not present in supplied evidence");
+    }
+    // Status guard: LLM must not invent failures outside blocked/completed
+    const status = String(output.status);
+    if (!["completed", "blocked", "failed"].includes(status)) throw new Error("Invalid growth response: invalid status");
+    if (String(output.summary).trim().length < 40) throw new Error("Invalid growth response: summary is not substantive");
+    if (!Number.isFinite(Number(output.confidence)) || Number(output.confidence) < 0 || Number(output.confidence) > 1) throw new Error("Invalid growth response: confidence must be between 0 and 1");
+    if (status === "completed" && (refs.length === 0 || !Array.isArray(output.recommendations) || output.recommendations.length === 0 || !Array.isArray(output.priorities) || output.priorities.length === 0)) {
+      throw new Error("Invalid growth response: completed strategy analysis requires evidence-linked recommendations and priorities");
+    }
+    // Cross-check recommendation linkage is not fabricated beyond supplied kinds/metrics
+    return {
+      recommendationId: String(output.recommendationId),
+      objective: String(output.objective),
+      contentId: String(output.contentId),
+      status: status as GrowthStatus,
+      summary: String(output.summary),
+      winningPatterns: Array.isArray(output.winningPatterns) ? (output.winningPatterns as unknown as WinningPattern[]).map((p) => ({ metric: String((p as unknown as JsonRecord).metric), value: Number((p as unknown as JsonRecord).value), observation: String((p as unknown as JsonRecord).observation) })) : [],
+      losingPatterns: Array.isArray(output.losingPatterns) ? (output.losingPatterns as unknown as LosingPattern[]).map((p) => ({ metric: String((p as unknown as JsonRecord).metric), value: Number((p as unknown as JsonRecord).value), reason: String((p as unknown as JsonRecord).reason) })) : [],
+      recommendations: Array.isArray(output.recommendations) ? (output.recommendations as unknown as GrowthRecommendationEntry[]).map((r) => ({ id: String((r as unknown as JsonRecord).id), action: String((r as unknown as JsonRecord).action), rationale: String((r as unknown as JsonRecord).rationale), basedOn: Array.isArray((r as unknown as JsonRecord).basedOn) ? ((r as unknown as JsonRecord).basedOn as Json[]).map((x) => String(x)) : [], priority: String((r as unknown as JsonRecord).priority) as RecommendationPriority })) : [],
+      experiments: Array.isArray(output.experiments) ? (output.experiments as unknown as GrowthExperiment[]).map((e) => ({ id: String((e as unknown as JsonRecord).id), hypothesis: String((e as unknown as JsonRecord).hypothesis), expectedImpact: String((e as unknown as JsonRecord).expectedImpact), successMetric: String((e as unknown as JsonRecord).successMetric) })) : [],
+      priorities: Array.isArray(output.priorities) ? (output.priorities as unknown as GrowthPriority[]).map((p) => ({ rank: Number((p as unknown as JsonRecord).rank), focus: String((p as unknown as JsonRecord).focus), reason: String((p as unknown as JsonRecord).reason) })) : [],
+      confidence: Number(output.confidence),
+      sourceArtifactReferences: (refs as unknown as { artifactId: string; kind: string }[]).map((r) => ({ artifactId: String(r.artifactId), kind: String(r.kind) })),
+      metadata: isRecord(output.metadata) ? (output.metadata as Record<string, Json>) : { workflowId: artifacts[0]?.workflowId ?? "", correlationId: artifacts[0]?.correlationId ?? "", createdAt: new Date().toISOString(), agentVersion: this.version },
+      createdAt: String(output.createdAt),
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // Deterministic helpers (POST_PUBLICATION) — retained for calculations/validation
+  // -------------------------------------------------------------------------
 
   /** Gate: recommendations require a completed, evidenced analytics report. */
   private assessViability(input: GrowthInput): Viability {
@@ -335,9 +559,11 @@ export class GrowthAgent extends BaseAgent {
 /** Factory function to create a GrowthAgent. */
 export function createGrowthAgent(deps: GrowthDependencies): GrowthAgent {
   const config: GrowthDependencies["config"] = {
-    model: deps.config?.model ?? "openrouter/auto",
+    model: deps.config?.model ?? "glm-5.3",
     systemPrompt: deps.config?.systemPrompt ?? DEFAULT_GROWTH_SYSTEM_PROMPT,
     includeReasoning: deps.config?.includeReasoning ?? false,
+    temperature: (deps.config as unknown as { temperature?: number })?.temperature ?? 0.3,
+    maxOutputTokens: (deps.config as unknown as { maxOutputTokens?: number })?.maxOutputTokens ?? 4096,
     ...(deps.config?.thresholds === undefined ? {} : { thresholds: deps.config.thresholds }),
   };
   return new GrowthAgent({ ...deps, config });

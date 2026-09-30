@@ -107,6 +107,20 @@ describe("Orchestrator — registry boundary", () => {
 });
 
 describe("Orchestrator — produce() execution boundary", () => {
+  it("compiles a bounded pre-media production phase ending at the Owner gate", () => {
+    const plan = new Orchestrator().stub("produce-pre-media");
+    deepStrictEqual(plan.agents, ["orchestrator", "research", "ceo", "planner", "writer", "director", "visual-director", "review", "qa"]);
+    deepStrictEqual(plan.outputs.map((output) => output.artifactKind), ["execution_plan", "research_report", "ceo_recommendation", "evidence_backed_content_brief", "writer_report", "scene_plan", "visual_direction_contract", "review_report", "qa_report"]);
+    strictEqual(plan.stages.at(-1).step.id, "phase1-qa");
+    strictEqual(plan.stages.some((stage) => ["scene-image", "video", "tts", "composer", "publisher"].includes(stage.step.agent)), false);
+  });
+  it("compiles production produce with Planner initial and post-research synthesis stages", () => {
+    const plan = new Orchestrator().stub("produce");
+    deepStrictEqual(plan.agents.slice(0, 5), ["planner", "research", "ceo", "planner", "writer"]);
+    deepStrictEqual(plan.outputs.slice(0, 5).map((output) => output.artifactKind), ["execution_plan", "research_report", "ceo_recommendation", "evidence_backed_content_brief", "writer_report"]);
+    strictEqual(plan.stages[3].step.id, "planner-synthesis");
+  });
+
   it("requires an AgentExecutorPort before it can produce", async () => {
     const orchestrator = new Orchestrator();
     const context = { workflowId: "workflow-orch", correlationId: "corr-orch", brandId: null, outputs: {}, data: {} };

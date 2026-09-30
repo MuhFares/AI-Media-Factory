@@ -1,0 +1,50 @@
+name: Build AMF Wan2.2 I2V v1
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "experimental/wan2.2-i2v-v1/**"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Run handler tests (zero GPU)
+        run: python experimental/wan2.2-i2v-v1/tests/test_handler.py
+      - name: Validate workflow JSON
+        run: python -c "import json; json.load(open('experimental/wan2.2-i2v-v1/workflow_api.json')); print('workflow_api.json valid')"
+
+  build:
+    needs: test
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: experimental/wan2.2-i2v-v1
+          file: experimental/wan2.2-i2v-v1/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/muhfares/amf-wan22-i2v:v0.1.0-test
+            ghcr.io/muhfares/amf-wan22-i2v:sha-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=v0.1.0-test
+            org.opencontainers.image.source=https://github.com/MUHFARES/AI-Media-Factory

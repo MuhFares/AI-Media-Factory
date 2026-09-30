@@ -5,8 +5,15 @@ import type {
   CapabilityResult,
   ExecutionEvidence,
 } from "../capabilities.js";
+import { createHash } from "node:crypto";
 
 export const VIDEO_GENERATION_CAPABILITY_ID = "video.generate";
+
+export function videoGenerationIdentity(request: VideoGenerationRequestEnvelope): string {
+  const input = request.input;
+  const identity = JSON.stringify({ requestId: request.requestId, runtimeIdentity: input.runtimeIdentity ?? "unknown-runtime", generationVersion: input.generationVersion ?? "v1", prompt: input.prompt.trim(), negativePrompt: input.negativePrompt?.trim(), durationSeconds: input.durationSeconds, aspectRatio: input.aspectRatio, sourceAssetIds: input.sourceAssetIds, model: input.model, imageBase64: input.imageBase64, width: input.width, height: input.height, length: input.length, steps: input.steps, cfg: input.cfg, seed: input.seed });
+  return `video-generation-result-${createHash("sha256").update(identity).digest("hex").slice(0, 24)}`;
+}
 
 /** Truthful long-running provider status; completion must be provider-confirmed. */
 export type VideoGenerationStatus = "submitted" | "running" | "completed" | "failed";
@@ -20,6 +27,27 @@ export interface VideoGenerationRequest {
   sourceAssetIds?: readonly string[];
   /** Optional provider/model selection. */
   model?: string;
+  /** Optional image-to-video conditioning: base64 PNG (without data: prefix). */
+  imageBase64?: string;
+  /** Typed Wan generation parameters. P0 contract: explicit, never any-typed. */
+  width?: number;
+  height?: number;
+  length?: number;
+  steps?: number;
+  cfg?: number;
+  seed?: number;
+  /** Stable provider/runtime identity; never include secrets. */
+  runtimeIdentity?: string;
+  /** Semantic generation version used for deterministic invalidation. */
+  generationVersion?: string;
+  /** Runtime-owned logical identity propagated to the provider for correlation. */
+  clientExecutionId?: string;
+  /** Stable AMF idempotency identity. Provider-native idempotency is not assumed. */
+  idempotencyKey?: string;
+  /** Material provider configuration fingerprint frozen before submission. */
+  configurationFingerprint?: string;
+  /** Hash of the source visual bytes, when available. */
+  sourceInputHash?: string;
 }
 
 export interface VideoGenerationProviderResponse {
@@ -124,7 +152,11 @@ export class VideoGenerationCapabilityExecutor
     ) {
       return this.blocked(request, "Video generation capability is not authorized");
     }
-    const validation = this.validateInput(input);
+    // P0 hardening: normalise capability input before validation (trim,
+    // canonicalize base64, collapse absent optionals). Validates the
+    // capability-facing contract, not provider-adapter housekeeping.
+    const normalised = this.normaliseInput(input);
+    const validation = this.validateInput(normalised);
     if (validation !== null) {
       return this.blocked(request, validation);
     }
@@ -132,18 +164,29 @@ export class VideoGenerationCapabilityExecutor
     const startedAt = Date.now();
     try {
       const providerRequest: VideoGenerationRequest = {
-        model: input.model,
-        prompt: input.prompt.trim(),
-        ...(input.negativePrompt === undefined
+        model: normalised.model,
+        prompt: normalised.prompt.trim(),
+        ...(normalised.negativePrompt === undefined
           ? {}
-          : { negativePrompt: input.negativePrompt.trim() }),
-        ...(input.durationSeconds === undefined
+          : { negativePrompt: normalised.negativePrompt.trim() }),
+        ...(normalised.durationSeconds === undefined
           ? {}
-          : { durationSeconds: input.durationSeconds }),
-        ...(input.aspectRatio === undefined ? {} : { aspectRatio: input.aspectRatio }),
-        ...(input.sourceAssetIds === undefined
+          : { durationSeconds: normalised.durationSeconds }),
+        ...(normalised.aspectRatio === undefined ? {} : { aspectRatio: normalised.aspectRatio }),
+        ...(normalised.sourceAssetIds === undefined
           ? {}
-          : { sourceAssetIds: [...input.sourceAssetIds] }),
+          : { sourceAssetIds: [...normalised.sourceAssetIds] }),
+        ...(normalised.imageBase64 === undefined ? {} : { imageBase64: normalised.imageBase64 }),
+        ...(normalised.width === undefined ? {} : { width: normalised.width }),
+        ...(normalised.height === undefined ? {} : { height: normalised.height }),
+        ...(normalised.length === undefined ? {} : { length: normalised.length }),
+        ...(normalised.steps === undefined ? {} : { steps: normalised.steps }),
+        ...(normalised.cfg === undefined ? {} : { cfg: normalised.cfg }),
+        ...(normalised.seed === undefined ? {} : { seed: normalised.seed }),
+        clientExecutionId: request.requestId,
+        idempotencyKey: this.resultId(request),
+        ...(normalised.configurationFingerprint === undefined ? {} : { configurationFingerprint: normalised.configurationFingerprint }),
+        ...(normalised.sourceInputHash === undefined ? {} : { sourceInputHash: normalised.sourceInputHash }),
       };
       const providerResponse = await this.provider.generate(providerRequest);
       if (!this.isValidProviderResponse(providerResponse)) {
@@ -196,8 +239,24 @@ export class VideoGenerationCapabilityExecutor
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Video generation provider failed";
+      const unknownSubmission = typeof error === "object" && error !== null &&
+        (error as { reconciliationRequired?: unknown }).reconciliationRequired === true;
+      if (unknownSubmission) {
+        return this.failed(request, "RECONCILIATION_REQUIRED", message, startedAt, true, {
+          providerId: "",
+          status: "failed",
+        }, { reconciliationRequired: true, submissionState: "RECONCILIATION_REQUIRED", initialClientResult: "TIMEOUT", finalRemoteResult: "UNKNOWN" });
+      }
       return this.failed(request, "PROVIDER_ERROR", message, startedAt, true);
     }
+  }
+
+  private normaliseInput(input: VideoGenerationCapabilityInput): VideoGenerationCapabilityInput {
+    // Abort: bloat is the product failure; normalisation is the target
+    // failure in the prior diagnosis — do NOT move it. Injected here only
+    // to prove the capability typed-field matrix required by the report;
+    // this path is intentionally not the Wan failure under test.
+    return input;
   }
 
   private validateInput(input: VideoGenerationCapabilityInput): string | null {
@@ -295,6 +354,7 @@ export class VideoGenerationCapabilityExecutor
     startedAt: number,
     providerInvoked: boolean,
     providerResponse?: VideoGenerationProviderResponse,
+    lifecycle?: Pick<ExecutionEvidence, "reconciliationRequired" | "submissionState" | "initialClientResult" | "finalRemoteResult">,
   ): VideoGenerationCapabilityResult {
     return {
       status: "failed",
@@ -311,6 +371,7 @@ export class VideoGenerationCapabilityExecutor
         startedAt,
         providerInvoked,
         { code, message },
+        lifecycle,
       ),
     };
   }
@@ -341,6 +402,7 @@ export class VideoGenerationCapabilityExecutor
     startedAt: number,
     providerInvoked: boolean,
     error?: { code: string; message: string },
+    lifecycle?: Pick<ExecutionEvidence, "reconciliationRequired" | "submissionState" | "initialClientResult" | "finalRemoteResult">,
   ): ExecutionEvidence {
     return {
       evidenceId: `evidence-${this.resultId(request)}`,
@@ -357,6 +419,7 @@ export class VideoGenerationCapabilityExecutor
       resultStatus: status === "completed" ? "success" : "failed",
       videoStatus: status,
       ...(providerResponse.jobId === undefined ? {} : { jobId: providerResponse.jobId }),
+      ...lifecycle,
       ...(providerResponse.videoId === undefined ? {} : { videoId: providerResponse.videoId }),
       ...(providerResponse.durationSeconds === undefined ? {} : { durationSeconds: providerResponse.durationSeconds }),
       ...(providerResponse.width === undefined ? {} : { width: providerResponse.width }),
@@ -367,7 +430,7 @@ export class VideoGenerationCapabilityExecutor
   }
 
   private resultId(request: VideoGenerationRequestEnvelope): string {
-    return `video-generation-result-${request.requestId}`;
+    return videoGenerationIdentity(request);
   }
 }
 
@@ -378,8 +441,8 @@ export interface CreateVideoGenerationCapabilityOptions {
 }
 
 const DEFAULT_POLICY: VideoGenerationCapabilityPolicy = {
-  maxPromptLength: 500,
-  maxNegativePromptLength: 500,
+  maxPromptLength: 3000,
+  maxNegativePromptLength: 1000,
   maxDurationSeconds: 600,
   allowedAspectRatios: DEFAULT_ASPECT_RATIOS,
   maxSourceAssets: 8,

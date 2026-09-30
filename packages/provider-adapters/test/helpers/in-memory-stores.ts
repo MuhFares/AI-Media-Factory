@@ -38,10 +38,10 @@ export class InMemoryPublishSessionStore implements PublishSessionStore {
     return this.sessions.get(marker) ?? null;
   }
 
-  async savePending(marker: string, sessionUri?: string): Promise<void> {
+  async savePending(marker: string, sessionUri?: string, identity?: { finalMediaArtifactId: string; finalMediaSha256: string; transportType: string; transportFingerprint: string }): Promise<void> {
     const existing = this.sessions.get(marker);
     if (existing?.status === "completed") return;
-    this.sessions.set(marker, { marker, status: "pending", sessionUri });
+    this.sessions.set(marker, { marker, status: "pending", sessionUri, ...identity });
   }
 
   async saveCompleted(

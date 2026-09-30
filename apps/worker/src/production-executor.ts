@@ -29,6 +29,16 @@
 
 import { createHash, randomUUID } from "node:crypto";
 
+/** V2 architectural ceiling: at most three discovery plus three verification transports. */
+const MAX_V2_RESEARCH_RETRIEVAL_CALLS = 6;
+
+/**
+ * Mission-authorized maximum retrieval calls for the current Pilot.
+ * This is the contract-level cap for any single V2 research mission.
+ * effectiveEnvelope = min(MAX_V2_RESEARCH_RETRIEVAL_CALLS, MISSION_AUTHORIZED_MAX_RETRIEVALS, remainingBudget)
+ */
+const MISSION_AUTHORIZED_MAX_RETRIEVALS = 4;
+
 import type {
   AgentExecutorPort,
   AgentStep,
@@ -37,6 +47,7 @@ import type {
   StepOutcome,
   WorkflowContext,
 } from "@ai-media-factory/shared";
+import { CANONICAL_STAGE_CATALOG, decideCeoResearchMode, validateArtifactContract } from "@ai-media-factory/shared";
 import type { PersistencePort } from "@ai-media-factory/workflow-engine";
 import type {
   CancellationToken,
@@ -147,7 +158,6 @@ const PRODUCTION_AGENTS = new Set([
   "wan-authorization",
   "composer",
   "ceo",
-  "hooks",
   "visual-director",
 ]);
 
@@ -156,7 +166,7 @@ const PRODUCTION_AGENTS = new Set([
 // distinguish an unsubmitted failure from an ambiguous provider attempt.
 // Keep deterministic planner/research and local media stages out of this set.
 const GOVERNED_PROVIDER_AGENTS = new Set([
-  "orchestrator", "planner", "research", "writer", "seo", "brand", "review", "qa", "growth", "finance", "ceo", "hooks", "director", "visual-director",
+  "orchestrator", "planner", "research", "writer", "seo", "brand", "review", "qa", "growth", "finance", "ceo", "director", "visual-director",
 ]);
 
 const KIND_BY_AGENT: Record<string, string> = {
@@ -174,10 +184,9 @@ const KIND_BY_AGENT: Record<string, string> = {
   analytics: "analytics_report",
   growth: "growth_report",
   finance: "finance_report",
-  ceo: "ceo_report",
+  ceo: "ceo_recommendation",
   orchestrator: "execution_plan",
-  hooks: "hook_concepts",
-  "visual-director": "visual_direction_plan",
+  "visual-director": "visual_direction_contract",
   director: "scene_plan",
   tts: "narration_artifact",
   timeline: "timeline_plan",
@@ -196,6 +205,8 @@ const KIND_BY_STEP: Record<string, string> = {
   "planner-initial": "execution_plan",
   "planner-synthesis": "evidence_backed_content_brief",
   "final-product-review": "final_product_review",
+  "ceo-recommendation": "ceo_recommendation",
+  "visual-direction": "visual_direction_contract",
 };
 
 type JsonRecord = { [key: string]: unknown };
@@ -216,6 +227,68 @@ type GovernedLlmLifecycle = {
   configuration: Json;
   lastProviderResponse?: Record<string, unknown>;
 };
+
+export type CallTransportState = "RESERVED" | "TRANSPORT_NOT_STARTED" | "TRANSPORT_STARTED" | "TRANSPORT_COMPLETED" | "TRANSPORT_FAILED_AFTER_START";
+type CallLifecycleEvent = { state: string; metadata?: unknown };
+type CapabilityLifecycleRecorder = (state: string, metadata: Record<string, unknown>) => Promise<void>;
+
+/**
+ * Execute one governed capability with transport attribution at the true
+ * external-provider boundary. Local request validation may return blocked (or
+ * throw) without ever invoking the observer, so it cannot consume a transport
+ * allowance. Evidence is a backward-compatible proof for executors that
+ * report providerInvoked but do not yet call the runtime observer directly.
+ */
+export async function executeCapabilityWithTransportLifecycle(
+  capability: CapabilityExecutionPort,
+  request: CapabilityRequest,
+  attribution: Record<string, unknown>,
+  record: CapabilityLifecycleRecorder,
+): Promise<CapabilityResult> {
+  let transportStarted = false;
+  const markTransportStarted = async (): Promise<void> => {
+    if (transportStarted) return;
+    transportStarted = true;
+    await record("CAPABILITY_TRANSPORT_STARTED", attribution);
+  };
+  const instrumented: CapabilityRequest = {
+    ...request,
+    onExternalProviderInvocationStarted: async () => {
+      await request.onExternalProviderInvocationStarted?.();
+      await markTransportStarted();
+    },
+  };
+  try {
+    const result = await capability.executeCapability(instrumented);
+    if (!transportStarted && safeRecord((result as { evidence?: unknown }).evidence).providerInvoked === true) {
+      await markTransportStarted();
+    }
+    await record("CAPABILITY_RESULT_RECEIVED", { ...attribution, resultStatus: result.status });
+    return result;
+  } catch (error) {
+    await record(transportStarted ? "CAPABILITY_TRANSPORT_FAILED" : "CAPABILITY_LOCAL_PREFLIGHT_FAILED", {
+      ...attribution,
+      errorName: error instanceof Error ? error.name : "UNKNOWN",
+    });
+    throw error;
+  }
+}
+
+/** Derive transport state only from events carrying this reservation's canonical identity. */
+export function deriveCallTransportState(
+  reservation: Pick<ProductionCallReservation, "reservationId" | "idempotencyKey" | "status">,
+  events: readonly CallLifecycleEvent[],
+): CallTransportState {
+  const matching = events.filter((event) => {
+    const metadata = safeRecord(event.metadata);
+    return metadata.reservationId === reservation.reservationId || metadata.idempotencyKey === reservation.idempotencyKey;
+  });
+  const started = matching.some((event) => event.state === "FETCH_INVOCATION_STARTED" || event.state === "CAPABILITY_TRANSPORT_STARTED");
+  if (!started) return reservation.status === "RESERVED" ? "RESERVED" : "TRANSPORT_NOT_STARTED";
+  if (matching.some((event) => event.state === "PROVIDER_RESPONSE_RECEIVED" || event.state === "CAPABILITY_RESULT_RECEIVED")) return "TRANSPORT_COMPLETED";
+  if (reservation.status === "FAILED_AFTER_SUBMISSION" || matching.some((event) => event.state === "FAILED")) return "TRANSPORT_FAILED_AFTER_START";
+  return "TRANSPORT_STARTED";
+}
 
 // One-time owner-authorized Recovery V3 exception. This is deliberately bound
 // to the exact child, parent, and original lineage; it is not a general
@@ -690,8 +763,7 @@ export function preMediaOrchestratorSystemPrompt():string {
 function createPreMediaRoutedAgent(agentId: string, model: string, execute: ExecuteFn): AnyAgent {
   const requiredByAgent: Record<string, string[]> = {
     orchestrator: [...PRE_MEDIA_ORCHESTRATOR_REQUIRED],
-    ceo: ["status", "summary", "recommendedTopic", "rationale", "evidenceRefs", "risks", "authorityBoundary"],
-    hooks: ["status", "summary", "hooks", "recommendedHook", "factualSafety"],
+    ceo: ["decision", "rationale", "eligibleCandidateIds", "warnings"],
     director: ["status", "summary", "sceneIds", "scenePlan"],
     "visual-director": ["status", "summary", "scenes", "providerNeutral"],
     review: ["reportId", "taskDescription", "status", "summary", "findings", "recommendations"],
@@ -704,7 +776,7 @@ function createPreMediaRoutedAgent(agentId: string, model: string, execute: Exec
         model,
         system: agentId === "orchestrator" ? preMediaOrchestratorSystemPrompt() : `You are the governed AMF ${agentId} agent. Return only JSON matching the required contract. Required fields: ${required.join(", ")}. Use only supplied evidence. Never invent provider results, authority, or factual claims.`,
         messages: [{ role: "user", content: JSON.stringify(envelope.input) }],
-        temperature: agentId === "hooks" || agentId === "director" || agentId === "visual-director" ? 0.4 : 0.2,
+        temperature: agentId === "director" || agentId === "visual-director" ? 0.4 : 0.2,
         maxOutputTokens: 4096,
         responseSchema: { type: "object", required, additionalProperties: true },
       } as unknown as ExecutionRequest;
@@ -785,6 +857,32 @@ function stableFingerprint(value: unknown): string {
 
 function safeRecord(value: unknown): JsonRecord {
   return value !== null && typeof value === "object" ? (value as JsonRecord) : {};
+}
+
+/** Provider-free compiler for the canonical Research Intelligence V2 input. */
+export function buildResearchIntelligenceV2Contract(input: {
+  projectId: string; objective: string; platform?: string; contentPillar?: string;
+  contentMode?: string; market?: string | null; geography?: string | null;
+  language?: string | null; audience?: string | null;
+}): JsonRecord {
+  return {
+    synthesisContract: "amf-research-intelligence-v2",
+    researchObjective: {
+      projectId: input.projectId, brand: input.projectId || "unspecified",
+      contentPillar: input.contentPillar ?? "Historical POV",
+      factualMode: input.contentMode === "ORIGINAL_FANTASY" ? "ORIGINAL_FANTASY" : "HISTORICAL_POV",
+      platforms: [input.platform ?? "YouTube Shorts"], market: input.market ?? null,
+      geography: input.geography ?? null, language: input.language ?? null,
+      audience: input.audience ?? null, format: "vertical-short", businessObjective: input.objective,
+      topicConstraints: [], trendPreference: "HYBRID", desiredContentCount: 3,
+      ownerConstraints: ["No invented trend metrics", "Historical claims require factual verification"],
+    } as unknown as Json,
+    capabilityInventory: [
+      { sourceType: "WEB_SEARCH", status: "SUPPORTED", via: ["web.search"], limitations: [] },
+      { sourceType: "INSTAGRAM_DISCOVERY", status: "UNSUPPORTED", via: [], limitations: ["No governed production social-discovery capability is registered"] },
+      { sourceType: "YOUTUBE_DISCOVERY", status: "UNSUPPORTED", via: [], limitations: ["No governed production YouTube-discovery capability is registered"] },
+    ] as unknown as Json,
+  };
 }
 
 function normalizedResearchEvidence(value: Json): Json[] {
@@ -1200,6 +1298,8 @@ export async function executeGovernedVisibleJson(options: {
   readonly maxOutputTokens?: number;
   /** Explicit, OpenRouter-supported reasoning control for an authorized governed execution. */
   readonly reasoning?: { readonly effort: "none" };
+  /** Call-specific lifecycle observer; FETCH_INVOCATION_STARTED is the text transport boundary. */
+  readonly onTransportEvent?: (state: string, metadata: Record<string, unknown>) => Promise<void>;
 }): Promise<ExecutionResponse> {
   const input = {
     __agent: options.agentId,
@@ -1209,7 +1309,7 @@ export async function executeGovernedVisibleJson(options: {
   const execute = agentLlm(input);
   return execute(
     { workflowId: options.workflowId, stepId: `command-${options.agentId}`, correlationId: options.correlationId ?? undefined, metadata: options.metadata ?? {} } as unknown as ExecutionContext,
-    { model: options.model, system: options.system, messages: [{ role: "user", content: options.prompt }], temperature: 0, maxOutputTokens: options.maxOutputTokens ?? 600, ...(options.reasoning ? { reasoning: options.reasoning } : {}) } as ExecutionRequest & { reasoning?: { readonly effort: "none" } },
+    { model: options.model, system: options.system, messages: [{ role: "user", content: options.prompt }], temperature: 0, maxOutputTokens: options.maxOutputTokens ?? 600, ...(options.reasoning ? { reasoning: options.reasoning } : {}), ...(options.onTransportEvent ? { onTransportEvent: options.onTransportEvent } : {}) } as ExecutionRequest & { reasoning?: { readonly effort: "none" } },
     noopCancellation(),
   );
 }
@@ -1744,7 +1844,9 @@ function deterministicLlm(input: Json): ExecuteFn {
   const agentInput = safeRecord(input);
   const agent = String(agentInput.__agent ?? "unknown");
   return async (_context: ExecutionContext, request: ExecutionRequest) => {
-    const output = synthesizeReport(agent, agentInput);
+    const output = agent === "research"
+      ? synthesizeResearch(agentInput, request.messages.map((message) => message.content).join("\n"))
+      : synthesizeReport(agent, agentInput);
     return {
       output,
       raw: JSON.stringify(output, null, 2),
@@ -1770,30 +1872,81 @@ function synthesizeReport(agent: string, input: JsonRecord): Json {
       return synthesizeReview(input);
     case "qa":
       return synthesizeQa(input);
+    case "visual-director": {
+      const plan = safeRecord(input.scenePlan);
+      const scenes = Array.isArray(plan.scenes) ? plan.scenes : [];
+      return {
+        status: "completed",
+        summary: "Provider-neutral visual direction derived from the canonical scene plan.",
+        providerNeutral: true,
+        storyVisualIdentity: { visualMode: "PHOTOREALISTIC", aspectRatio: "9:16" },
+        globalContinuity: { preserveCharacters: true, preserveEnvironment: true },
+        characters: [],
+        scenes: scenes.map((scene) => {
+          const item = safeRecord(scene);
+          return { sceneId: String(item.sceneId ?? ""), visualIntent: String(item.visualIntent ?? item.visualPrompt ?? item.narrationSegment ?? "Canonical scene visual") };
+        }),
+      };
+    }
     default:
       return { error: `No deterministic responder for agent "${agent}".` };
   }
 }
 
-function synthesizeResearch(input: JsonRecord): Json {
+function deterministicResearchEvidence(prompt: string): Array<{ id: number; title: string; url: string; snippet: string }> {
+  const marker = "RETRIEVED EVIDENCE (the only sources you may cite):";
+  const start = prompt.indexOf(marker);
+  if (start < 0) return [];
+  const tail = prompt.slice(start + marker.length);
+  const end = tail.indexOf("\nReturn one valid ResearchReport JSON");
+  if (end < 0) return [];
+  try {
+    const retrievals = JSON.parse(tail.slice(0, end).trim()) as Array<{ results?: Array<Record<string, unknown>> }>;
+    return retrievals.flatMap((retrieval) => Array.isArray(retrieval.results) ? retrieval.results : [])
+      .filter((result) => typeof result.title === "string" && typeof result.url === "string" && typeof result.snippet === "string")
+      .map((result, index) => ({ id: index + 1, title: String(result.title), url: String(result.url), snippet: String(result.snippet) }));
+  } catch {
+    return [];
+  }
+}
+
+function synthesizeResearch(input: JsonRecord, prompt = ""): Json {
   const task = safeRecord(input.task);
+  const contract = safeRecord(input.contract);
   const description = String(task.description ?? "Research task");
   const name = String(task.name ?? description);
+  const sources = deterministicResearchEvidence(prompt);
+  const grounded = sources.length >= 2;
   return {
     reportId: randomUUID(),
+    ...(typeof contract.taskId === "string" ? { taskId: contract.taskId } : {}),
+    ...(typeof contract.stage === "string" ? { stage: contract.stage } : {}),
     taskDescription: description,
-    summary: `Synthesized research summary for "${name}".`,
-    sources: [
-      {
-        id: 1,
-        title: `Reference: ${name}`,
-        url: "https://example.com/research/1",
-        snippet: "Synthesized offline reference derived without a provider invocation.",
-        dateAccessed: nowIso(),
-      },
-    ],
-    confidence: 0.5,
-    citations: [{ sourceId: 1, text: "Synthesized summary reference." }],
+    summary: grounded
+      ? `Provider-free synthesis grounded in ${sources.length} supplied retrieval results for "${name}".`
+      : `Capability plan for "${name}"; no retrieval evidence has been supplied yet.`,
+    sources,
+    confidence: grounded ? 0.82 : 0.15,
+    citations: sources.map((source) => ({ sourceId: source.id, text: source.snippet.slice(0, 120) })),
+    ...(input.synthesisContract === "amf-research-synthesis-v1" ? {
+      candidateStories: grounded ? [{
+        candidateId: "deterministic-candidate-1",
+        topic: `Documented subject for ${name}`,
+        factualAngle: "Two independent supplied sources support the factual production angle.",
+        keyClaims: ["The supplied institutional sources document the proposed factual angle."],
+        sourceIds: sources.map((source) => source.id),
+        supportingEvidenceIds: [],
+        sourceQualitySummary: "Multiple supplied sources",
+        visualPotential: "Source-led visual narrative",
+        shortFormPotential: "Concise evidence-backed sequence",
+        evidenceRisks: [],
+        verificationStatus: "verified",
+        factualVerification: { status: "STRONG", basis: "Two independent supplied sources corroborate the claim." },
+        recommendedForProduction: true,
+      }] : [],
+      evidenceRisks: grounded ? [] : ["No retrieval evidence supplied"],
+      status: grounded ? "grounded" : "insufficient_evidence",
+    } : {}),
     metadata: { createdAt: nowIso(), agentVersion: AGENT_VERSION },
   };
 }
@@ -1973,7 +2126,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
 
   async executeAgentStep(step: AgentStep, context: WorkflowContext): Promise<StepOutcome> {
     try { context = await this.withCanonicalModelRouting(step, context); }
-    catch (error) { const message=error instanceof Error?error.message:String(error); return {status:"failed",output:{project:"morroway",role:step.agent,routingVersion:"amf-balanced-production-routing-v1-morroway",requestedSlot:String(safeRecord(context.data).routingSlot??"primary"),failureReason:message},error:{message,retryable:false}}; }
+    catch (error) { const message=error instanceof Error?error.message:String(error); return {status:"failed",output:{project:String(safeRecord(context.data).projectId??"UNKNOWN"),role:step.agent,routingVersion:null,requestedSlot:String(safeRecord(context.data).routingSlot??"primary"),failureReason:message},error:{message,retryable:false}}; }
     if(this.routingDryRun&&safeRecord(context.data).canonicalRouting){return{status:"completed",output:safeRecord(safeRecord(context.data).canonicalRouting) as Json};}
     if (step.agent === "publisher-authorization") {
       return this.executePublisherAuthorization(step, context);
@@ -2105,9 +2258,11 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
         // themselves. Their returned output is an execution summary, not an
         // additional domain artifact. Persisting the generic wrapper would
         // duplicate per-scene visuals/authorizations/clips or final media.
+        const mediaCatalogStage = (CANONICAL_STAGE_CATALOG as Record<string, { inputArtifactKinds: readonly string[] }>)[step.id];
+        const mediaParent = mediaCatalogStage === undefined ? undefined : [...chain].reverse().find((item) => mediaCatalogStage.inputArtifactKinds.includes(item.kind));
         const artifact = ["scene-image", "wan-authorization", "video", "composer"].includes(step.agent)
           ? undefined
-          : this.buildArtifact(step, context, output, result.status === "BLOCKED" ? "blocked" : "completed");
+          : this.buildArtifact(step, context, output, result.status === "BLOCKED" ? "blocked" : "completed", true, mediaParent);
         return { status: result.status === "BLOCKED" ? "failed" : "completed", output, artifact, ...(result.status === "BLOCKED" ? { error: { message: String(safeRecord(result.output).reason ?? "MEDIA_STAGE_BLOCKED"), retryable: false } } : {}) };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -2145,18 +2300,44 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
       const chain = await this.loadChain(context);
       const input = this.buildAgentInput(step, context, chain);
       provenanceInput = input.input;
-      productionReservations = await this.reserveProductionCalls(step, context);
+      await this.preflightProductionLlm(step, context, input.input);
+      const reservationResult = await this.reserveProductionCalls(step, context);
+      productionReservations = reservationResult.reservations;
+      // V2: inject the authorized retrieval envelope into the agent input
+      // AFTER reservation so the agent knows its actual cap.
+      if (reservationResult.effectiveRetrievalEnvelope !== null && input.input !== null && typeof input.input === "object" && !Array.isArray(input.input)) {
+        (input.input as unknown as Record<string, unknown>).maxRetrievalCallsAvailable = reservationResult.effectiveRetrievalEnvelope;
+      }
       if (lifecycle !== null) {
         lifecycle.configuration = input.input;
         await this.persistLifecycle(lifecycle, "READY_FOR_SUBMISSION", { providerSubmissionStarted: false });
       }
-      const agent = this.buildAgent(step.agent, lifecycle === null ? input : { ...input, execute: this.withProviderSubmissionLifecycle(input.execute, lifecycle) });
+      const researchReservations = productionReservations.filter((reservation) => reservation.callKind === "research");
+      const capabilityExecution = step.agent === "research"
+        ? lifecycle !== null && researchReservations.length > 0
+          ? this.withResearchCapabilityLifecycle(this.boundary.boundary, lifecycle, researchReservations)
+          : this.boundary.boundary
+        : undefined;
+      const agent = this.buildAgent(step.agent, lifecycle === null ? input : { ...input, execute: this.withProviderSubmissionLifecycle(input.execute, lifecycle, productionReservations) }, capabilityExecution);
       productionSubmissionStarted = productionReservations.length > 0;
       const execution = await agent.execute(
         { context: this.buildExecutionContext(step, context), input: input.input },
         noopCancellation(),
       );
       const normalizedOutput = step.agent === "research" ? groundResearchReport(execution.output) : execution.output;
+      if (step.id === "ceo-recommendation") {
+        const expected = String(safeRecord(input.input).requiredDecision ?? "");
+        const actual = String(safeRecord(normalizedOutput).decision ?? "");
+        if (!expected || actual !== expected) throw new Error(`CEO_RECOMMENDATION_DECISION_CONFLICT:expected=${expected || "missing"}:actual=${actual || "missing"}`);
+        if (actual !== "ADVANCE") {
+          context.data.boundedExecution = {
+            stopAfterStepId: step.id,
+            reason: `CEO_${actual}`,
+            authorization: "CANONICAL_EVIDENCE_GATE",
+            recoveryExecutionId: null,
+          } as unknown as Json;
+        }
+      }
       const strictCouncilPayload = safeRecord(input.input).strategyMode === "PRE_PUBLICATION_STRATEGY"
         && isStrictStrategyCouncilV2Payload(step.agent, normalizedOutput);
       const output = strictCouncilPayload
@@ -2176,7 +2357,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
           } as unknown as Json;
       const modelBReview = step.agent === "review" && step.id === "review";
       const reviewBusinessPayload = modelBReview ? deepFreezeJson(structuredClone(normalizedOutput)) : null;
-      const status = modelBReview ? "completed" : artifactStatusFor(step.agent, output);
+      const status = modelBReview ? "completed" : artifactStatusFor(step.agent, output, context.data, step.id);
       // Revision Cycle V1: revised artifacts durably carry the revision
       // lineage (source revision task + Review artifact/execution + prior
       // content artifacts). The frozen Review business payload stays pure;
@@ -2190,7 +2371,9 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
         : reviewBusinessPayload !== null
           ? { ...(reviewBusinessPayload as unknown as JsonRecord), ...(revisionLineage === null ? {} : { revision: revisionLineage }), ...(resumeLineage === null ? {} : { reviewResume: resumeLineage }) } as unknown as Json
           : { ...safeRecord(output), ...(revisionLineage === null ? {} : { revision: revisionLineage }), ...(resumeLineage === null ? {} : { reviewResume: resumeLineage }) } as unknown as Json;
-      const artifact = this.buildArtifact(step, context, artifactPayload, status, !strictCouncilPayload);
+      const catalogStage = (CANONICAL_STAGE_CATALOG as Record<string, { inputArtifactKinds: readonly string[] }>)[step.id];
+      const canonicalParent = catalogStage === undefined ? undefined : [...chain].reverse().find((item) => catalogStage.inputArtifactKinds.includes(item.kind));
+      const artifact = this.buildArtifact(step, context, artifactPayload, status, !strictCouncilPayload, canonicalParent);
       await this.persistCapabilityEvidence(step, context, output);
       if (status !== "completed") {
         // Only non-Review agents retain this legacy blocked-output behavior.
@@ -2235,7 +2418,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
         context.data.previousArtifact = { artifactId: artifact.artifactId, kind: artifact.kind };
       }
       await this.persistCompletedAgentProvenance(step, context, execution.response, artifact.artifactId, status, input.input, provenanceStartedAt, Date.now() - provenanceStartedMs, lifecycle, modelBReview);
-      if (step.agent === "research" && productionReservations.length === 3) {
+      if (step.agent === "research") {
         await this.reconcileResearchCalls({ reservations: productionReservations, output, status, productionSubmissionStarted, lifecycleExecutionId: lifecycle?.executionId ?? null });
       } else {
         await this.reconcileProductionCalls(productionReservations, true, true, execution.response.usage?.costUsd, execution.response.provider === "openrouter" ? undefined : undefined);
@@ -2248,7 +2431,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
         const failedUsage=safeRecord(safeRecord(lifecycle?.lastProviderResponse).usage);
         const failedCalculableCost=typeof failedUsage.cost==="number"?failedUsage.cost:undefined;
         try {
-          if (step.agent === "research" && productionReservations.length === 3) {
+          if (step.agent === "research") {
             await this.reconcileResearchCalls({ reservations: productionReservations, output: null, status: "failed", productionSubmissionStarted, failedCalculableCost, lifecycleExecutionId: lifecycle?.executionId ?? null });
           } else {
             await this.reconcileProductionCalls(productionReservations, productionSubmissionStarted, false, failedCalculableCost, undefined);
@@ -2272,9 +2455,9 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
     }
   }
 
-  private async reserveProductionCalls(step: AgentStep, context: WorkflowContext): Promise<ProductionCallReservation[]> {
+  private async reserveProductionCalls(step: AgentStep, context: WorkflowContext): Promise<{ reservations: ProductionCallReservation[]; effectiveRetrievalEnvelope: number | null }> {
     const data = safeRecord(context.data);
-    if (data.productionPhase !== "PRE_MEDIA_PHASE") return [];
+    if (data.productionPhase !== "PRE_MEDIA_PHASE") return { reservations: [], effectiveRetrievalEnvelope: null };
     if (this.productionCallBudget === undefined) throw new Error("PRODUCTION_CALL_BUDGET_STORE_UNAVAILABLE");
     const projectId = String(data.projectId ?? "");
     if (!projectId) throw new Error("PROJECT_CONTEXT_REQUIRED");
@@ -2290,12 +2473,31 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
       ? recovery.recoveryExecutionId
       : typeof recovery.recoveryOfExecutionId === "string" ? String(recovery.recoveryOfExecutionId) : null;
     const recoverySuffix = recoveryExecutionId === null ? "" : `:recovery:${recoveryExecutionId}`;
-    // Research recovery consumes three governed calls: retrieval (research),
-    // planning LLM (text) and post-retrieval synthesis LLM (text). Each gets
-    // its own idempotency identity so reservation, transport and
-    // reconciliation stay independent per call. All other roles keep one.
+    // Research V2: compute effective retrieval envelope from remaining budget
+    // instead of pre-reserving the architectural maximum.
+    const researchV2 = step.agent === "research" && data.researchIntelligenceVersion === "V2";
+    let effectiveRetrievalEnvelope: number | null = null;
+    let researchReservations: Array<{ callKind: "research"; keySuffix: string }>;
+    if (researchV2) {
+      const budgets = await this.productionCallBudget.budgets(projectId, "PRE_MEDIA_PHASE");
+      const researchBudget = budgets.find((b) => b.callKind === "research");
+      const remainingCapacity = researchBudget !== undefined ? Math.max(0, researchBudget.remaining) : 0;
+      effectiveRetrievalEnvelope = Math.min(
+        MAX_V2_RESEARCH_RETRIEVAL_CALLS,
+        MISSION_AUTHORIZED_MAX_RETRIEVALS,
+        remainingCapacity,
+      );
+      researchReservations = Array.from(
+        { length: effectiveRetrievalEnvelope },
+        (_, index) => ({ callKind: "research" as const, keySuffix: `:retrieval:${index + 1}` }),
+      );
+    } else if (step.agent === "research") {
+      researchReservations = [{ callKind: "research", keySuffix: "" }];
+    } else {
+      researchReservations = [];
+    }
     const reservationSpecs: Array<{ callKind: "research" | "text_agent"; keySuffix: string }> = step.agent === "research"
-      ? [{ callKind: "research", keySuffix: "" }, { callKind: "text_agent", keySuffix: "" }, { callKind: "text_agent", keySuffix: ":synthesis" }]
+      ? [...researchReservations, { callKind: "text_agent", keySuffix: "" }, { callKind: "text_agent", keySuffix: ":synthesis" }]
       : [{ callKind: "text_agent", keySuffix: "" }];
     const reservations: ProductionCallReservation[] = [];
     try {
@@ -2309,7 +2511,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
           provenance: { projectId, phase: "PRE_MEDIA_PHASE", authority: data.phaseAuthority ?? "UNKNOWN" },
         }));
       }
-      return reservations;
+      return { reservations, effectiveRetrievalEnvelope };
     } catch (error) {
       await this.reconcileProductionCalls(reservations, false, false, undefined, undefined);
       throw error;
@@ -2346,59 +2548,95 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
     const executions = Array.isArray(record.capabilityExecutions) ? record.capabilityExecutions : [];
     const planning = safeRecord(record.planningUsage);
     const synthesis = safeRecord(record.synthesisUsage);
-    let retrievalSubmitted = input.output === null
-      ? input.productionSubmissionStarted
-      : executions.some((item) => {
-        const state = safeRecord(item).status;
-        return state === "success" || state === "failed";
-      });
-    let planSubmitted = input.output !== null;
+    let planSubmitted = Object.keys(planning).length > 0;
     let synthesisSubmitted = Object.keys(synthesis).length > 0;
+    const lifecycleStartedRetrievals = new Set<string>();
     let planCost = typeof planning.costUsd === "number" ? planning.costUsd as number : undefined;
     let synthesisCost = typeof synthesis.costUsd === "number" ? synthesis.costUsd as number : undefined;
-    if (input.output === null && input.lifecycleExecutionId !== undefined && input.lifecycleExecutionId !== null
+    if (input.lifecycleExecutionId !== undefined && input.lifecycleExecutionId !== null
       && this.persistence?.listExecutionLifecycleEvents !== undefined) {
       try {
-        const transportUsages = (await this.persistence.listExecutionLifecycleEvents(input.lifecycleExecutionId))
-          .filter((event) => event.state === "PROVIDER_RESPONSE_RECEIVED")
-          .map((event) => safeRecord(safeRecord(event.metadata).usage));
-        if (transportUsages.length > 0) {
-          planSubmitted = true;
-          const first = transportUsages[0];
-          if (typeof first.cost === "number") planCost = first.cost as number;
-        }
-        if (transportUsages.length > 1) {
-          synthesisSubmitted = true;
-          const second = transportUsages[1];
-          if (typeof second.cost === "number") synthesisCost = second.cost as number;
-        }
-      } catch { /* fall back to coarse flags below */ }
+        const events = await this.persistence.listExecutionLifecycleEvents(input.lifecycleExecutionId);
+        const researchReservations = input.reservations.filter((reservation) => reservation.callKind === "research");
+        const textReservations = input.reservations.filter((reservation) => reservation.callKind === "text_agent");
+        const started = (reservation: ProductionCallReservation | undefined): boolean => reservation !== undefined && ["TRANSPORT_STARTED", "TRANSPORT_COMPLETED", "TRANSPORT_FAILED_AFTER_START"].includes(deriveCallTransportState(reservation, events));
+        planSubmitted = started(textReservations[0]);
+        synthesisSubmitted = started(textReservations[1]);
+        for (const reservation of researchReservations) if (started(reservation)) lifecycleStartedRetrievals.add(reservation.reservationId);
+        const responseUsage = (reservation: ProductionCallReservation | undefined): JsonRecord => {
+          if (reservation === undefined) return {};
+          const response = events.find((event) => {
+            const metadata = safeRecord(event.metadata);
+            return event.state === "PROVIDER_RESPONSE_RECEIVED" && (metadata.reservationId === reservation.reservationId || metadata.idempotencyKey === reservation.idempotencyKey);
+          });
+          return safeRecord(safeRecord(response?.metadata).usage);
+        };
+        const planResponseUsage = responseUsage(textReservations[0]);
+        const synthesisResponseUsage = responseUsage(textReservations[1]);
+        if (typeof planResponseUsage.cost === "number") planCost = planResponseUsage.cost as number;
+        if (typeof synthesisResponseUsage.cost === "number") synthesisCost = synthesisResponseUsage.cost as number;
+      } catch {
+        planSubmitted = Object.keys(planning).length > 0;
+        synthesisSubmitted = Object.keys(synthesis).length > 0;
+      }
     }
-    if (input.output === null && !planSubmitted) {
-      planSubmitted = input.productionSubmissionStarted;
-      if (planCost === undefined) planCost = input.failedCalculableCost;
+    if (input.output === null && planSubmitted && planCost === undefined) planCost = input.failedCalculableCost;
+    const researchReservations = input.reservations.filter((reservation) => reservation.callKind === "research");
+    const textReservations = input.reservations.filter((reservation) => reservation.callKind === "text_agent");
+    for (const [index, researchRes] of researchReservations.entries()) {
+      const execution = executions[index] === undefined ? null : safeRecord(executions[index]);
+      const executionStatus = execution?.status;
+      const submitted = execution === null
+        ? lifecycleStartedRetrievals.has(researchRes.reservationId)
+        : executionStatus === "success" || executionStatus === "failed";
+      await store.reconcile({ reservationId: researchRes.reservationId, providerSubmissionStarted: submitted, success: execution === null ? submitted && completed : executionStatus === "success", calculableCostUsd: undefined, providerBilledCostUsd: undefined, provenance });
     }
-    if (input.output === null && !synthesisSubmitted) {
-      synthesisSubmitted = input.productionSubmissionStarted;
-    }
-    const [researchRes, planRes, synthesisRes] = input.reservations;
-    if (researchRes !== undefined) await store.reconcile({ reservationId: researchRes.reservationId, providerSubmissionStarted: retrievalSubmitted, success: retrievalSubmitted && completed, calculableCostUsd: undefined, providerBilledCostUsd: undefined, provenance });
+    const [planRes, synthesisRes] = textReservations;
     if (planRes !== undefined) await store.reconcile({ reservationId: planRes.reservationId, providerSubmissionStarted: planSubmitted, success: planSubmitted && completed, calculableCostUsd: planCost, providerBilledCostUsd: undefined, provenance });
     if (synthesisRes !== undefined) await store.reconcile({ reservationId: synthesisRes.reservationId, providerSubmissionStarted: synthesisSubmitted, success: synthesisSubmitted && completed, calculableCostUsd: synthesisCost, providerBilledCostUsd: undefined, provenance });
   }
 
   private async withCanonicalModelRouting(step:AgentStep,context:WorkflowContext):Promise<WorkflowContext>{
     const data=safeRecord(context.data),project=String(data.projectId??data.project_id??"");
-    if(project!=="morroway")return context;
-    const deterministic=new Set(["video","scene-image","visual-technical-qa","wan-authorization","tts","timeline","composer","publisher","publisher-authorization"]);
-    if(deterministic.has(step.agent))return context;
+    if(!project)return context;
+    const catalogStage=(CANONICAL_STAGE_CATALOG as Record<string,{executionType:string;routingRole:string|null}>)[step.id]
+      ?? (CANONICAL_STAGE_CATALOG as Record<string,{executionType:string;routingRole:string|null}>)[step.agent];
+    if(catalogStage!==undefined&&!['LLM','HYBRID'].includes(catalogStage.executionType))return context;
     if(!this.modelRouting)throw new Error("CANONICAL_ROUTING_STORE_UNAVAILABLE");
     const aliases:Record<string,string>={"visual-prompt":"visual-director",scenes:"director","research-synthesis":"research",reviewer:"review"};
-    const role=aliases[step.agent]??step.agent,slot=String(data.primaryModelUnavailable===true?"fallback":(data.routingSlot??"primary")) as "primary"|"fallback"|"economy"|"premiumEscalation";
-    const resolved=await this.modelRouting.resolve(role,{projectId:project,slot,premiumAuthorized:data.premiumEscalationAuthorized===true});
+    const role=catalogStage?.routingRole??aliases[step.agent]??step.agent,slot=String(data.primaryModelUnavailable===true?"fallback":(data.routingSlot??"primary")) as "primary"|"fallback"|"economy"|"premiumEscalation";
+    const fallbackReason=typeof data.fallbackReason==='string'?data.fallbackReason:undefined;
+    const resolved=await this.modelRouting.resolve(role,{projectId:project,slot,premiumAuthorized:data.premiumEscalationAuthorized===true,fallbackAuthorized:data.fallbackAuthorized===true,fallbackReason});
     this.routingResolutionObserver?.({project,agent:step.agent,...resolved});
-    const overrides={...safeRecord(data.controlAgentOverrides),[step.agent]:{provider:"openrouter",model:resolved.model,canonicalRouting:{routingVersionId:resolved.routingVersionId,profile:resolved.profile,slot,priceSnapshotId:resolved.priceSnapshotId,fallbackUsed:slot==="fallback",premiumEscalation:slot==="premiumEscalation",resolutionReason:"ACTIVE_PROJECT_CANONICAL_ROUTING"}}};
+    const overrides={...safeRecord(data.controlAgentOverrides),[step.agent]:{provider:resolved.provider,model:resolved.model,canonicalRouting:{routingVersionId:resolved.routingVersionId,routingScope:resolved.routingScope,projectId:resolved.projectId,role:resolved.role,profile:resolved.profile,slot,requestedModel:resolved.requestedModel,resolvedModel:resolved.resolvedModel,priceSnapshotId:resolved.priceSnapshotId,availabilityState:"CONFIGURED",fallbackUsed:resolved.fallbackUsed,fallbackReason:resolved.fallbackReason,premiumEscalation:slot==="premiumEscalation",resolutionReason:"ACTIVE_PROJECT_CANONICAL_ROUTING"}}};
     return{...context,data:{...data,controlAgentOverrides:overrides,canonicalRouting:overrides[step.agent]}} as WorkflowContext;
+  }
+
+  /** Materialized-input LLM preflight. It runs after routing and before any budget reservation. */
+  private async preflightProductionLlm(step:AgentStep,context:WorkflowContext,input:Json):Promise<void>{
+    const data=safeRecord(context.data),override=safeRecord(data.canonicalRouting),route=safeRecord(override.canonicalRouting);
+    if(Object.keys(route).length===0)return;
+    if(!this.modelRouting)throw new Error("CANONICAL_ROUTING_STORE_UNAVAILABLE");
+    const catalogStage=(CANONICAL_STAGE_CATALOG as Record<string,{executionType:string;routingRole:string|null}>)[step.id]
+      ?? (CANONICAL_STAGE_CATALOG as Record<string,{executionType:string;routingRole:string|null}>)[step.agent];
+    const aliases:Record<string,string>={"visual-prompt":"visual-director",scenes:"director","research-synthesis":"research",reviewer:"review"};
+    const role=catalogStage?.routingRole??aliases[step.agent]??step.agent;
+    const slot=String(route.slot??"primary") as "primary"|"fallback"|"economy"|"premiumEscalation";
+    const environment=inspectWorkerExecutionEnvironment();
+    const result=await this.modelRouting.preflight(role,{
+      projectId:String(data.projectId??data.project_id??""),slot,
+      premiumAuthorized:data.premiumEscalationAuthorized===true,
+      fallbackAuthorized:data.fallbackAuthorized===true,
+      fallbackReason:typeof data.fallbackReason==='string'?data.fallbackReason:undefined,
+      expectedRoutingVersionId:String(route.routingVersionId??""),expectedModel:String(override.model??""),
+      requirements:{executionType:(catalogStage?.executionType??"LLM") as "LLM"|"HYBRID",prompt:JSON.stringify(input),expectedOutputTokens:step.agent==="research"?8192:4096,structuredOutput:"JSON_MODE",executionEnvironmentAllowed:environment.status==="SUPPORTED"},
+    });
+    const canonicalRouting={...route,availabilityState:result.availabilityState,liveHealthState:result.liveHealthState,configurationFingerprint:result.configurationFingerprint,preflightCode:result.code};
+    const scoped={...override,canonicalRouting};
+    data.canonicalRouting=scoped as unknown as Json;
+    data.controlAgentOverrides={...safeRecord(data.controlAgentOverrides),[step.agent]:scoped} as unknown as Json;
+    const materialized=safeRecord(input);
+    materialized.controlAgentOverrides={...safeRecord(materialized.controlAgentOverrides),[step.agent]:scoped} as unknown as Json;
   }
 
   /** Final publication authorization is a deterministic policy decision, never an LLM/provider outcome. */
@@ -2537,7 +2775,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
     switch (step.agent) {
       case "orchestrator": {
         const objective = String(safeRecord(context.data).objective ?? safeRecord(context.data).contentTopic ?? "Select a grounded Morroway Short topic");
-        const input: Json = { __agent: "orchestrator", ...roleOverridesMarker, productionPhase: "PRE_MEDIA_PHASE", planId: `plan-${workflowId}`, stage: "INITIAL_CONTENT_PLAN", objective, topic: String(safeRecord(context.data).contentTopic ?? objective), audience: String(safeRecord(context.data).audience ?? "Morroway YouTube audience"), platform: String(safeRecord(context.data).platform ?? "YouTube Shorts"), productionBrief: safeRecord(context.data).productionBrief as Json, projectContext: safeRecord(context.data).projectContext as Json, researchQuestions: [objective], researchObjectives: ["Collect cited evidence and select a truthful, visually feasible factual micro-story."], knownRestrictions: ["No unsupported facts", "No media generation", "Owner authority remains required"], desiredDeliverables: ["research", "brief", "hooks", "script", "scenes", "visual direction"], tasks: [], status: "requested", summary: "" };
+        const input: Json = { __agent: "orchestrator", ...roleOverridesMarker, productionPhase: "PRE_MEDIA_PHASE", planId: `plan-${workflowId}`, stage: "INITIAL_CONTENT_PLAN", objective, topic: String(safeRecord(context.data).contentTopic ?? objective), audience: String(safeRecord(context.data).audience ?? "Morroway YouTube audience"), platform: String(safeRecord(context.data).platform ?? "YouTube Shorts"), productionBrief: safeRecord(context.data).productionBrief as Json, projectContext: safeRecord(context.data).projectContext as Json, researchQuestions: [objective], researchObjectives: ["Collect cited evidence and select a truthful, visually feasible factual micro-story."], knownRestrictions: ["No unsupported facts", "No media generation", "Owner authority remains required"], desiredDeliverables: ["research", "brief with hook direction", "script", "scenes", "visual direction"], tasks: [], status: "requested", summary: "" };
         return { input, execute: agentLlm(input) };
       }
       case "planner": {
@@ -2567,6 +2805,9 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
             || (Array.isArray(payload.claims) && payload.claims.length > 0);
         }) ?? researchReports[0];
         if (initial === undefined || research === undefined) throw new Error("Planner synthesis requires persisted initial plan and research report");
+        const ceoRecommendation = step.id.startsWith("planner-synthesis") ? latestByKind("ceo_recommendation") : undefined;
+        if ((preMediaPhase || step.id.startsWith("planner-synthesis")) && ceoRecommendation === undefined) throw new Error("Planner synthesis requires the canonical CEO recommendation");
+        if (ceoRecommendation !== undefined) validateArtifactContract({ artifact: ceoRecommendation, expectedWorkflowId: workflowId, expectedKind: "ceo_recommendation", consumerStage: "planner-synthesis" });
         const initialPayload = safeRecord(initial.payload);
         const researchPayload = safeRecord(research.payload);
         const plannerInputArtifactIds = Array.isArray(safeRecord(context.data).strategyInputArtifactIds)
@@ -2577,6 +2818,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
           ...(plannerInputArtifactIds.length === 0 ? {} : { inputArtifacts: plannerInputArtifactIds.map((artifactId) => ({ artifactId })) }),
           initialPlan: initialPayload as Json,
           researchResult: { reportId: String(researchPayload.reportId ?? research.artifactId), summary: String(researchPayload.summary ?? ""), sources: (Array.isArray(researchPayload.sources) ? researchPayload.sources.map((source, index) => { const item = safeRecord(source); return { ...item, id: typeof item.id === "number" ? item.id : index + 1, snippet: typeof item.snippet === "string" && item.snippet.trim() ? item.snippet : String(item.relevance ?? "").trim() }; }) : []) as Json, citations: (Array.isArray(researchPayload.citations) ? researchPayload.citations : []) as Json, strategyFindings: (safeRecord(researchPayload.strategyFindings) as unknown as Json), unknowns: (Array.isArray(safeRecord(researchPayload.strategyFindings).unknowns) ? safeRecord(researchPayload.strategyFindings).unknowns : []) as Json, provenance: [] as Json },
+          ...(ceoRecommendation === undefined ? {} : { ceoRecommendation: ceoRecommendation.payload as unknown as Json }),
         };
         return { input, execute: strategyMode || preMediaPhase ? agentLlm(input) : deterministicLlm(input) };
       }
@@ -2668,6 +2910,10 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
         const morrowayContextProvenance = needsMorrowayContext
           ? { source: "canonical-approved-project-context", resolver: "resolveApprovedProjectContext", projectId: "morroway", artifactRefs: strategyInputArtifactIds }
           : null;
+        // V2 is an explicit contract selection. Existing in-flight workflows
+        // remain on their persisted V1 semantics until an Owner-authorized
+        // invocation supplies researchIntelligenceVersion=V2.
+        const researchIntelligenceV2 = safeRecord(context.data).researchIntelligenceVersion === "V2";
         const input: Json = {
           __agent: "research", ...strategyMarker, ...roleOverridesMarker,
           task: productionTask,
@@ -2675,7 +2921,16 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
           // strategy council keeps its legacy exact-description contract).
           ...(strategyMode ? {} : { contract: researchContract as unknown as Json }),
           // Post-retrieval synthesis contract (production two-phase path only).
-          ...(strategyMode ? {} : { synthesisContract: "amf-research-synthesis-v1" }),
+          ...(strategyMode ? {} : researchIntelligenceV2 ? buildResearchIntelligenceV2Contract({
+            projectId: researchProjectId, objective: researchObjective,
+            platform: String(safeRecord(context.data).platform ?? "YouTube Shorts"),
+            contentPillar: String(safeRecord(context.data).contentPillar ?? "Historical POV"),
+            contentMode: String(safeRecord(context.data).contentMode ?? "HISTORICAL_POV"),
+            market: typeof safeRecord(context.data).market === "string" ? String(safeRecord(context.data).market) : null,
+            geography: typeof safeRecord(context.data).geography === "string" ? String(safeRecord(context.data).geography) : null,
+            language: typeof safeRecord(context.data).language === "string" ? String(safeRecord(context.data).language) : null,
+            audience: typeof safeRecord(context.data).audience === "string" ? String(safeRecord(context.data).audience) : null,
+          }) : { synthesisContract: "amf-research-synthesis-v1" }),
           ...(morrowayContext === null ? {} : {
             projectContext: morrowayContext as unknown as Json,
             projectContextProvenance: morrowayContextProvenance as unknown as Json,
@@ -2711,6 +2966,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
         const synthesis = [...chain].reverse().find((a) => a.kind === "evidence_backed_content_brief" && a.status === "completed");
         const research = chain.find((a) => a.kind === "research_report");
         if (synthesis === undefined) throw new Error("Writer requires the evidence-backed content brief from Planner synthesis");
+        validateArtifactContract({ artifact: synthesis, expectedWorkflowId: workflowId, expectedKind: "evidence_backed_content_brief", consumerStage: "writer" });
         // Revision Cycle V1: the authoritative revision instruction comes from
         // the durable source Review artifact; the prior Writer content is the
         // revision base. The writer is instructed to revise, not recreate.
@@ -2746,17 +3002,11 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
         return { input, execute: agentLlm(input) };
       }
 
-      case "hooks": {
-        const brief = latestByKind("evidence_backed_content_brief");
-        if (brief === undefined) throw new Error("Hooks require the evidence-backed content brief");
-        const input: Json = { __agent: "hooks", ...roleOverridesMarker, productionPhase: "PRE_MEDIA_PHASE", objective: "Generate factual short-form hook concepts", brief: brief.payload as Json, evidence: this.sourceArtifacts(chain.filter((a) => ["research_report", "ceo_recommendation"].includes(a.kind))), constraints: ["Do not invent facts", "20-40 second YouTube Short", "Return multiple hooks and one recommendation"] };
-        return { input, execute: agentLlm(input) };
-      }
-
       case "director": {
         if (!preMediaPhase) throw new Error("Director text planning is only available in PRE_MEDIA_PHASE here");
         const writer = latestByKind("writer_report");
         if (writer === undefined) throw new Error("Scene planning requires the writer artifact");
+        validateArtifactContract({ artifact: writer, expectedWorkflowId: workflowId, expectedKind: "writer_report", consumerStage: step.id });
         const input: Json = { __agent: "director", ...roleOverridesMarker, productionPhase: "PRE_MEDIA_PHASE", objective: "Create a 3-5 scene pre-media plan covering the script", script: writer.payload as Json, constraints: ["No provider calls", "No unsupported facts", "Vertical 9:16", "20-40 seconds"] };
         return { input, execute: agentLlm(input) };
       }
@@ -2764,6 +3014,11 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
       case "visual-director": {
         const scenes = latestByKind("scene_plan");
         if (scenes === undefined) throw new Error("Visual direction requires the scene plan");
+        validateArtifactContract({ artifact: scenes, expectedWorkflowId: workflowId, expectedKind: "scene_plan", consumerStage: "visual-direction" });
+        // Media-chain stages persist their canonical artifacts independently;
+        // reconstruct the immediate producer lineage from that persisted source
+        // instead of relying on a transient previousArtifact pointer.
+        context.data.previousArtifact = { artifactId: scenes.artifactId, kind: scenes.kind } as unknown as Json;
         const input: Json = { __agent: "visual-director", ...roleOverridesMarker, productionPhase: "PRE_MEDIA_PHASE", objective: "Create provider-neutral pre-media visual direction", scenePlan: scenes.payload as Json, constraints: ["No image generation", "No unsupported facts", "Vertical 9:16", "Explicit uncertainty"] };
         return { input, execute: agentLlm(input) };
       }
@@ -2898,7 +3153,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
 
       case "qa": {
         if (preMediaPhase) {
-          const input: Json = { __agent: "qa", ...roleOverridesMarker, productionPhase: "PRE_MEDIA_PHASE", reportId: `qa-${workflowId}`, objective: "Validate the pre-media package and its lineage before Owner review", validatedArtifacts: this.sourceArtifacts(chain), requirements: ["research evidence", "strategy recommendation", "brief", "hooks", "script", "scene plan", "visual direction", "review findings", "no media execution"] };
+          const input: Json = { __agent: "qa", ...roleOverridesMarker, productionPhase: "PRE_MEDIA_PHASE", reportId: `qa-${workflowId}`, objective: "Validate the pre-media package and its lineage before Owner review", validatedArtifacts: this.sourceArtifacts(chain), requirements: ["research evidence", "strategy recommendation", "brief with hook direction", "script", "scene plan", "visual direction", "review findings", "no media execution"] };
           return { input, execute: agentLlm(input) };
         }
         const finalMedia = chain.find((a) => a.kind === "final_media_artifact");
@@ -2977,6 +3232,22 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
       }
 
       case "ceo": {
+        if (preMediaPhase || step.id === "ceo-recommendation") {
+          const research = latestByKind("research_report");
+          if (research === undefined) throw new Error("CEO recommendation requires the canonical Research artifact");
+          validateArtifactContract({ artifact: research, expectedWorkflowId: workflowId, expectedKind: "research_report", consumerStage: "ceo-recommendation" });
+          const mode = decideCeoResearchMode(research.payload);
+          const input: Json = {
+            __agent: "ceo", ...roleOverridesMarker, productionPhase: "PRE_MEDIA_PHASE",
+            objective: "Make a bounded evidence-gated production recommendation from the completed Research artifact.",
+            researchArtifact: this.sourceArtifacts([research])[0] as Json,
+            requiredDecision: mode.decision,
+            eligibleCandidateIds: mode.eligibleCandidateIds as unknown as Json,
+            policy: "amf-evidence-sufficiency-v1",
+            allowedDecisions: ["ADVANCE", "HOLD", "RETURN_TO_OWNER", "NO_PRODUCTION_CANDIDATE"],
+          };
+          return { input, execute: agentLlm(input) };
+        }
         const input: Json = {
           __agent: "ceo", ...strategyMarker, ...strategyModelOverride, ...roleOverridesMarker, requestId: `ceo-${workflowId}-${step.id}`,
           objective: String(context.data.objective ?? "Synthesize the validated pre-publication strategy council evidence."),
@@ -3011,8 +3282,42 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
     }));
   }
 
-  private buildAgent(agent: string, deps: { input: Json; execute: ExecuteFn }): AnyAgent {
-    const capabilityExecution: CapabilityExecutionPort = this.boundary.boundary;
+  private withResearchCapabilityLifecycle(
+    capability: CapabilityExecutionPort,
+    lifecycle: GovernedLlmLifecycle,
+    reservations: readonly ProductionCallReservation[],
+  ): CapabilityExecutionPort {
+    let nextReservation = 0;
+    const record = async (state: string, metadata: Record<string, unknown>): Promise<void> => {
+      if (this.persistence?.appendExecutionLifecycleEvent === undefined) return;
+      await this.persistence.appendExecutionLifecycleEvent({
+        executionId: lifecycle.executionId,
+        workflowId: lifecycle.workflowId,
+        stage: lifecycle.stage,
+        state,
+        occurredAt: nowIso(),
+        attemptNumber: 1,
+        metadata,
+      });
+    };
+    return {
+      executeCapability: async (request: CapabilityRequest): Promise<CapabilityResult> => {
+        const reservation = reservations[nextReservation++];
+        if (reservation === undefined) throw new Error("RESEARCH_CAPABILITY_RESERVATION_REQUIRED");
+        const attribution = {
+          reservationId: reservation.reservationId,
+          idempotencyKey: reservation.idempotencyKey,
+          callLeg: "RETRIEVAL",
+          capabilityRequestId: request.requestId,
+          capabilityId: request.capabilityId,
+        };
+        return executeCapabilityWithTransportLifecycle(capability, request, attribution, record);
+      },
+    };
+  }
+
+  private buildAgent(agent: string, deps: { input: Json; execute: ExecuteFn }, capabilityOverride?: CapabilityExecutionPort): AnyAgent {
+    const capabilityExecution: CapabilityExecutionPort = capabilityOverride ?? this.boundary.boundary;
     const llm = deps.execute;
     const scoped = safeRecord(safeRecord(deps.input).controlAgentOverrides)[agent]
       ?? safeRecord(safeRecord(deps.input).controlAgentOverrides)["*"];
@@ -3022,7 +3327,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
     const model = configuredModel ?? (safeRecord(deps.input).strategyMode === "PRE_PUBLICATION_STRATEGY"
       ? resolvedAgentRouterModel(agent, deps.input)
       : "deterministic");
-    if (safeRecord(scoped).canonicalRouting !== undefined && ["orchestrator", "ceo", "hooks", "director", "visual-director", "review", "qa"].includes(agent)) {
+    if (safeRecord(scoped).canonicalRouting !== undefined && ["orchestrator", "ceo", "director", "visual-director", "review", "qa"].includes(agent)) {
       return createPreMediaRoutedAgent(agent, model, llm);
     }
     if (safeRecord(deps.input).strategyMode === "PRE_PUBLICATION_STRATEGY" && ["writer","seo","brand","growth","finance"].includes(agent)) {
@@ -3122,13 +3427,18 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
         }) as unknown as AnyAgent;
       case "ceo":
         return createCEOAgent({ execute: llm, config: { model, systemPrompt: DEFAULT_CEO_SYSTEM_PROMPT, temperature: 0.2, maxOutputTokens: 16384 } }) as unknown as AnyAgent;
+      case "visual-director":
+        return createPreMediaRoutedAgent("visual-director", model, llm);
       default:
         throw new Error(`Unsupported production agent "${agent}"`);
     }
   }
 
-  private buildArtifact(step: AgentStep, context: WorkflowContext, payload: Json, status: "completed" | "blocked" | "failed", updateContext = true): CollaborationArtifact {
+  private buildArtifact(step: AgentStep, context: WorkflowContext, payload: Json, status: "completed" | "blocked" | "failed", updateContext = true, canonicalParent?: CollaborationArtifact): CollaborationArtifact {
     const previous = safeRecord(context.data.previousArtifact);
+    const parent = canonicalParent === undefined
+      ? previous.artifactId === undefined ? undefined : { artifactId: String(previous.artifactId), kind: String(previous.kind) }
+      : { artifactId: canonicalParent.artifactId, kind: canonicalParent.kind };
     const recovery = safeRecord(context.data.workflowRecovery);
     const recoverySuffix = typeof recovery.recoveredAt === "string" ? `-${recovery.recoveredAt.replace(/[^0-9A-Za-z]/g, "")}` : "";
     const artifact = {
@@ -3147,12 +3457,14 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
       contentType: "application/json",
       schemaVersion: SCHEMA_VERSION,
       createdAt: nowIso(),
-      ...(previous.artifactId === undefined
-        ? {}
-        : { parentArtifact: { artifactId: String(previous.artifactId), kind: String(previous.kind) } }),
+      ...(parent === undefined ? {} : { parentArtifact: parent }),
     };
+    const collaborationArtifact = artifact as CollaborationArtifact;
+    if (["research_report", "ceo_recommendation", "evidence_backed_content_brief", "writer_report", "scene_plan", "visual_direction_contract"].includes(collaborationArtifact.kind) && status === "completed") {
+      validateArtifactContract({ artifact: collaborationArtifact, expectedWorkflowId: context.workflowId, expectedKind: collaborationArtifact.kind });
+    }
     if (updateContext) context.data.previousArtifact = { artifactId: artifact.artifactId, kind: artifact.kind };
-    return artifact as CollaborationArtifact;
+    return collaborationArtifact;
   }
 
   private async persistCapabilityEvidence(step: AgentStep, context: WorkflowContext, output: Json): Promise<void> {
@@ -3297,7 +3609,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
     }
   }
 
-  private withProviderSubmissionLifecycle(execute: ExecuteFn, lifecycle: GovernedLlmLifecycle): ExecuteFn {
+  private withProviderSubmissionLifecycle(execute: ExecuteFn, lifecycle: GovernedLlmLifecycle, reservations: readonly ProductionCallReservation[]): ExecuteFn {
     let transportCount = 0;
     return async (executionContext, request, cancellation) => {
       // The SQL implementation is a compare-and-set, so concurrent workers
@@ -3307,7 +3619,11 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
         throw new Error("EXECUTION_PROVIDER_CLAIM_REQUIRED");
       }
       transportCount += 1;
-      let claimed = await this.persistence.claimReadyExecutionProvenance(lifecycle.executionId, { maxTokens: request.maxOutputTokens });
+      const callLeg = request.callIdentity?.callLeg ?? (transportCount === 1 ? "PRIMARY" : `CALL_${transportCount}`);
+      const textReservations = reservations.filter((reservation) => reservation.callKind === "text_agent");
+      const reservation = callLeg === "FINAL_SYNTHESIS" ? textReservations[1] : textReservations[0];
+      const attribution = { callLeg, reservationId: reservation?.reservationId, idempotencyKey: reservation?.idempotencyKey };
+      let claimed = await this.persistence.claimReadyExecutionProvenance(lifecycle.executionId, { maxTokens: request.maxOutputTokens, ...attribution });
       if (!claimed && transportCount > 1) {
         // Sequential multi-leg synthesis within ONE execution (planning LLM,
         // then post-retrieval synthesis LLM): the prior leg completed, so
@@ -3315,8 +3631,8 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
         // previous transport finished, so the concurrent-submission guard is
         // unaffected; a crash between legs resumes the whole step under the
         // existing reservation-idempotency rules.
-        await this.persistLifecycle(lifecycle, "READY_FOR_SUBMISSION", { providerSubmissionStarted: false, synthesisLeg: transportCount });
-        claimed = await this.persistence.claimReadyExecutionProvenance(lifecycle.executionId, { maxTokens: request.maxOutputTokens });
+        await this.persistLifecycle(lifecycle, "READY_FOR_SUBMISSION", { providerSubmissionStarted: false, ...attribution });
+        claimed = await this.persistence.claimReadyExecutionProvenance(lifecycle.executionId, { maxTokens: request.maxOutputTokens, ...attribution });
       }
       if (!claimed) throw new Error(`EXECUTION_PROVIDER_CLAIM_NOT_ACQUIRED:${lifecycle.executionId}`);
       let response: Awaited<ReturnType<ExecuteFn>>;
@@ -3324,7 +3640,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
         response = await execute(executionContext, {
           ...request,
           onTransportEvent: async (event, details) => {
-            await this.persistLifecycle(lifecycle, event, details ?? {});
+            await this.persistLifecycle(lifecycle, event, { ...safeRecord(details), ...attribution });
           },
         }, cancellation);
       } catch (error) {
@@ -3341,10 +3657,10 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
       const diagnostics = safeRecord((response as unknown as { providerResponseDiagnostics?: unknown }).providerResponseDiagnostics);
       lifecycle.lastProviderResponse = diagnostics;
       await this.persistLifecycle(lifecycle, "PROVIDER_RESPONSE_RECEIVED", {
-        ...diagnostics, finishReason: (response as unknown as { finishReason?: unknown }).finishReason ?? "unknown",
+        ...diagnostics, ...attribution, finishReason: (response as unknown as { finishReason?: unknown }).finishReason ?? "unknown",
       });
       await this.persistLifecycle(lifecycle, "VALIDATING", {
-        ...diagnostics, finishReason: (response as unknown as { finishReason?: unknown }).finishReason ?? "unknown",
+        ...diagnostics, ...attribution, finishReason: (response as unknown as { finishReason?: unknown }).finishReason ?? "unknown",
       });
       return response;
     };
@@ -3588,7 +3904,7 @@ export function resolveProductionTtsVoice(value: unknown, workflowId?: string): 
 }
 
 /** Derive the collaboration artifact status from the agent's report output. */
-function artifactStatusFor(agent: string, output: Json): "completed" | "blocked" | "failed" {
+function artifactStatusFor(agent: string, output: Json, contextData?: Readonly<Record<string, Json>>, stepId?: string): "completed" | "blocked" | "failed" {
   const record = safeRecord(output);
   const status = typeof record.status === "string" ? record.status : "";
   if (typeof record.contract === "string" && record.contract.startsWith("STRATEGY_COUNCIL_") && (status === "COMPLETED" || status === "AWAITING_OWNER_APPROVAL")) return "completed";
@@ -3620,11 +3936,38 @@ function artifactStatusFor(agent: string, output: Json): "completed" | "blocked"
       // it usable. Retrieval presence alone never proves evidence quality.
       const executions = Array.isArray(record.capabilityExecutions) ? record.capabilityExecutions : [];
       const search = executions.find((item) => safeRecord(item).capabilityId === "web.search");
-      if (search === undefined) return "blocked";
+      if (search === undefined) {
+        const bounded = safeRecord(contextData?.boundedExecution ?? contextData?.boundedStop);
+        const planning = safeRecord(record.retrievalPlanning);
+        const gate = safeRecord(record.evidenceQuality);
+        const legitimateNoCapability = contextData?.researchIntelligenceVersion === "V2"
+          && typeof stepId === "string"
+          && bounded.stopAfterStepId === stepId
+          && planning.status === "NO_SUPPORTED_CAPABILITY"
+          && Array.isArray(record.retrievalPlan)
+          && record.retrievalPlan.length === 0
+          && record.researchStatus === "INSUFFICIENT_EVIDENCE"
+          && gate.evidenceStatus === "INSUFFICIENT_EVIDENCE"
+          && gate.ceoEligible === false;
+        return legitimateNoCapability ? "completed" : "blocked";
+      }
       const searchStatus = typeof search.status === "string" ? search.status : "";
       if (searchStatus !== "success") return "blocked";
       const gate = safeRecord(record.evidenceQuality);
       if (gate.status === "NEEDS_RESEARCH_RETRY") return "blocked";
+      // V2 bounded Research is allowed to complete honestly with no eligible
+      // candidate.  Completion here means the requested intelligence cycle
+      // produced a durable report; it does not make that report CEO-eligible.
+      // Limit this semantic to an explicit V2 bounded stop at this Research
+      // step so historical V1 and unbounded downstream behavior remain
+      // fail-closed.
+      const bounded = safeRecord(contextData?.boundedExecution ?? contextData?.boundedStop);
+      const honestV2BoundedStop = contextData?.researchIntelligenceVersion === "V2"
+        && typeof stepId === "string"
+        && bounded.stopAfterStepId === stepId
+        && record.researchStatus === "INSUFFICIENT_EVIDENCE"
+        && gate.ceoEligible === false;
+      if (honestV2BoundedStop) return "completed";
       // Business sufficiency: a structurally valid report is still blocked
       // unless the evidence is CEO-eligible (viable candidates above the
       // authority threshold). Missing sufficiency data fails closed.
@@ -3930,7 +4273,11 @@ export function evaluateResearchEvidenceSufficiency(input: {
   const classes = input.retrievalResults.map(classifySourceAuthority);
   for (const classified of classes) authorityBreakdown[classified.authorityClass] += 1;
   if (retrievalCount === 0) {
-    return { retrievalCount, authorityBreakdown, candidateCount: 0, viableCandidates: 0, status: "FAILED", ceoEligible: false, reasons: ["RETRIEVAL_EMPTY"] };
+    const candidates = Array.isArray(input.candidateStories) ? input.candidateStories : [];
+    const modelInsufficient = typeof input.synthesisStatus === "string" && input.synthesisStatus.trim().toLowerCase() === "insufficient_evidence";
+    return candidates.length === 0 && modelInsufficient
+      ? { retrievalCount, authorityBreakdown, candidateCount: 0, viableCandidates: 0, status: "INSUFFICIENT_EVIDENCE", ceoEligible: false, reasons: ["RETRIEVAL_EMPTY", "MODEL_DECLARED_INSUFFICIENT", "NO_CANDIDATE_STORIES"] }
+      : { retrievalCount, authorityBreakdown, candidateCount: candidates.length, viableCandidates: 0, status: "FAILED", ceoEligible: false, reasons: ["RETRIEVAL_EMPTY"] };
   }
   const offTopicCount = input.retrievalResults.filter(isOffTopicEducationalSearchResult).length;
   const offTopicMajority = offTopicCount * 2 >= retrievalCount;
@@ -3952,9 +4299,23 @@ export function evaluateResearchEvidenceSufficiency(input: {
     const record = safeRecord(candidate);
     if (typeof record.topic !== "string" || record.topic.trim().length === 0) { reasons.push("CANDIDATE_WITHOUT_TOPIC"); continue; }
     const claimedIds = Array.isArray(record.sourceIds) ? record.sourceIds.filter((id): id is number => typeof id === "number") : [];
-    const evidenceIds = Array.isArray(record.supportingEvidenceIds) ? record.supportingEvidenceIds.filter((id): id is number => typeof id === "number") : [];
-    const linkedIds = [...new Set([...claimedIds, ...evidenceIds])].filter((id) => sourceById.has(id));
+    const evidenceIds = Array.isArray(record.supportingEvidenceIds)
+      ? record.supportingEvidenceIds.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+      : [];
+    const linkedIds = [...new Set(claimedIds)].filter((id) => sourceById.has(id));
     if (linkedIds.length === 0) { reasons.push("CANDIDATE_WITHOUT_EVIDENCE"); continue; }
+    // V2 candidate-level eligibility is authoritative.  The aggregate gate
+    // may not promote a candidate that the same artifact declares partial,
+    // incomplete, or not recommended for production.  Legacy V1 candidates
+    // without these V2 fields retain the original source-only evaluation.
+    const factual = safeRecord(record.factualVerification);
+    const hasV2Eligibility = Object.prototype.hasOwnProperty.call(record, "recommendedForProduction")
+      || Object.keys(factual).length > 0;
+    if (hasV2Eligibility) {
+      if (record.recommendedForProduction !== true) { reasons.push("CANDIDATE_NOT_RECOMMENDED_FOR_PRODUCTION"); continue; }
+      if (factual.status !== "STRONG") { reasons.push("CANDIDATE_FACTUAL_ELIGIBILITY_BELOW_THRESHOLD"); continue; }
+      if (evidenceIds.length === 0 || record.evidenceLineageValidated !== true) { reasons.push("CANDIDATE_WITHOUT_VALIDATED_EVIDENCE_LINEAGE"); continue; }
+    }
     const linkedSources = linkedIds.map((id) => sourceById.get(id)).filter((source): source is unknown => source !== undefined);
     const domains = distinctDomains(linkedSources);
     if (domains.size < 2) { reasons.push("CANDIDATE_SINGLE_DOMAIN"); continue; }
@@ -3984,6 +4345,110 @@ export function evaluateResearchEvidenceSufficiency(input: {
   // Candidates exist but none clear the bar (or the model disagrees with a
   // passing gate): targeted verification could still complete the evidence.
   return { retrievalCount, authorityBreakdown, candidateCount: candidates.length, viableCandidates, status: "NEEDS_VERIFICATION", ceoEligible: false, reasons };
+}
+
+function canonicalResearchSourceUrl(value: unknown): string | null {
+  if (typeof value !== "string" || value.trim() === "") return null;
+  try {
+    const parsed = new URL(value);
+    parsed.hash = "";
+    parsed.hostname = parsed.hostname.toLowerCase();
+    if (parsed.pathname.length > 1) parsed.pathname = parsed.pathname.replace(/\/+$/, "");
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+interface PersistedRetrievalLineage {
+  resultId: string;
+  evidenceId: string;
+  idempotencyKey: string;
+  urls: Set<string>;
+}
+
+/**
+ * Resolve model-authored artifact-local source ids against persisted retrieval
+ * output, then rebuild candidate evidence links from candidate-specific
+ * verification executions.  Source ids remain local numeric ids; evidence ids
+ * are durable execution_evidence identities.  No id from one namespace is
+ * accepted as an id from another namespace.
+ */
+export function normalizeResearchArtifactLineage(output: Json): Json {
+  const record = safeRecord(output);
+  const executions = Array.isArray(record.capabilityExecutions) ? record.capabilityExecutions : [];
+  const persisted: PersistedRetrievalLineage[] = [];
+  for (const item of executions) {
+    const execution = safeRecord(item);
+    if (execution.capabilityId !== "web.search" || execution.status !== "success") continue;
+    const evidence = safeRecord(execution.evidence);
+    const resultId = typeof execution.resultId === "string" ? execution.resultId : "";
+    const evidenceId = typeof evidence.evidenceId === "string" ? evidence.evidenceId : "";
+    if (resultId === "" || evidenceId === "") continue;
+    const results = Array.isArray(safeRecord(execution.output).results) ? safeRecord(execution.output).results as unknown[] : [];
+    const urls = new Set<string>();
+    for (const result of results) {
+      const url = canonicalResearchSourceUrl(safeRecord(result).url);
+      if (url !== null) urls.add(url);
+    }
+    persisted.push({
+      resultId,
+      evidenceId,
+      idempotencyKey: typeof execution.idempotencyKey === "string" ? execution.idempotencyKey : "",
+      urls,
+    });
+  }
+
+  const sourceItems = Array.isArray(record.sources) ? record.sources : [];
+  const sourceById = new Map<number, JsonRecord>();
+  const canonicalSources = sourceItems.map((item) => {
+    const source = safeRecord(item);
+    if (typeof source.id !== "number") throw new Error("RESEARCH_ARTIFACT_SOURCE_ID_INVALID");
+    const url = canonicalResearchSourceUrl(source.url);
+    if (url === null) throw new Error(`RESEARCH_ARTIFACT_SOURCE_URL_INVALID:${source.id}`);
+    const matches = persisted.filter((entry) => entry.urls.has(url));
+    if (matches.length === 0) throw new Error(`RESEARCH_ARTIFACT_SOURCE_REFERENCE_UNRESOLVED:${source.id}`);
+    const normalized: JsonRecord = {
+      ...source,
+      canonicalUrl: url,
+      sourceLineage: {
+        capabilityResultIds: [...new Set(matches.map((entry) => entry.resultId))],
+        evidenceIds: [...new Set(matches.map((entry) => entry.evidenceId))],
+      },
+    };
+    sourceById.set(source.id, normalized);
+    return normalized;
+  });
+
+  const candidates = Array.isArray(record.candidateStories) ? record.candidateStories : [];
+  const canonicalCandidates = candidates.map((item) => {
+    const candidate = safeRecord(item);
+    const candidateId = typeof candidate.candidateId === "string" ? candidate.candidateId : "";
+    if (candidateId === "") throw new Error("RESEARCH_ARTIFACT_CANDIDATE_ID_INVALID");
+    const sourceIds = Array.isArray(candidate.sourceIds)
+      ? candidate.sourceIds.filter((id): id is number => typeof id === "number")
+      : [];
+    if (sourceIds.some((id) => !sourceById.has(id))) throw new Error(`RESEARCH_ARTIFACT_CANDIDATE_SOURCE_UNRESOLVED:${candidateId}`);
+    const candidateUrls = new Set(sourceIds.map((id) => canonicalResearchSourceUrl(sourceById.get(id)?.url)).filter((url): url is string => url !== null));
+    const marker = `verify-${candidateId.toLowerCase()}-`;
+    const verification = persisted.filter((entry) => {
+      const identity = `${entry.resultId} ${entry.idempotencyKey}`.toLowerCase();
+      return identity.includes(marker) && [...candidateUrls].some((url) => entry.urls.has(url));
+    });
+    const supportingEvidenceIds = [...new Set(verification.map((entry) => entry.evidenceId))];
+    return {
+      ...candidate,
+      sourceIds,
+      supportingEvidenceIds,
+      evidenceLineageValidated: supportingEvidenceIds.length > 0,
+    };
+  });
+
+  const citations = Array.isArray(record.citations) ? record.citations : [];
+  if (citations.some((citation) => !sourceById.has(Number(safeRecord(citation).sourceId)))) {
+    throw new Error("RESEARCH_ARTIFACT_CITATION_SOURCE_UNRESOLVED");
+  }
+  return { ...record, sources: canonicalSources, candidateStories: canonicalCandidates } as Json;
 }
 
 function rankToClass(rank: number): SourceAuthorityClass {
@@ -4118,26 +4583,73 @@ export function reclassifyResearchEvidence(artifactPayload: unknown): Reclassifi
  * artifact gate and CEO eligibility checks.
  */
 export function groundResearchReport(output: Json): Json {
-  const record = safeRecord(output);
+  const initialRecord = safeRecord(output);
+  // Both legacy V1 and Intelligence V2 persist a `researchPlan`.  Only the V2
+  // mission plan carries a mission identity; treating the legacy task plan as
+  // V2 incorrectly applies candidate-verification lineage rules to discovery-
+  // only V1 output and blocks otherwise valid canonical producer fixtures.
+  const isResearchV2 = typeof safeRecord(initialRecord.researchPlan).missionId === "string"
+    || initialRecord.synthesisContract === "amf-research-intelligence-v2";
+  const record = isResearchV2 ? safeRecord(normalizeResearchArtifactLineage(output)) : initialRecord;
   const executions = Array.isArray(record.capabilityExecutions) ? record.capabilityExecutions : [];
-  const search = executions.find(
-    (item) => safeRecord(item).capabilityId === "web.search" && item.status === "success",
+  const searches = executions.filter(
+    (item) => safeRecord(item).capabilityId === "web.search" && safeRecord(item).status === "success",
   );
-  if (search === undefined) return output;
-  const searchOutcome = safeRecord(search);
+  if (searches.length === 0) {
+    const synthesisSources = Array.isArray(record.sources) ? record.sources : [];
+    const synthesisCitations = Array.isArray(record.citations) ? record.citations : [];
+    const candidateStories = Array.isArray(record.candidateStories) ? record.candidateStories : [];
+    const synthesisStatus = typeof record.status === "string" ? record.status : undefined;
+    const sufficiency = evaluateResearchEvidenceSufficiency({ retrievalResults: [], synthesisSources, synthesisConfidence: record.confidence, synthesisCitations, candidateStories, synthesisStatus });
+    return {
+      ...record,
+      executionStatus: sufficiency.status === "INSUFFICIENT_EVIDENCE" ? "COMPLETED" : "FAILED",
+      evidenceStatus: sufficiency.status,
+      ceoEligibleCandidates: [],
+      evidenceQuality: {
+        retrievalCount: 0,
+        retrievalQuality: "EMPTY",
+        synthesisConfidence: typeof record.confidence === "number" ? record.confidence : null,
+        synthesisSourceCount: synthesisSources.length,
+        status: sufficiency.status === "INSUFFICIENT_EVIDENCE" ? "INSUFFICIENT_EVIDENCE" : "NEEDS_RESEARCH_RETRY",
+        evidenceStatus: sufficiency.status,
+        ceoEligible: false,
+        authorityBreakdown: sufficiency.authorityBreakdown,
+        candidateCount: sufficiency.candidateCount,
+        viableCandidates: sufficiency.viableCandidates,
+        sufficiencyReasons: sufficiency.reasons,
+      } as unknown as Json,
+      researchStatus: researchStatusForSufficiency(sufficiency),
+    };
+  }
+  const searchOutcome = safeRecord(searches[0]);
   const searchEvidence = safeRecord(searchOutcome.evidence);
-  const searchOutput = safeRecord(searchOutcome.output);
-  const results = Array.isArray(searchOutput.results) ? searchOutput.results : [];
+  const results = searches.flatMap((item) => {
+    const rows = safeRecord(safeRecord(item).output).results;
+    return Array.isArray(rows) ? rows : [];
+  });
   const providerInfo = {
     providerId: typeof searchEvidence.providerId === "string" ? searchEvidence.providerId : "web.search",
     resultCount: results.length,
-    evidenceId: typeof searchEvidence.evidenceId === "string" ? searchEvidence.evidenceId : "",
-    succeeded: searchEvidence.succeeded === true,
+    evidenceIds: searches.map((item) => safeRecord(safeRecord(item).evidence).evidenceId).filter((id): id is string => typeof id === "string"),
+    succeeded: searches.every((item) => safeRecord(safeRecord(item).evidence).succeeded === true),
   };
   const synthesisConfidence = typeof record.confidence === "number" ? record.confidence : null;
   const synthesisSources = Array.isArray(record.sources) ? record.sources : [];
   const synthesisCitations = Array.isArray(record.citations) ? record.citations : [];
-  const candidateStories = Array.isArray(record.candidateStories) ? record.candidateStories : [];
+  const authoredCandidates = Array.isArray(record.candidateStories) ? record.candidateStories : [];
+  // V1 uses one governed retrieval for discovery and corroboration. Its
+  // candidate source ids inherit the successful capability evidence identity
+  // only when every claimed source resolves to that grounded result set. V2
+  // retains candidate-specific verification normalization above.
+  const candidateStories = isResearchV2 ? authoredCandidates : authoredCandidates.map((candidate) => {
+    const item = safeRecord(candidate);
+    const sourceIds = Array.isArray(item.sourceIds) ? item.sourceIds.filter((id): id is number => typeof id === "number") : [];
+    const resolvable = sourceIds.length > 0 && sourceIds.every((id) => synthesisSources.some((source) => safeRecord(source).id === id));
+    return resolvable
+      ? { ...item, supportingEvidenceIds: providerInfo.evidenceIds, evidenceLineageValidated: providerInfo.evidenceIds.length > 0 }
+      : item;
+  });
   const synthesisStatus = typeof record.status === "string" ? record.status : undefined;
   if (results.length === 0) {
     // The provider succeeded but returned zero results: report it as such and
@@ -4153,6 +4665,7 @@ export function groundResearchReport(output: Json): Json {
       metadata: { ...safeRecord(record.metadata), providerInfo },
       evidenceQuality: {
         ...evaluation,
+        status: sufficiency.status === "INSUFFICIENT_EVIDENCE" ? "INSUFFICIENT_EVIDENCE" : evaluation.status,
         synthesisConfidence: synthesisConfidence ?? evaluation.synthesisConfidence,
         evidenceStatus: sufficiency.status,
         ceoEligible: sufficiency.ceoEligible,
@@ -4166,7 +4679,10 @@ export function groundResearchReport(output: Json): Json {
   }
   const evaluation = evaluateResearchEvidenceQuality({ retrievalResults: results, synthesisSources, synthesisConfidence, synthesisCitations });
   const sufficiency = evaluateResearchEvidenceSufficiency({ retrievalResults: results, synthesisSources, synthesisConfidence, synthesisCitations, candidateStories, synthesisStatus });
-  const sources = results.map((row, index) => {
+  // V2 synthesis owns the artifact-local source table.  Those source ids are
+  // canonicalized against persisted retrieval URLs above and must never be
+  // replaced by the first discovery result set (which changes their meaning).
+  const sources = isResearchV2 ? synthesisSources : results.map((row, index) => {
     const result = safeRecord(row);
     return {
       id: index + 1,
@@ -4176,13 +4692,14 @@ export function groundResearchReport(output: Json): Json {
       dateAccessed: typeof searchEvidence.executedAt === "string" ? searchEvidence.executedAt : nowIso(),
     };
   });
-  const citations = sources.map((source) => ({ sourceId: source.id, text: source.snippet.slice(0, 120) }));
+  const citations = isResearchV2 ? synthesisCitations : sources.map((source) => ({ sourceId: safeRecord(source).id, text: String(safeRecord(source).snippet ?? "").slice(0, 120) }));
   const usable = evaluation.status === "USABLE";
   return {
     ...record,
+    candidateStories,
     // Preserve the synthesis narrative when it explicitly rejected the evidence;
     // only use the grounded summary when the synthesis actually used evidence.
-    summary: usable ? `Research summary grounded in ${sources.length} real web search results from ${providerInfo.providerId}.` : String(record.summary ?? ""),
+    summary: isResearchV2 ? String(record.summary ?? "") : usable ? `Research summary grounded in ${sources.length} real web search results from ${providerInfo.providerId}.` : String(record.summary ?? ""),
     sources,
     citations,
     // Never invent factual confidence: retrieval attachment alone must not raise
@@ -4198,6 +4715,14 @@ export function groundResearchReport(output: Json): Json {
       viableCandidates: sufficiency.viableCandidates,
       sufficiencyReasons: sufficiency.reasons,
     } as unknown as Json,
+    ceoEligibleCandidates: sufficiency.ceoEligible
+      ? candidateStories.filter((candidate) => {
+        const item = safeRecord(candidate);
+        return item.recommendedForProduction === true
+          && safeRecord(item.factualVerification).status === "STRONG"
+          && item.evidenceLineageValidated === true;
+      }).map((candidate) => String(safeRecord(candidate).candidateId))
+      : [],
     researchStatus: researchStatusForSufficiency(sufficiency),
   };
 }

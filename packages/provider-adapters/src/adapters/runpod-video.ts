@@ -22,7 +22,7 @@ import type {
   VideoGenerationRequest,
 } from "@ai-media-factory/tool-framework";
 import { sendHttp, sendHttpWithRetry } from "../core/http.js";
-import { providerConfigError, providerValidationError } from "../core/errors.js";
+import { isProviderError, providerConfigError, providerValidationError, SubmissionOutcomeUnknownError } from "../core/errors.js";
 import { assertPositive, envNumber, optionalEnv } from "../core/config.js";
 import { asString, isRecord } from "../core/guards.js";
 import type { OperationSink } from "../core/observability.js";
@@ -32,11 +32,26 @@ export interface RunPodVideoConfig {
   apiKey: string;
   endpointId: string;
   baseUrl?: string;
+  /** @deprecated Legacy shared timeout. Used only as a compatibility fallback. */
   timeoutMs?: number;
+  submissionAckTimeoutMs?: number;
   pollIntervalMs?: number;
+  /** @deprecated Legacy generation timeout. Used only as a compatibility fallback. */
   maxWaitMs?: number;
+  generationTimeoutMs?: number;
+  statusRequestTimeoutMs?: number;
+  resultDownloadTimeoutMs?: number;
   pollRetries?: number;
   onOperation?: OperationSink;
+}
+
+export interface RunPodVideoReceipt {
+  status: "RUNNING" | "COMPLETED" | "FAILED";
+  client_execution_id: string;
+  provider_job_id?: string;
+  source_input_hash?: string;
+  config_fingerprint?: string;
+  video?: string;
 }
 
 const DEFAULT_BASE_URL = "https://api.runpod.ai/v2";
@@ -61,9 +76,11 @@ export class RunPodWanVideoAdapter implements VideoGenerationProvider {
   private readonly apiKey: string;
   private readonly endpointId: string;
   private readonly baseUrl: string;
-  private readonly timeoutMs: number;
+  private readonly submissionAckTimeoutMs: number;
   private readonly pollIntervalMs: number;
-  private readonly maxWaitMs: number;
+  private readonly generationTimeoutMs: number;
+  private readonly statusRequestTimeoutMs: number;
+  private readonly resultDownloadTimeoutMs: number;
   private readonly pollRetries: number;
   private readonly onOperation: OperationSink;
 
@@ -77,14 +94,35 @@ export class RunPodWanVideoAdapter implements VideoGenerationProvider {
     this.apiKey = config.apiKey.trim();
     this.endpointId = config.endpointId.trim();
     this.baseUrl = (config.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, "");
-    this.timeoutMs = config.timeoutMs ?? 30_000;
+    this.submissionAckTimeoutMs = config.submissionAckTimeoutMs ?? config.timeoutMs ?? 300_000;
     this.pollIntervalMs = config.pollIntervalMs ?? 4_000;
-    this.maxWaitMs = config.maxWaitMs ?? 600_000;
+    this.generationTimeoutMs = config.generationTimeoutMs ?? config.maxWaitMs ?? 900_000;
+    this.statusRequestTimeoutMs = config.statusRequestTimeoutMs ?? config.timeoutMs ?? 30_000;
+    this.resultDownloadTimeoutMs = config.resultDownloadTimeoutMs ?? 120_000;
     this.pollRetries = config.pollRetries ?? 2;
-    assertPositive("self-hosted-video", this.timeoutMs, "timeoutMs");
+    assertPositive("self-hosted-video", this.submissionAckTimeoutMs, "submissionAckTimeoutMs");
     assertPositive("self-hosted-video", this.pollIntervalMs, "pollIntervalMs");
-    assertPositive("self-hosted-video", this.maxWaitMs, "maxWaitMs");
+    assertPositive("self-hosted-video", this.generationTimeoutMs, "generationTimeoutMs");
+    assertPositive("self-hosted-video", this.statusRequestTimeoutMs, "statusRequestTimeoutMs");
+    assertPositive("self-hosted-video", this.resultDownloadTimeoutMs, "resultDownloadTimeoutMs");
     this.onOperation = sinkOf(config.onOperation);
+  }
+
+  /** Safe, secret-free timing policy for preflight, diagnostics, and tests. */
+  getTimingPolicy(): Readonly<{
+    submissionAckTimeoutMs: number;
+    generationTimeoutMs: number;
+    pollIntervalMs: number;
+    statusRequestTimeoutMs: number;
+    resultDownloadTimeoutMs: number;
+  }> {
+    return Object.freeze({
+      submissionAckTimeoutMs: this.submissionAckTimeoutMs,
+      generationTimeoutMs: this.generationTimeoutMs,
+      pollIntervalMs: this.pollIntervalMs,
+      statusRequestTimeoutMs: this.statusRequestTimeoutMs,
+      resultDownloadTimeoutMs: this.resultDownloadTimeoutMs,
+    });
   }
 
   async generate(request: VideoGenerationRequest): Promise<VideoGenerationProviderResponse> {
@@ -121,28 +159,52 @@ export class RunPodWanVideoAdapter implements VideoGenerationProvider {
       steps,
       cfg,
       seed,
+      client_execution_id: request.clientExecutionId,
+      idempotency_key: request.idempotencyKey,
+      configuration_fingerprint: request.configurationFingerprint,
+      source_input_hash: request.sourceInputHash,
     };
+    for (const [key, value] of Object.entries(input)) if (value === undefined) delete input[key];
     if (imageBase64 !== undefined && imageBase64.length > 0) {
       input.image_base64 = imageBase64;
     }
 
-    const submitRes = await sendHttp(
-      {
-        method: "POST",
-        url: `${this.baseUrl}/${this.endpointId}/run`,
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          "Content-Type": "application/json",
+    let submitRes;
+    try {
+      submitRes = await sendHttp(
+        {
+          method: "POST",
+          url: `${this.baseUrl}/${this.endpointId}/run`,
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            input,
+            policy: {
+              executionTimeout: this.generationTimeoutMs,
+              ttl: Math.max(this.generationTimeoutMs + 900_000, 3_600_000),
+            },
+          }),
         },
-        body: JSON.stringify({ input }),
-      },
-      {
-        providerId: this.providerId,
-        operation: "submit",
-        timeoutMs: this.timeoutMs,
-        onOperation: this.onOperation,
-      },
-    );
+        {
+          providerId: this.providerId,
+          operation: "submit",
+          timeoutMs: this.submissionAckTimeoutMs,
+          onOperation: this.onOperation,
+          requestKey: request.clientExecutionId ?? request.idempotencyKey,
+        },
+      );
+    } catch (error) {
+      if (isProviderError(error) && error.category === "TIMEOUT") {
+        throw new SubmissionOutcomeUnknownError(
+          this.providerId,
+          "submit",
+          `Submission response timed out after ${this.submissionAckTimeoutMs}ms; provider acceptance and job id are unknown. Reconciliation is required; do not retry the submission.`,
+        );
+      }
+      throw error;
+    }
 
     const submitJson = await this.readJson(submitRes, "submit");
     const jobId = asString(submitJson.id) ?? asString((submitJson as unknown as Record<string, unknown>).jobId);
@@ -158,7 +220,7 @@ export class RunPodWanVideoAdapter implements VideoGenerationProvider {
       throw providerValidationError(this.providerId, "generate", `Provider job ${immediateStatus}: ${this.readError(submitJson)}`);
     }
 
-    const deadline = Date.now() + this.maxWaitMs;
+    const deadline = Date.now() + this.generationTimeoutMs;
     while (true) {
       if (Date.now() >= deadline) {
         throw providerValidationError(this.providerId, "generate", "Provider job timed out before completion");
@@ -176,7 +238,7 @@ export class RunPodWanVideoAdapter implements VideoGenerationProvider {
         {
           providerId: this.providerId,
           operation: "poll",
-          timeoutMs: this.timeoutMs,
+          timeoutMs: this.statusRequestTimeoutMs,
           maxRetries: this.pollRetries,
           onOperation: this.onOperation,
           requestKey: jobId,
@@ -196,6 +258,62 @@ export class RunPodWanVideoAdapter implements VideoGenerationProvider {
       }
       // IN_QUEUE / IN_PROGRESS → continue
     }
+  }
+
+  /**
+   * Reconciliation control operation. This creates no generation request and
+   * must not be charged as video generation. The provider handler reads its
+   * durable receipt store by the runtime-owned client execution identity.
+   */
+  async lookupByClientExecutionId(clientExecutionId: string): Promise<RunPodVideoReceipt | null> {
+    const identity = clientExecutionId.trim();
+    if (!identity) throw providerValidationError(this.providerId, "receipt-lookup", "clientExecutionId is required");
+    const submit = await sendHttp({
+      method: "POST",
+      url: `${this.baseUrl}/${this.endpointId}/run`,
+      headers: { Authorization: `Bearer ${this.apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ input: { operation: "lookup_receipt", client_execution_id: identity } }),
+    }, {
+      providerId: this.providerId,
+      operation: "receipt-lookup-submit",
+      timeoutMs: this.submissionAckTimeoutMs,
+      onOperation: this.onOperation,
+      requestKey: identity,
+    });
+    const submitted = await this.readJson(submit, "receipt-lookup-submit");
+    const jobId = asString(submitted.id) ?? asString(submitted.jobId);
+    if (!jobId) throw providerValidationError(this.providerId, "receipt-lookup-submit", "Provider did not return a lookup job id");
+    const deadline = Date.now() + this.generationTimeoutMs;
+    while (Date.now() < deadline) {
+      await this.sleep(this.pollIntervalMs);
+      const response = await sendHttpWithRetry({
+        method: "GET",
+        url: `${this.baseUrl}/${this.endpointId}/status/${encodeURIComponent(jobId)}`,
+        headers: { Authorization: `Bearer ${this.apiKey}`, Accept: "application/json" },
+      }, {
+        providerId: this.providerId,
+        operation: "receipt-lookup-status",
+        timeoutMs: this.statusRequestTimeoutMs,
+        maxRetries: this.pollRetries,
+        onOperation: this.onOperation,
+        requestKey: identity,
+      });
+      const json = await this.readJson(response, "receipt-lookup-status");
+      const status = asString(json.status);
+      if (status === "COMPLETED") {
+        const output = isRecord(json.output) ? json.output : {};
+        if (output.found === false || output.receipt === null) return null;
+        const receipt = isRecord(output.receipt) ? output.receipt : output;
+        const receiptStatus = asString(receipt.status);
+        const receiptIdentity = asString(receipt.client_execution_id);
+        if (!receiptIdentity || receiptIdentity !== identity || !receiptStatus || !["RUNNING", "COMPLETED", "FAILED"].includes(receiptStatus)) {
+          throw providerValidationError(this.providerId, "receipt-lookup", "Provider receipt failed identity validation");
+        }
+        return receipt as unknown as RunPodVideoReceipt;
+      }
+      if (status && TERMINAL_FAILED.has(status)) throw providerValidationError(this.providerId, "receipt-lookup", `Provider receipt lookup ${status}`);
+    }
+    throw providerValidationError(this.providerId, "receipt-lookup", "Provider receipt lookup exceeded generation timeout");
   }
 
   private toCompleted(jobId: string, b64: string, request: VideoGenerationRequest): VideoGenerationProviderResponse {
@@ -229,14 +347,20 @@ export class RunPodWanVideoAdapter implements VideoGenerationProvider {
     const output = isRecord(json.output) ? json.output : json;
     if (isRecord(output)) {
       const v = asString(output.video) ?? asString(output.data) ?? asString((output as unknown as Record<string, unknown>).video_base64);
-      if (v !== undefined && v.trim().length > 0) return v.trim();
+      if (v !== undefined && v.trim().length > 0) return this.stripVideoDataUrl(v.trim());
       // Alternative: output is array with video?
       if (Array.isArray(output.videos) && output.videos.length > 0 && isRecord(output.videos[0])) {
         const d = asString((output.videos[0] as Record<string, unknown>).video ?? (output.videos[0] as Record<string, unknown>).data);
-        if (d) return d.trim();
+        if (d) return this.stripVideoDataUrl(d.trim());
       }
     }
     return undefined;
+  }
+
+  private stripVideoDataUrl(value: string): string {
+    if (!value.startsWith("data:")) return value;
+    const comma = value.indexOf(",");
+    return comma >= 0 ? value.slice(comma + 1).trim() : value;
   }
 
   private readError(json: unknown): string {
@@ -280,9 +404,11 @@ export function runPodVideoAdapterFromEnv(onOperation?: OperationSink): RunPodWa
     apiKey,
     endpointId,
     baseUrl: optionalEnv("RUNPOD_BASE_URL", DEFAULT_BASE_URL),
-    timeoutMs: envNumber("self-hosted-video", "RUNPOD_VIDEO_TIMEOUT_MS", 30_000),
+    submissionAckTimeoutMs: envNumber("self-hosted-video", "RUNPOD_VIDEO_SUBMISSION_ACK_TIMEOUT_MS", envNumber("self-hosted-video", "RUNPOD_VIDEO_TIMEOUT_MS", 300_000)),
     pollIntervalMs: envNumber("self-hosted-video", "RUNPOD_VIDEO_POLL_INTERVAL_MS", 4_000),
-    maxWaitMs: envNumber("self-hosted-video", "RUNPOD_VIDEO_MAX_WAIT_MS", 600_000),
+    generationTimeoutMs: envNumber("self-hosted-video", "RUNPOD_VIDEO_GENERATION_TIMEOUT_MS", envNumber("self-hosted-video", "RUNPOD_VIDEO_MAX_WAIT_MS", 900_000)),
+    statusRequestTimeoutMs: envNumber("self-hosted-video", "RUNPOD_VIDEO_STATUS_TIMEOUT_MS", 30_000),
+    resultDownloadTimeoutMs: envNumber("self-hosted-video", "RUNPOD_VIDEO_RESULT_DOWNLOAD_TIMEOUT_MS", 120_000),
     pollRetries: envNumber("self-hosted-video", "RUNPOD_VIDEO_POLL_RETRIES", 2),
     onOperation,
   });

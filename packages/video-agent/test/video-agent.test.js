@@ -71,6 +71,8 @@ function input(artifacts, extra = {}) {
     objective: "Generate a video for the approved article",
     taskDescription: "Generate a video",
     validatedArtifacts: artifacts,
+    visualArtifact: { artifactId: "a-thumb", sceneId: "scene-001", artifactPathOrReference: "https://cdn.example.com/img-0001.png", provider: "fake-image", generationId: "img-0001", integrityStatus: "UNKNOWN" },
+    wanAuthorization: { authorizationId: "auth-1", workflowId: "workflow-1", sceneId: "scene-001", artifactId: "a-thumb", semanticVerdict: "PASS", technicalVerdict: "PASS", humanApprovalId: "human-1", authorizedAt: "2026-08-14T00:00:00.000Z", policyVersion: "pre-wan-v1" },
     ...extra,
   };
 }
@@ -116,6 +118,26 @@ function boundary(result) {
 }
 
 describe("VideoAgent", () => {
+  it("blocks the production Wan boundary when authorization is missing", async () => {
+    let invoked = false;
+    const agent = createVideoAgent({ config: {}, capabilityExecution: { executeCapability: async () => { invoked = true; return capCompleted(); } } });
+    const result = await agent.execute({ context: {}, input: input(baseArtifacts(), { wanAuthorization: undefined }) }, signal);
+    strictEqual(result.output.status, "blocked");
+    ok(String(result.output.summary).includes("MISSING_WAN_AUTHORIZATION"));
+    strictEqual(invoked, false);
+  });
+
+  it("blocks a stale authorization when the generated visual identity changes", async () => {
+    let invoked = false;
+    const agent = createVideoAgent({ config: {}, capabilityExecution: { executeCapability: async () => { invoked = true; return capCompleted(); } } });
+    const result = await agent.execute({ context: {}, input: input(baseArtifacts(), {
+      visualArtifact: { artifactId: "a-thumb-regenerated", sceneId: "scene-001", artifactPathOrReference: "https://cdn.example.com/new.png", provider: "fake-image", generationId: "img-0002", integrityStatus: "UNKNOWN" },
+    }) }, signal);
+    strictEqual(result.output.status, "blocked");
+    ok(String(result.output.summary).includes("BLOCKED_STALE_APPROVAL"));
+    strictEqual(invoked, false);
+  });
+
   it("produces a completed video report with matching completion evidence", async () => {
     const agent = createVideoAgent({ config: {}, capabilityExecution: boundary(capCompleted()) });
     const result = await agent.execute({ context: {}, input: input(baseArtifacts()) }, signal);
@@ -140,11 +162,11 @@ describe("VideoAgent", () => {
     strictEqual(capturedRequest.input.durationSeconds, 30);
   });
 
-  it("blocks when the thumbnail is missing (no video generation requested)", async () => {
+  it("blocks when both the governed visual and thumbnail fallback are missing (no video generation requested)", async () => {
     let invoked = false;
     const agent = createVideoAgent({ config: {}, capabilityExecution: { executeCapability: async () => { invoked = true; return capCompleted(); } } });
     const noThumb = baseArtifacts().filter((a) => a.kind !== "thumbnail_report");
-    const result = await agent.execute({ context: {}, input: input(noThumb) }, signal);
+    const result = await agent.execute({ context: {}, input: input(noThumb, { visualArtifact: undefined, wanAuthorization: undefined }) }, signal);
     strictEqual(result.output.status, "blocked");
     strictEqual(result.output.executionEvidencePresent, false);
     strictEqual(invoked, false);

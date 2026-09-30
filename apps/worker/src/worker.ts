@@ -15,7 +15,8 @@
 
 import type { PersistencePort, WorkflowDefinition, DefaultWorkflowEngine, ApprovalDecision } from "@ai-media-factory/workflow-engine";
 import type { AgentExecutorPort, Json } from "@ai-media-factory/shared";
-import type { PostgresQueue, WorkflowJob, RequestVisualIterationInput, VisualIterationRecord } from "@ai-media-factory/database";
+import type { PostgresQueue, WorkflowJob, RequestVisualIterationInput, VisualIterationRecord, TargetedVerificationDispatchRecord, TargetedReevaluationRecoveryRecord } from "@ai-media-factory/database";
+import type { TargetedVerificationExecutionResult, TargetedReevaluationRecoveryExecutionResult } from "./targeted-verification.js";
 import { OWNER_PRE_MEDIA_GATE_STEP_ID, withPreProductionOwnerGate } from "@ai-media-factory/orchestrator";
 import { buildDefaultEngine } from "./engine.js";
 import { waitForTerminalState } from "./engine.js";
@@ -91,9 +92,13 @@ export interface WorkflowWorkerDeps {
   readonly executor: AgentExecutorPort;
   /** Reclaim a running job older than this (ms) after a worker crash. */
   readonly orphanStaleMs?: number;
+  readonly workerInstanceId?: string;
+  readonly jobLeaseHeartbeatMs?: number;
   readonly pollMs?: number;
   readonly buildEngine?: (definition: WorkflowDefinition) => DefaultWorkflowEngine;
-  readonly resolveCommandConfiguration?: (projectId: string) => Promise<Record<string, { provider: string | null; model: string | null; source: string }>>;
+  readonly resolveCommandConfiguration?: (projectId: string) => Promise<Record<string, { provider: string | null; model: string | null; source: string; routingVersionId?: string; routingScope?: string; priceSnapshotId?: string }>>;
+  /** Production wiring supplies the canonical route/catalog/context preflight. */
+  readonly preflightGovernedCommand?: (input: { projectId: string; role: string; provider: "agentrouter" | "openrouter"; model: string; routingVersionId?: string; prompt: string; system: string; outputTokens: number }) => Promise<{ fingerprint: string }>;
   /**
    * Strategic Operating Layer V1 resolver. When wired, governed commands
    * resolve task-aware strategic context + immutable snapshot per agent.
@@ -122,6 +127,20 @@ export interface WorkflowWorkerDeps {
    */
   readonly visualIterations?: {
     requestVisualIteration(input: RequestVisualIterationInput): Promise<{ created: boolean; iteration: VisualIterationRecord }>;
+  };
+  /** Distinct Research TARGETED_VERIFICATION job path; never enters the normal workflow engine. */
+  readonly targetedVerification?: {
+    byJobId(jobId: number): Promise<TargetedVerificationDispatchRecord | null>;
+    markRunning(dispatchId: string): Promise<boolean>;
+    execute(dispatch: TargetedVerificationDispatchRecord): Promise<TargetedVerificationExecutionResult>;
+    settle(dispatchId: string, status: "COMPLETED" | "FAILED", revisionId?: string, errorCode?: string): Promise<void>;
+  };
+  /** Retrieval-free continuation of a failed targeted reevaluation. */
+  readonly targetedReevaluationRecovery?: {
+    byJobId(jobId:number):Promise<TargetedReevaluationRecoveryRecord|null>;
+    markRunning(recoveryId:string):Promise<boolean>;
+    execute(recovery:TargetedReevaluationRecoveryRecord):Promise<TargetedReevaluationRecoveryExecutionResult>;
+    settle(recoveryId:string,status:"COMPLETED"|"FAILED",revisionId?:string,errorCode?:string,routeSnapshot?:Record<string,unknown>):Promise<void>;
   };
 }
 
@@ -154,9 +173,14 @@ export class WorkflowWorker {
    * queue was empty. Used directly by tests; runLoop() drives it continuously.
    */
   async runOnce(): Promise<boolean> {
-    const job = await this.deps.queue.claimNextJob();
+    const job = await this.deps.queue.claimNextJob(this.deps.workerInstanceId);
     if (job === null) return false;
-    await this.process(job);
+    const heartbeatMs = this.deps.jobLeaseHeartbeatMs ?? Math.max(1_000, Math.floor(this.staleMs / 3));
+    const heartbeat = this.deps.workerInstanceId
+      ? setInterval(() => { void this.deps.queue.heartbeatJob(job.jobId, this.deps.workerInstanceId!); }, heartbeatMs)
+      : null;
+    if (heartbeat && typeof heartbeat.unref === "function") heartbeat.unref();
+    try { await this.process(job); } finally { if (heartbeat) clearInterval(heartbeat); }
     return true;
   }
 
@@ -173,6 +197,10 @@ export class WorkflowWorker {
   }
 
   private async process(job: WorkflowJob): Promise<void> {
+    const reevaluationRecovery=await this.deps.targetedReevaluationRecovery?.byJobId(job.jobId)??null;
+    if(reevaluationRecovery!==null)return this.processTargetedReevaluationRecovery(job,reevaluationRecovery);
+    const targeted = await this.deps.targetedVerification?.byJobId(job.jobId) ?? null;
+    if (targeted !== null) return this.processTargetedVerification(job, targeted);
     const submission = await this.deps.queue.loadSubmissionByWorkflow(job.workflowId);
     if (submission === null) {
       await this.deps.queue.acknowledge(job.jobId, "failed", "submission not found");
@@ -266,6 +294,18 @@ export class WorkflowWorker {
       } else if (state === "BOUNDED_STOP") {
         // Owner-authorized bounded execution halted after its stopAfter step.
         // Successful bounded pause, not a failure: no downstream step ran.
+        const boundedInstance = await this.deps.persistence.loadWorkflow(job.workflowId);
+        const bounded = boundedInstance?.context.data.boundedStop as Record<string, unknown> | undefined;
+        const reason = typeof bounded?.reason === "string" ? bounded.reason : "";
+        if (reason.startsWith("CEO_") && this.deps.control && submission.brandId) {
+          const approvalId = `approval-${job.workflowId}-ceo-recommendation`;
+          if (!await this.deps.control.getApproval(approvalId)) await this.deps.control.createApproval({
+            approvalId, projectId: submission.brandId, targetType: "research_decision", targetId: `${job.workflowId}:ceo-recommendation`,
+            agentRecommendation: { workflowId: job.workflowId, stepId: "ceo-recommendation", gateType: "OWNER_RESEARCH_DECISION_REQUIRED", decision: reason.slice(4), required: "OWNER_DECISION" },
+            agentConfidence: null, evidenceRefs: (await this.deps.persistence.listArtifacts(job.workflowId)).map((artifact) => artifact.artifactId),
+            status: "PENDING", supersedes: null, supersededBy: null, createdAt: new Date().toISOString(),
+          });
+        }
         await this.deps.queue.updateSubmissionStatus(job.workflowId, "bounded_stop");
         await this.deps.queue.acknowledge(job.jobId, "succeeded");
       } else if (state === "REVISION_REQUIRED" || state === "BUSINESS_BLOCKED") {
@@ -407,6 +447,27 @@ export class WorkflowWorker {
         error instanceof Error ? error.message : String(error)
       );
     }
+  }
+
+  private async processTargetedVerification(job: WorkflowJob, dispatch: TargetedVerificationDispatchRecord): Promise<void> {
+    if (!this.deps.targetedVerification) throw new Error("TARGETED_VERIFICATION_RUNTIME_NOT_CONFIGURED");
+    try {
+      const claimed = await this.deps.targetedVerification.markRunning(dispatch.dispatchId);
+      if (!claimed) throw new Error("TARGETED_VERIFICATION_DISPATCH_NOT_CLAIMABLE");
+      const result = await this.deps.targetedVerification.execute(dispatch);
+      await this.deps.targetedVerification.settle(dispatch.dispatchId, "COMPLETED", result.revisionId);
+      await this.deps.queue.acknowledge(job.jobId, "succeeded");
+    } catch (error) {
+      const code = error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300);
+      await this.deps.targetedVerification.settle(dispatch.dispatchId, "FAILED", undefined, code);
+      await this.deps.queue.acknowledge(job.jobId, "failed", code);
+    }
+  }
+
+  private async processTargetedReevaluationRecovery(job:WorkflowJob,recovery:TargetedReevaluationRecoveryRecord):Promise<void>{
+    if(!this.deps.targetedReevaluationRecovery)throw new Error("TARGETED_REEVALUATION_RECOVERY_RUNTIME_NOT_CONFIGURED");
+    try{if(!await this.deps.targetedReevaluationRecovery.markRunning(recovery.recoveryId))throw new Error("TARGETED_REEVALUATION_RECOVERY_NOT_CLAIMABLE");const result=await this.deps.targetedReevaluationRecovery.execute(recovery);await this.deps.targetedReevaluationRecovery.settle(recovery.recoveryId,"COMPLETED",result.revisionId,undefined,result.route);await this.deps.queue.acknowledge(job.jobId,"succeeded");}
+    catch(error){const code=error instanceof Error?error.message.slice(0,300):String(error).slice(0,300);await this.deps.targetedReevaluationRecovery.settle(recovery.recoveryId,"FAILED",undefined,code);await this.deps.queue.acknowledge(job.jobId,"failed",code);}
   }
 
   /**
@@ -565,12 +626,12 @@ export class WorkflowWorker {
       const overrides = this.deps.resolveCommandConfiguration ? await this.deps.resolveCommandConfiguration(projectId) : {};
       const configFor = (agentId: string): EffectiveRuntimeConfig => {
         const scoped = overrides[agentId] ?? overrides["*"];
-        const provider = scoped?.provider ?? process.env.TEXT_AGENT_PROVIDER?.trim().toLowerCase();
-        const model = scoped?.model ?? (provider === "openrouter" ? process.env.OPENROUTER_DEFAULT_MODEL : process.env.AGENT_ROUTER_DEFAULT_MODEL ?? process.env.AGENTROUTER_DEFAULT_MODEL ?? "gpt-5.6-sol");
+        const provider = scoped?.provider;
+        const model = scoped?.model;
         if ((provider !== "agentrouter" && provider !== "openrouter") || !model) throw new Error("GOVERNED_PROVIDER_UNAVAILABLE");
-        return { provider, model, source: scoped?.source === "AGENT" ? "AGENT" : scoped?.source === "PROJECT" ? "PROJECT" : "GLOBAL" };
+        return { provider, model, source: scoped?.source === "AGENT" ? "AGENT" : scoped?.source === "PROJECT" ? "PROJECT" : "GLOBAL", routingVersionId: scoped?.routingVersionId, routingScope: scoped?.routingScope, priceSnapshotId: scoped?.priceSnapshotId };
       };
-      const runtime = new GovernedAgentRuntime(this.deps.persistence, this.deps.governedExecute);
+      const runtime = new GovernedAgentRuntime(this.deps.persistence, this.deps.governedExecute, this.deps.preflightGovernedCommand);
       // Strategic Operating Layer V1: per-agent task-aware context + snapshot.
       // Without the wired resolver this is exactly the legacy approved context.
       let operational: Record<string, Json> | null = null;

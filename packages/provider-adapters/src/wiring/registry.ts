@@ -8,7 +8,9 @@
 import {
   ANALYTICS_CAPABILITY_ID,
   IMAGE_GENERATION_CAPABILITY_ID,
+  MEDIA_COMPOSE_CAPABILITY_ID,
   PUBLISH_CAPABILITY_ID,
+  TIMELINE_PLAN_CAPABILITY_ID,
   TTS_GENERATION_CAPABILITY_ID,
   VIDEO_GENERATION_CAPABILITY_ID,
   WEB_SEARCH_CAPABILITY_ID,
@@ -64,8 +66,10 @@ export const PROVIDER_CAPABILITIES: readonly CapabilityDescriptor[] = [
     inputSchema: {
       type: "object",
       properties: {
-        prompt: text(1000),
-        negativePrompt: text(1000),
+        // Transport contract is larger than the per-provider defensive policy;
+        // active provider policy still enforces its own bounded limit.
+        prompt: text(4000),
+        negativePrompt: text(4000),
         width: positiveInt(2048),
         height: positiveInt(2048),
         aspectRatio: { type: "string", enum: ["16:9", "9:16", "4:3", "3:4", "1:1"] },
@@ -120,7 +124,9 @@ export const PROVIDER_CAPABILITIES: readonly CapabilityDescriptor[] = [
     inputSchema: {
       type: "object",
       properties: {
-        assetId: text(500),
+        finalMediaArtifactId: text(500),
+        finalMediaSha256: text(64),
+        mediaTransportRef: { type: "object" },
         title: text(200),
         description: text(1000),
         tags: { type: "array", items: text(30), maxItems: 30 },
@@ -131,7 +137,7 @@ export const PROVIDER_CAPABILITIES: readonly CapabilityDescriptor[] = [
           },
         },
       },
-      required: ["assetId", "title"],
+      required: ["finalMediaArtifactId", "finalMediaSha256", "mediaTransportRef", "title"],
       additionalProperties: false,
     },
     outputSchema: {
@@ -179,6 +185,77 @@ export const PROVIDER_CAPABILITIES: readonly CapabilityDescriptor[] = [
     },
   },
   {
+    capabilityId: MEDIA_COMPOSE_CAPABILITY_ID,
+    description:
+      "Compose a video MP4 and narration audio into a final MP4 via deterministic local FFmpeg. Validates inputs with ffprobe, muxes with stream copy for video and AAC for audio.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        video: text(500),
+        audio: text(500),
+        outputFormat: { type: "string", enum: ["mp4"] },
+        audioStrategy: { type: "string", enum: ["shortest", "trim", "pad"] },
+        preserveVideoAudio: { type: "boolean" },
+      },
+      required: ["video", "audio"],
+      additionalProperties: false,
+    },
+    outputSchema: {
+      type: "object",
+      properties: {
+        mediaId: { type: "string" },
+        status: { type: "string" },
+        providerId: { type: "string" },
+        output: {
+          type: "object",
+          properties: {
+            mimeType: { type: "string" },
+            path: { type: "string" },
+            bytes: { type: "integer", minimum: 1 },
+            sha256: { type: "string" },
+          },
+          required: ["mimeType", "path", "bytes", "sha256"],
+        },
+      },
+      required: ["mediaId", "status", "providerId", "output"],
+    },
+  },
+  {
+    capabilityId: TIMELINE_PLAN_CAPABILITY_ID,
+    description:
+      "Plan a scene timeline for narration: deterministic semantic segmentation with visual coverage guarantees, zero external calls.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        script: text(10000),
+        narrationDurationMs: { type: "integer", minimum: 500, maximum: 300000 },
+        language: text(16),
+        dialect: text(16),
+        audience: text(32),
+        culturalContext: text(32),
+        visualStyle: text(64),
+        maxSceneDurationMs: { type: "integer", minimum: 1000, maximum: 10000 },
+        minSceneDurationMs: { type: "integer", minimum: 1000, maximum: 10000 },
+        preferredClipDurationMs: { type: "integer", minimum: 1000, maximum: 30000 },
+        allowPeople: { type: "boolean" },
+        allowTalkingHead: { type: "boolean" },
+      },
+      required: ["script", "narrationDurationMs"],
+      additionalProperties: false,
+    },
+    outputSchema: {
+      type: "object",
+      properties: {
+        timelineId: { type: "string" },
+        status: { type: "string" },
+        sceneCount: { type: "integer", minimum: 1 },
+        plannedVisualDurationMs: { type: "integer", minimum: 1 },
+        coverageRatio: { type: "number", minimum: 1 },
+      },
+      required: ["timelineId", "status", "sceneCount", "plannedVisualDurationMs", "coverageRatio"],
+    },
+  },
+  {
     capabilityId: ANALYTICS_CAPABILITY_ID,
     description:
       "Fetch analytics for a published video and return the provider-confirmed metrics. Never fabricates metrics. Provider-backed (YouTube Analytics API v2).",
@@ -208,8 +285,14 @@ export const PROVIDER_CAPABILITIES: readonly CapabilityDescriptor[] = [
 export const DEFAULT_PROVIDER_GRANTS: readonly CapabilityGrant[] = [
   { agentId: "research", capabilityIds: [WEB_SEARCH_CAPABILITY_ID] },
   { agentId: "thumbnail", capabilityIds: [IMAGE_GENERATION_CAPABILITY_ID] },
+  // Production visual validation generates scene assets through the dedicated
+  // scene-image stage; keep this explicit rather than broadening agent access.
+  { agentId: "scene-image", capabilityIds: [IMAGE_GENERATION_CAPABILITY_ID] },
   { agentId: "video", capabilityIds: [VIDEO_GENERATION_CAPABILITY_ID] },
   { agentId: "publisher", capabilityIds: [PUBLISH_CAPABILITY_ID] },
   { agentId: "analytics", capabilityIds: [ANALYTICS_CAPABILITY_ID] },
   { agentId: "tts", capabilityIds: [TTS_GENERATION_CAPABILITY_ID] },
+  { agentId: "composer", capabilityIds: [MEDIA_COMPOSE_CAPABILITY_ID] },
+  { agentId: "director", capabilityIds: [TIMELINE_PLAN_CAPABILITY_ID] },
+  { agentId: "timeline", capabilityIds: [TIMELINE_PLAN_CAPABILITY_ID] },
 ];

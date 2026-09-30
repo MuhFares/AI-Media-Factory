@@ -49,6 +49,7 @@ export type {
   AgentArtifactKind,
   AgentArtifactStatus,
   ExecutionPlanArtifactPayload,
+  EvidenceBackedContentBriefArtifactPayload,
   ResearchReportArtifactPayload,
   CodingReportArtifactPayload,
   ReviewReportArtifactPayload,
@@ -66,6 +67,27 @@ DocumentationReportArtifactPayload,
   AgentHandoff,
   CollaborationEnvelope,
 } from "./collaboration.js";
+
+export {
+  ARTIFACT_CONTRACT_REGISTRY,
+  CANONICAL_DIRECTIVE_STAGE_IDS,
+  CANONICAL_STAGE_CATALOG,
+  DIRECTIVE_OPERATIONAL_STATUS,
+  ArtifactContractError,
+  assertCanonicalStageCatalog,
+  assertDirectiveOperational,
+  decideCeoResearchMode,
+  validateArtifactContract,
+} from "./foundation-contracts.js";
+export type {
+  ArtifactAuthority,
+  ArtifactContractDefinition,
+  CanonicalStageDefinition,
+  CanonicalStageId,
+  CeoResearchDecision,
+  RecoveryPolicy,
+  StageExecutionType,
+} from "./foundation-contracts.js";
 
 /**
  * Canonical Workflow Context shared between Runtime and Workflow Engine.
@@ -99,6 +121,9 @@ export interface StepOutcome {
   status: "completed" | "failed" | "awaiting_approval";
   output: Json;
   artifact?: import("./collaboration.js").CollaborationArtifact;
+  /** A validated Review's business decision, separate from execution success. */
+  reviewBusinessStatus?: "approved" | "changes_requested" | "blocked" | "human_review_required";
+  reviewExecutionId?: string;
   chosenNext?: string;
   error?: { message: string; retryable: boolean };
 }

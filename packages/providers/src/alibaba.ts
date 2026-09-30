@@ -574,33 +574,4 @@ export class AlibabaProvider extends BaseLlmProvider {
     b.addEventListener('abort', abort, { once: true });
     return controller.signal;
   }
-
-  private headers(): Record<string, string> {
-    return {
-      Authorization: `Bearer ${this.config.apiKey}`,
-      'Content-Type': 'application/json',
-    };
-  }
-
-  private async fetch(url: string, init: RequestInit): Promise<Response> {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
-    const signal = init.signal
-      ? this.combineSignals(init.signal, controller.signal)
-      : controller.signal;
-
-    try {
-      return await fetch(url, { ...init, signal });
-    } finally {
-      clearTimeout(timeoutId);
-    }
-  }
-
-  private combineSignals(a: AbortSignal, b: AbortSignal): AbortSignal {
-    const controller = new AbortController();
-    const abort = () => controller.abort();
-    a.addEventListener('abort', abort, { once: true });
-    b.addEventListener('abort', abort, { once: true });
-    return controller.signal;
-  }
 }

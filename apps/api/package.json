@@ -20,6 +20,7 @@
   "dependencies": {
     "@ai-media-factory/database": "*",
     "@ai-media-factory/orchestrator": "*",
+    "@ai-media-factory/provider-adapters": "*",
     "@ai-media-factory/shared": "*",
     "@ai-media-factory/workflow-engine": "*",
     "pg": "^8.13.1"

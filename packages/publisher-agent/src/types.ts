@@ -27,6 +27,33 @@ export interface PublisherInput {
   instructions?: string;
   /** The validated content chain, required to include the completed video and a passing final QA. */
   validatedArtifacts?: readonly PublisherSourceArtifact[];
+  /** Required for the governed final-media publication path. */
+  publisherAuthorization?: PublisherAuthorization;
+}
+
+export interface PublisherAuthorization {
+  authorizationId: string;
+  workflowId: string;
+  finalMediaArtifactId: string;
+  finalTechnicalQAReportId: string;
+  finalProductReviewId: string;
+  humanApprovalId: string;
+  status: "AUTHORIZED";
+  scope: "PUBLIC_PUBLISH" | "PRIVATE_VALIDATION";
+  authorityBinding: {
+    projectId: string;
+    workflowId: string;
+    projectMode: string;
+    finalMediaArtifactId: string;
+    finalMediaSha256: string;
+    finalProductReviewId: string;
+    targetPlatform: string;
+    targetAccountId: string;
+    publicationPayloadHash: string;
+    publicationIdentity: string;
+  };
+  issuedAt: string;
+  policyVersion: string;
 }
 
 export type PublishStatus = "completed" | "blocked" | "failed";
@@ -43,6 +70,10 @@ export interface PublishedReport {
   publishedUrl: string;
   publishedAt: string;
   sourceVideoId: string;
+  finalMediaArtifactId: string;
+  finalMediaSha256: string;
+  mediaTransportType: string;
+  mediaTransportFingerprint: string;
   providerId: string;
   executionEvidencePresent: boolean;
   metadata: Record<string, Json>;

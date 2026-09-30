@@ -35,6 +35,22 @@ export interface VoicetutTTSConfig {
   maxWaitMs?: number;
   pollRetries?: number;
   onOperation?: OperationSink;
+  submissionLifecycle?: VoicetutSubmissionLifecycle;
+}
+
+export interface VoicetutSubmissionIdentity {
+  logicalSubmissionId: string;
+  workflowId: string;
+  textFingerprint: string;
+  configurationFingerprint: string;
+  provider: "voicetut";
+  voice: string;
+}
+export interface VoicetutSubmissionLifecycle {
+  findAcknowledged(identity: VoicetutSubmissionIdentity): Promise<{ providerJobId: string } | null>;
+  persistIntent(identity: VoicetutSubmissionIdentity): Promise<void>;
+  persistPhase(identity: VoicetutSubmissionIdentity, phase: string, providerJobId?: string, providerStatus?: string): Promise<void>;
+  persistAcknowledged(identity: VoicetutSubmissionIdentity, providerJobId: string): Promise<void>;
 }
 
 const DEFAULT_BASE_URL = "https://api.runpod.ai/v2";
@@ -51,6 +67,7 @@ export class VoicetutTTSAdapter implements TTSGenerationProvider {
   private readonly maxWaitMs: number;
   private readonly pollRetries: number;
   private readonly onOperation: OperationSink;
+  private readonly submissionLifecycle?: VoicetutSubmissionLifecycle;
 
   constructor(config: VoicetutTTSConfig) {
     if (typeof config.apiKey !== "string" || config.apiKey.trim().length === 0) {
@@ -71,6 +88,7 @@ export class VoicetutTTSAdapter implements TTSGenerationProvider {
     assertPositive("voicetut", this.pollIntervalMs, "pollIntervalMs");
     assertPositive("voicetut", this.maxWaitMs, "maxWaitMs");
     this.onOperation = sinkOf(config.onOperation);
+    this.submissionLifecycle = config.submissionLifecycle;
   }
 
   async generate(request: TTSGenerationRequest): Promise<TTSGenerationProviderResponse> {
@@ -86,8 +104,19 @@ export class VoicetutTTSAdapter implements TTSGenerationProvider {
       );
     }
     const voice = request.voice?.trim() || this.defaultSpeaker;
-
-    const submitRes = await sendHttp(
+    const identity = this.submissionIdentity(request, voice);
+    const acknowledged = identity === null ? null : await this.submissionLifecycle?.findAcknowledged(identity) ?? null;
+    let jobId: string;
+    let immediateStatus: string | undefined;
+    let immediateJson: Record<string, unknown> | null = null;
+    if (acknowledged !== null) {
+      jobId = acknowledged.providerJobId;
+    } else {
+      if (identity !== null) {
+        await this.submissionLifecycle!.persistIntent(identity);
+        await this.submissionLifecycle!.persistPhase(identity, "FETCH_INVOCATION_STARTED");
+      }
+      const submitRes = await sendHttp(
       {
         method: "POST",
         url: `${this.baseUrl}/${this.endpointId}/run`,
@@ -103,19 +132,21 @@ export class VoicetutTTSAdapter implements TTSGenerationProvider {
         timeoutMs: this.timeoutMs,
         onOperation: this.onOperation,
       },
-    );
-
-    const submitJson = await this.readJson(submitRes, "submit");
-    const jobId = asString(submitJson.id) ?? asString((submitJson as Record<string, unknown>).jobId);
-    if (jobId === undefined || jobId.trim().length === 0) {
-      throw providerValidationError(this.providerId, "submit", "Provider did not return a job id");
+      );
+      if (identity !== null) await this.submissionLifecycle!.persistPhase(identity, "RESPONSE_HEADERS_RECEIVED");
+      const submitJson = await this.readJson(submitRes, "submit");
+      const captured = asString(submitJson.id) ?? asString((submitJson as Record<string, unknown>).jobId);
+      if (captured === undefined || captured.trim().length === 0) throw providerValidationError(this.providerId, "submit", "Provider did not return a job id");
+      jobId = captured;
+      immediateStatus = asString(submitJson.status);
+      immediateJson = submitJson;
+      if (identity !== null) await this.submissionLifecycle!.persistAcknowledged(identity, jobId);
     }
-    const immediateStatus = asString(submitJson.status);
     if (immediateStatus === "COMPLETED") {
-      return this.extractResult(submitJson, jobId, voice);
+      return this.extractResult(immediateJson!, jobId, voice);
     }
     if (immediateStatus !== undefined && TERMINAL_FAILED.has(immediateStatus)) {
-      throw providerValidationError(this.providerId, "generate", `Provider job ${immediateStatus}: ${this.readError(submitJson)}`);
+      throw this.jobFailure(immediateStatus, immediateJson!);
     }
 
     const deadline = Date.now() + this.maxWaitMs;
@@ -141,13 +172,19 @@ export class VoicetutTTSAdapter implements TTSGenerationProvider {
       );
       const pollJson = await this.readJson(pollRes, "poll");
       const status = asString(pollJson.status);
+      if (identity !== null && status !== undefined) await this.submissionLifecycle!.persistPhase(identity, "PROVIDER_JOB_STATUS", jobId, status);
       if (status === "COMPLETED") {
         return this.extractResult(pollJson, jobId, voice);
       }
       if (status !== undefined && TERMINAL_FAILED.has(status)) {
-        throw providerValidationError(this.providerId, "generate", `Provider job ${status}: ${this.readError(pollJson)}`);
+        throw this.jobFailure(status, pollJson);
       }
     }
+  }
+
+  private submissionIdentity(request: TTSGenerationRequest, voice: string): VoicetutSubmissionIdentity | null {
+    if (!this.submissionLifecycle || !request.logicalSubmissionId || !request.workflowId || !request.textFingerprint || !request.configurationFingerprint) return null;
+    return { logicalSubmissionId: request.logicalSubmissionId, workflowId: request.workflowId, textFingerprint: request.textFingerprint, configurationFingerprint: request.configurationFingerprint, provider: "voicetut", voice };
   }
 
   private extractResult(
@@ -161,7 +198,12 @@ export class VoicetutTTSAdapter implements TTSGenerationProvider {
     }
     const handlerError = asString(output.error);
     if (handlerError !== undefined) {
-      throw providerValidationError(this.providerId, "generate", `Provider handler error: ${handlerError}`);
+      const tb = asString(output.traceback);
+      throw providerValidationError(
+        this.providerId,
+        "generate",
+        `Provider handler error: ${handlerError}${tb === undefined ? "" : `\n${tb}`}`,
+      );
     }
     const audioB64 = asString(output.audio);
     if (audioB64 === undefined || audioB64.trim().length === 0) {
@@ -189,6 +231,13 @@ export class VoicetutTTSAdapter implements TTSGenerationProvider {
       model: "voicetut-tts",
       ...(durationSeconds === undefined ? {} : { durationSeconds }),
     };
+  }
+
+  /** Terminal job failure — surfaces the handler message AND its traceback for diagnosis. */
+  private jobFailure(status: string, json: Record<string, unknown>): Error {
+    const tb = asString(json.traceback) ?? (isRecord(json.output) ? asString((json.output as Record<string, unknown>).traceback) : undefined);
+    const message = `Provider job ${status}: ${this.readError(json)}${tb === undefined ? "" : `\n${tb}`}`;
+    return providerValidationError(this.providerId, "generate", message);
   }
 
   private readError(json: unknown): string {
@@ -219,24 +268,63 @@ export class VoicetutTTSAdapter implements TTSGenerationProvider {
 }
 
 /** Construct a VoiceTuT adapter from environment variables. */
-export function voicetutTTSAdapterFromEnv(onOperation?: OperationSink): VoicetutTTSAdapter {
+export function voicetutTTSAdapterFromEnv(onOperation?: OperationSink, submissionLifecycle?: VoicetutSubmissionLifecycle): VoicetutTTSAdapter {
   const apiKey = process.env.RUNPOD_API_KEY?.trim();
-  const endpointId = process.env.VOICETUT_TTS_ENDPOINT_ID?.trim();
   if (apiKey === undefined || apiKey.length === 0) {
     throw providerConfigError("voicetut", "Missing required environment variable 'RUNPOD_API_KEY'.");
   }
-  if (endpointId === undefined || endpointId.length === 0) {
+  const identity = voicetutExecutionIdentityFromEnv();
+  if (identity === null) {
     throw providerConfigError("voicetut", "Missing required environment variable 'VOICETUT_TTS_ENDPOINT_ID'.");
   }
   return new VoicetutTTSAdapter({
     apiKey,
-    endpointId,
-    baseUrl: optionalEnv("RUNPOD_BASE_URL", DEFAULT_BASE_URL),
+    endpointId: identity.endpointId,
+    baseUrl: identity.baseUrl,
     defaultSpeaker: optionalEnv("VOICETUT_DEFAULT_SPEAKER", "Mohamed"),
     timeoutMs: envNumber("voicetut", "TTS_TIMEOUT_MS", 30_000),
     pollIntervalMs: envNumber("voicetut", "TTS_POLL_INTERVAL_MS", 3_000),
     maxWaitMs: envNumber("voicetut", "TTS_MAX_WAIT_MS", 300_000),
     pollRetries: envNumber("voicetut", "TTS_POLL_RETRIES", 2),
     onOperation,
+    submissionLifecycle,
   });
+}
+
+/**
+ * Canonical VoiceTut execution identity (single env-reading point shared by
+ * adapter construction and the governed configuration fingerprint).
+ *
+ * Returns the RAW endpointId/baseUrl for adapter construction plus SAFE,
+ * non-secret derivations for lineage: a one-way hash of the endpoint ID
+ * (never the raw value) and the lowercased base hostname. Null when the
+ * endpoint is not configured. API keys are never read here.
+ */
+export interface VoicetutExecutionIdentity {
+  readonly endpointId: string;
+  readonly baseUrl: string;
+  /** One-way identity of the endpoint (safe to persist/log). */
+  readonly endpointIdentityHash: string;
+  /** Lowercased base hostname (safe to persist/log). */
+  readonly baseHost: string;
+}
+
+export function voicetutExecutionIdentityFromEnv(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): VoicetutExecutionIdentity | null {
+  const endpointId = env.VOICETUT_TTS_ENDPOINT_ID?.trim();
+  if (endpointId === undefined || endpointId.length === 0) return null;
+  const baseUrl = (env.RUNPOD_BASE_URL?.trim() || DEFAULT_BASE_URL).replace(/\/$/, "");
+  let baseHost: string;
+  try {
+    baseHost = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    throw providerConfigError("voicetut", "Invalid RUNPOD_BASE_URL override.");
+  }
+  return {
+    endpointId,
+    baseUrl,
+    endpointIdentityHash: createHash("sha256").update(`voicetut-endpoint-identity/v1:${endpointId}`).digest("hex"),
+    baseHost,
+  };
 }

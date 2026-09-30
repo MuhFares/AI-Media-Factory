@@ -8,6 +8,27 @@
 
 import type { Json, JsonSchema } from "./core/common.js";
 
+export interface ProviderFailureMetadata {
+  httpStatus: number | null;
+  providerErrorCode: string | null;
+  providerErrorType: string | null;
+  detail: string | null;
+  retryable: boolean | null;
+  classification: string | null;
+  provider: string | null;
+  model: string | null;
+  capability: string | null;
+  executionId: string | null;
+  attemptNumber: number | null;
+  latencyMs: number | null;
+  costKind: string | null;
+  errorName: string | null;
+  safeCauseCode: string | null;
+  transportDiagnostic: string | null;
+  transportPhase: string | null;
+  providerReceiptStatus: "UNKNOWN" | null;
+}
+
 /** Stable identifier for a capability, for example `filesystem.read`. */
 export type CapabilityId = string;
 
@@ -24,6 +45,13 @@ export interface CapabilityRequest<TInput = Json> {
   correlationId: string;
   input: TInput;
   requestedAt: string;
+  /**
+   * Runtime-only observer invoked at the exact point a governed capability
+   * crosses into an external provider invocation. Local authorization/schema
+   * validation must complete before this callback runs. It is never serialized
+   * into provider payloads or persisted as request data.
+   */
+  onExternalProviderInvocationStarted?: () => Promise<void>;
 }
 
 export interface ExecutionEvidence {
@@ -57,13 +85,18 @@ export interface ExecutionEvidence {
   correlationId?: string;
   agentId?: string;
   succeeded?: boolean;
-  error?: { code: string; message: string };
+  error?: { code: string; message: string; retryable?: boolean; failureMetadata?: ProviderFailureMetadata };
   platform?: string;
   idempotencyKey?: string;
   publicationId?: string;
   publishedUrl?: string;
   publishedAt?: string;
   deduplicated?: boolean;
+  /** Submission lifecycle fields for side-effecting async providers. */
+  submissionState?: "SUBMITTING" | "SUBMITTED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED" | "SUBMISSION_OUTCOME_UNKNOWN" | "RECONCILIATION_REQUIRED";
+  reconciliationRequired?: boolean;
+  initialClientResult?: "TIMEOUT" | "ACCEPTED" | "REJECTED" | "UNKNOWN";
+  finalRemoteResult?: "COMPLETED" | "FAILED" | "CANCELLED" | "UNKNOWN";
 }
 
 export interface CapabilitySuccess<TOutput = Json> {
@@ -89,6 +122,7 @@ export interface CapabilityFailure {
     code: string;
     message: string;
     retryable: boolean;
+    failureMetadata?: ProviderFailureMetadata;
   };
   evidence?: ExecutionEvidence;
 }

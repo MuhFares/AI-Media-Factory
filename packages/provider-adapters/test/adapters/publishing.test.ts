@@ -6,21 +6,36 @@ import { YouTubePublishAdapter, markerFor } from "@ai-media-factory/provider-ada
 import { createYouTubePublishMock, createMediaMock } from "../helpers/mock-servers.ts";
 import { InMemoryPublishSessionStore } from "../helpers/in-memory-stores.ts";
 import { isProviderError } from "@ai-media-factory/provider-adapters";
+import { createHash } from "node:crypto";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+async function localMedia(t: { after(fn: () => unknown): void }, size = 4096) {
+  const dir = await mkdtemp(join(tmpdir(), "amf-youtube-adapter-"));
+  const path = join(dir, "video.mp4");
+  const bytes = Buffer.alloc(size, 0x42);
+  await writeFile(path, bytes);
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  return { path, sha256: createHash("sha256").update(bytes).digest("hex"), bytes };
+}
+const requestFor = (media: { path: string; sha256: string }, title: string, visibility: "private" | "unlisted" | "public" = "private") => ({
+  finalMediaArtifactId: "art-final-media-test", finalMediaSha256: media.sha256,
+  mediaTransportRef: { type: "LOCAL_FILE" as const, path: media.path, expectedSha256: media.sha256, mimeType: "video/mp4" },
+  title, options: { visibility },
+});
 
 describe("YouTubePublishAdapter", () => {
   it("publishes an asset through the resumable upload flow", async (t) => {
     const mock = await createYouTubePublishMock();
     t.after(() => mock.close());
-    const media = await createMediaMock();
-    t.after(() => media.close());
+    const media = await localMedia(t);
     const store = new InMemoryPublishSessionStore();
     const adapter = new YouTubePublishAdapter({ accessToken: "t", baseUrl: mock.url, publishSessionStore: store });
 
     const response = await adapter.publish({
-      assetId: `${media.url}/video.mp4`,
-      title: "My video",
+      ...requestFor(media, "My video"),
       description: "desc",
-      options: { visibility: "private" },
     });
 
     strictEqual(response.status, "completed");
@@ -35,16 +50,11 @@ describe("YouTubePublishAdapter", () => {
   it("recovers the same publication for a retry after a crash mid-upload", async (t) => {
     const mock = await createYouTubePublishMock();
     t.after(() => mock.close());
-    const media = await createMediaMock();
-    t.after(() => media.close());
+    const media = await localMedia(t);
     const store = new InMemoryPublishSessionStore();
     const adapter = new YouTubePublishAdapter({ accessToken: "t", baseUrl: mock.url, publishSessionStore: store });
 
-    const request = {
-      assetId: `${media.url}/video.mp4`,
-      title: "Crash-safe video",
-      options: { visibility: "private" },
-    };
+    const request = requestFor(media, "Crash-safe video");
     mock.state.mode = "fail-upload-once";
     let firstId: string | undefined;
     try {
@@ -66,16 +76,11 @@ describe("YouTubePublishAdapter", () => {
   it("does not create a duplicate when the same logical request is republished", async (t) => {
     const mock = await createYouTubePublishMock();
     t.after(() => mock.close());
-    const media = await createMediaMock();
-    t.after(() => media.close());
+    const media = await localMedia(t);
     const store = new InMemoryPublishSessionStore();
     const adapter = new YouTubePublishAdapter({ accessToken: "t", baseUrl: mock.url, publishSessionStore: store });
 
-    const request = {
-      assetId: `${media.url}/video.mp4`,
-      title: "Dedup video",
-      options: { visibility: "unlisted" },
-    };
+    const request = requestFor(media, "Dedup video", "unlisted");
     const first = await adapter.publish(request);
     const second = await adapter.publish(request);
     strictEqual(second.publicationId, first.publicationId, "same provider publication id");
@@ -83,10 +88,11 @@ describe("YouTubePublishAdapter", () => {
     strictEqual(mock.state.uploads, 1, "only one body transfer");
   });
 
-  it("rejects a non-http asset reference", async (t) => {
+  it("rejects a missing local transport file", async (t) => {
     const adapter = new YouTubePublishAdapter({ accessToken: "t" });
     try {
-      await adapter.publish({ assetId: "C:\\local\\file.mp4", title: "x" });
+      const sha256 = "a".repeat(64);
+      await adapter.publish({ finalMediaArtifactId: "art", finalMediaSha256: sha256, mediaTransportRef: { type: "LOCAL_FILE", path: "C:\\missing\\file.mp4", expectedSha256: sha256 }, title: "x" });
       ok(false, "expected throw");
     } catch (error) {
       ok(isProviderError(error));
@@ -97,12 +103,11 @@ describe("YouTubePublishAdapter", () => {
   it("classifies an unauthorized provider response", async (t) => {
     const mock = await createYouTubePublishMock();
     t.after(() => mock.close());
-    const media = await createMediaMock();
-    t.after(() => media.close());
+    const media = await localMedia(t);
     mock.state.mode = "unauthorized";
     const adapter = new YouTubePublishAdapter({ accessToken: "bad", baseUrl: mock.url });
     try {
-      await adapter.publish({ assetId: `${media.url}/video.mp4`, title: "x" });
+      await adapter.publish(requestFor(media, "x"));
       ok(false, "expected throw");
     } catch (error) {
       ok(isProviderError(error));
@@ -113,8 +118,7 @@ describe("YouTubePublishAdapter", () => {
   it("classifies an oversized asset as validation", async (t) => {
     const mock = await createYouTubePublishMock();
     t.after(() => mock.close());
-    const media = await createMediaMock();
-    t.after(() => media.close());
+    const media = await localMedia(t);
     const adapter = new YouTubePublishAdapter({
       accessToken: "t",
       baseUrl: mock.url,
@@ -122,7 +126,7 @@ describe("YouTubePublishAdapter", () => {
       timeoutMs: 2000,
     });
     try {
-      await adapter.publish({ assetId: `${media.url}/video.mp4`, title: "x" });
+      await adapter.publish(requestFor(media, "x"));
       ok(false, "expected throw");
     } catch (error) {
       ok(isProviderError(error));
@@ -133,8 +137,7 @@ describe("YouTubePublishAdapter", () => {
   it("recovers a previously published video via the marker search", async (t) => {
     const mock = await createYouTubePublishMock();
     t.after(() => mock.close());
-    const media = await createMediaMock();
-    t.after(() => media.close());
+    const media = await localMedia(t);
     const store = new InMemoryPublishSessionStore();
     const adapter = new YouTubePublishAdapter({
       accessToken: "t",
@@ -142,11 +145,7 @@ describe("YouTubePublishAdapter", () => {
       publishSessionStore: store,
       enableMarkerDedup: true,
     });
-    const request = {
-      assetId: `${media.url}/video.mp4`,
-      title: "Marker dedup",
-      options: { visibility: "public" },
-    };
+    const request = requestFor(media, "Marker dedup", "public");
     const first = await adapter.publish(request);
     strictEqual(mock.state.inits, 1);
 
@@ -166,10 +165,10 @@ describe("YouTubePublishAdapter", () => {
 
   it("derives a stable marker from asset, title and visibility", () => {
     strictEqual(
-      markerFor("a", "t", "private"),
-      markerFor("a", "t", "private"),
+      markerFor("a", "b".repeat(64), "t", "private"),
+      markerFor("a", "b".repeat(64), "t", "private"),
       "same inputs -> same marker",
     );
-    ok(markerFor("a", "t", "private") !== markerFor("a", "t", "public"), "different visibility -> different marker");
+    ok(markerFor("a", "b".repeat(64), "t", "private") !== markerFor("a", "b".repeat(64), "t", "public"), "different visibility -> different marker");
   });
 });

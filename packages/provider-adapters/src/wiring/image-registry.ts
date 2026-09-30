@@ -33,10 +33,11 @@ import type { OperationSink } from "../core/observability.js";
 import { providerConfigError, ProviderConfigurationError } from "../core/errors.js";
 import { openAIImageAdapterFromEnv } from "../adapters/image-generation.js";
 import { runPodImageAdapterFromEnv } from "../adapters/runpod-image.js";
+import { runPodZImageAdapterFromEnv } from "../adapters/runpod-zimage.js";
 
 export type ImageProviderImplementation = ImageGenerationProvider & { readonly providerId: string };
 
-export const IMAGE_PROVIDER_ORDER: readonly string[] = ["openai-image", "self-hosted-image"];
+export const IMAGE_PROVIDER_ORDER: readonly string[] = ["openai-image", "self-hosted-image", "runpod-zimage"];
 
 export const IMAGE_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
   openai: "openai-image",
@@ -44,6 +45,8 @@ export const IMAGE_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
   selfhosted: "self-hosted-image",
   "self-hosted": "self-hosted-image",
   "self-hosted-image": "self-hosted-image",
+  "runpod-zimage": "runpod-zimage",
+  zimage: "runpod-zimage",
 };
 
 export function normalizeImageProviderId(input: string): string {
@@ -113,6 +116,8 @@ function buildImageAdapter(id: string, onOperation?: OperationSink): ImageProvid
       return openAIImageAdapterFromEnv(onOperation);
     case "self-hosted-image":
       return runPodImageAdapterFromEnv(onOperation);
+    case "runpod-zimage":
+      return runPodZImageAdapterFromEnv(onOperation);
     default:
       throw providerConfigError("image.generate", `Unknown image provider id '${id}'.`);
   }

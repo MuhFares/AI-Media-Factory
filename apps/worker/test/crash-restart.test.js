@@ -16,7 +16,6 @@ import {
   PostgresPersistence,
   PostgresQueue,
 } from "@ai-media-factory/database";
-import { directiveToWorkflowDefinition } from "@ai-media-factory/orchestrator";
 import {
   buildDefaultEngine,
   createDeterministicAgentExecutor,
@@ -55,7 +54,14 @@ async function waitFor(check, label, timeoutMs = 5000) {
 test("resumes a crashed workflow without duplicating artifacts / evidence / lineage", async () => {
   const workflowId = "wf-crash";
   const submissionKey = "crash-1";
-  const definition = directiveToWorkflowDefinition("ship");
+  // A recovery fixture is intentionally independent of the Program-1
+  // directive gate (`ship` is retired before submission). It exercises the
+  // engine/queue crash boundary with an explicit test-only definition.
+  const definition = {
+    id: "crash-recovery-fixture", version: 1,
+    trigger: { kind: "event", spec: "crash-recovery" }, entryStep: "planner",
+    steps: SHIP_AGENTS.map((agent, index) => ({ id: agent, kind: "agent", agent, emits: `${agent}_fixture`, ...(index + 1 < SHIP_AGENTS.length ? { next: SHIP_AGENTS[index + 1] } : {}) })),
+  };
 
   await queue.submit({
     submissionKey,
@@ -104,7 +110,7 @@ test("resumes a crashed workflow without duplicating artifacts / evidence / line
 
   // Backdate the running job's claimed_at so worker 2 treats it as a stale orphan.
   await pool.query(
-    `UPDATE workflow_jobs SET claimed_at = $1::text WHERE workflow_id = $2::text`,
+    `UPDATE workflow_jobs SET claimed_at = $1::text, lease_heartbeat_at = $1::text WHERE workflow_id = $2::text`,
     ["1999-01-01T00:00:00.000Z", workflowId]
   );
 

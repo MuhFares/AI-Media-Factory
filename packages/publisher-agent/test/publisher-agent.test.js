@@ -88,21 +88,31 @@ function baseArtifacts(overrides = {}) {
 }
 
 function input(artifacts, extra = {}) {
+  const finalMedia = artifacts.find((a) => a.kind === "final_media_artifact");
+  const video = artifacts.find((a) => a.kind === "video_report");
+  const mediaId = finalMedia?.artifactId ?? video?.payload?.videoId ?? "missing";
+  const defaultAuthorization = {
+    authorizationId: `auth-${mediaId}`, workflowId: "workflow-1", finalMediaArtifactId: mediaId,
+    finalTechnicalQAReportId: "technical-A", finalProductReviewId: "product-A", humanApprovalId: "human-A",
+    status: "AUTHORIZED", scope: "PUBLIC_PUBLISH", issuedAt: "2026-09-03T00:00:00.000Z", policyVersion: "final-publication-v2",
+    authorityBinding: { projectId: "project-1", workflowId: "workflow-1", projectMode: "PRODUCTION", finalMediaArtifactId: mediaId, finalMediaSha256: "a".repeat(64), finalProductReviewId: "product-A", targetPlatform: "youtube", targetAccountId: "channel-1", publicationPayloadHash: "payload-hash", publicationIdentity: "publish:v2:test" },
+  };
   return {
     requestId: "00000000-0000-4000-8000-000000000001",
     objective: "Publish the approved content",
     taskDescription: "Publish the approved content",
     validatedArtifacts: artifacts,
+    publisherAuthorization: defaultAuthorization,
     ...extra,
   };
 }
 
-function capCompleted() {
+function capCompleted(finalMediaArtifactId = "final-media-A") {
   return {
     status: "success",
     resultId: "publish-result-publish-00000000-0000-4000-8000-000000000001",
     capabilityId: PUBLISH_CAPABILITY_ID,
-    output: { providerId: "fake-publish", status: "completed", publicationId: "pub-0001", url: "https://youtube.com/watch?v=pub-0001", publishedAt: "2026-08-14T01:00:00.000Z", idempotencyKey: `publish:assetId=vid-0001&platform=${PUBLISH_PLATFORM}&workflowId=workflow-1`, deduplicated: false },
+    output: { providerId: "fake-publish", status: "completed", publicationId: "pub-0001", url: "https://youtube.com/watch?v=pub-0001", publishedAt: "2026-08-14T01:00:00.000Z", idempotencyKey: `publish:assetId=${finalMediaArtifactId}&platform=${PUBLISH_PLATFORM}&workflowId=workflow-1`, deduplicated: false, finalMediaArtifactId, finalMediaSha256: "a".repeat(64), mediaTransportType: "LOCAL_FILE", mediaTransportFingerprint: "transport-fingerprint" },
     evidence: {
       evidenceId: "evidence-publish-result-publish-00000000-0000-4000-8000-000000000001",
       capabilityId: PUBLISH_CAPABILITY_ID,
@@ -112,7 +122,7 @@ function capCompleted() {
       publicationId: "pub-0001",
       publishedUrl: "https://youtube.com/watch?v=pub-0001",
       publishedAt: "2026-08-14T01:00:00.000Z",
-      idempotencyKey: `publish:assetId=vid-0001&platform=${PUBLISH_PLATFORM}&workflowId=workflow-1`,
+      idempotencyKey: `publish:assetId=${finalMediaArtifactId}&platform=${PUBLISH_PLATFORM}&workflowId=workflow-1`,
       providerInvoked: true,
       workflowId: "workflow-1",
       correlationId: "correlation-1",
@@ -138,14 +148,44 @@ function boundary(result) {
 }
 
 describe("PublisherAgent", () => {
+  const finalChain = (finalId = "final-media-A", correlationId = "correlation-1") => [
+    { artifactId: finalId, kind: "final_media_artifact", producerAgent: "composer", workflowId: "workflow-1", correlationId, status: "completed", createdAt: "2026-09-03T00:00:00.000Z", payload: { finalMediaArtifactId: finalId, sha256: "a".repeat(64), byteCount: 1, storageReference: "D:\\fixtures\\final-media.mp4" } },
+    { artifactId: "technical-A", kind: "final_technical_qa", producerAgent: "qa", workflowId: "workflow-1", correlationId, status: "completed", createdAt: "2026-09-03T00:00:00.000Z", payload: { status: "passed", finalMediaArtifactId: finalId } },
+    { artifactId: "product-A", kind: "final_product_review", producerAgent: "review", workflowId: "workflow-1", correlationId, status: "completed", createdAt: "2026-09-03T00:00:00.000Z", payload: { status: "human_review_required", finalMediaArtifactId: finalId } },
+  ];
+  const finalAuthorization = (finalId = "final-media-A") => ({ authorizationId: `auth-${finalId}`, workflowId: "workflow-1", finalMediaArtifactId: finalId, finalTechnicalQAReportId: "technical-A", finalProductReviewId: "product-A", humanApprovalId: "human-A", status: "AUTHORIZED", scope: "PUBLIC_PUBLISH", authorityBinding: { projectId: "project-1", workflowId: "workflow-1", projectMode: "PRODUCTION", finalMediaArtifactId: finalId, finalMediaSha256: "a".repeat(64), finalProductReviewId: "product-A", targetPlatform: "youtube", targetAccountId: "channel-1", publicationPayloadHash: "payload-hash", publicationIdentity: "publish:v2:test" }, issuedAt: "2026-09-03T00:00:00.000Z", policyVersion: "final-publication-v2" });
+
+  it("blocks a correlation-mismatched final publication chain before publish.youtube", async () => {
+    let calls = 0;
+    const artifacts = finalChain(); artifacts[2] = { ...artifacts[2], correlationId: "corr-B" };
+    const agent = createPublisherAgent({ config: {}, capabilityExecution: { executeCapability: async () => { calls += 1; return capCompleted(); } } });
+    const result = await agent.execute({ context: {}, input: input(artifacts, { publisherAuthorization: finalAuthorization() }) }, signal);
+    strictEqual(result.output.status, "blocked"); ok(result.output.summary.includes("correlationId is inconsistent")); strictEqual(calls, 0);
+  });
+
+  it("blocks a stale final-media authorization despite matching workflow and correlation", async () => {
+    let calls = 0;
+    const agent = createPublisherAgent({ config: {}, capabilityExecution: { executeCapability: async () => { calls += 1; return capCompleted(); } } });
+    const result = await agent.execute({ context: {}, input: input(finalChain("final-media-B", "correlation-1"), { publisherAuthorization: finalAuthorization("final-media-A") }) }, signal);
+    strictEqual(result.output.status, "blocked"); ok(result.output.summary.includes("PublisherAuthorization")); strictEqual(calls, 0);
+  });
+
+  it("publishes one exact authorized final-media chain through the mocked boundary", async () => {
+    let calls = 0;
+    const agent = createPublisherAgent({ config: {}, capabilityExecution: { executeCapability: async () => { calls += 1; return capCompleted(); } } });
+    const result = await agent.execute({ context: {}, input: input(finalChain(), { publisherAuthorization: finalAuthorization() }) }, signal);
+    strictEqual(result.output.status, "completed"); strictEqual(calls, 1);
+  });
   it("produces a completed published_report with matching completion evidence", async () => {
     const agent = createPublisherAgent({ config: {}, capabilityExecution: boundary(capCompleted()) });
-    const result = await agent.execute({ context: {}, input: input(baseArtifacts()) }, signal);
+    const result = await agent.execute({ context: {}, input: input(finalChain(), { publisherAuthorization: finalAuthorization() }) }, signal);
     strictEqual(result.output.status, "completed");
     strictEqual(result.output.executionEvidencePresent, true);
     strictEqual(result.output.publicationId, "pub-0001");
     strictEqual(result.output.publishedUrl, "https://youtube.com/watch?v=pub-0001");
-    strictEqual(result.output.sourceVideoId, "vid-0001");
+    strictEqual(result.output.sourceVideoId, "final-media-A");
+    strictEqual(result.output.finalMediaArtifactId, "final-media-A");
+    strictEqual(result.output.finalMediaSha256, "a".repeat(64));
     strictEqual(result.output.providerId, "fake-publish");
     strictEqual(result.output.capabilityExecutions[0].status, "success");
   });
@@ -155,11 +195,12 @@ describe("PublisherAgent", () => {
     const agent = createPublisherAgent({ config: {}, capabilityExecution: {
       executeCapability: async (request) => { capturedRequest = request; return capCompleted(); },
     } });
-    const result = await agent.execute({ context: {}, input: input(baseArtifacts()) }, signal);
+    const result = await agent.execute({ context: {}, input: input(finalChain(), { publisherAuthorization: finalAuthorization() }) }, signal);
     strictEqual(result.output.status, "completed");
     strictEqual(capturedRequest.capabilityId, PUBLISH_CAPABILITY_ID);
-    strictEqual(capturedRequest.input.assetId, "vid-0001");
-    strictEqual(capturedRequest.input.title, "Build Scalable Media Pipelines");
+    strictEqual(capturedRequest.input.finalMediaArtifactId, "final-media-A");
+    strictEqual(capturedRequest.input.finalMediaSha256, "a".repeat(64));
+    strictEqual(capturedRequest.input.mediaTransportRef.type, "LOCAL_FILE");
     strictEqual(typeof capturedRequest.input.idempotencyKey, "string");
   });
 
@@ -226,21 +267,21 @@ describe("PublisherAgent", () => {
   it("never claims completion when the capability was blocked or failed", async () => {
     const blocked = { status: "blocked", resultId: "blocked-1", capabilityId: PUBLISH_CAPABILITY_ID, reason: "Not authorized" };
     const agent = createPublisherAgent({ config: {}, capabilityExecution: boundary(blocked) });
-    const result = await agent.execute({ context: {}, input: input(baseArtifacts()) }, signal);
+    const result = await agent.execute({ context: {}, input: input(finalChain(), { publisherAuthorization: finalAuthorization() }) }, signal);
     strictEqual(result.output.status, "blocked");
     strictEqual(result.output.executionEvidencePresent, false);
     strictEqual(result.output.publicationId, "");
 
     const failed = { status: "failed", resultId: "failed-1", capabilityId: PUBLISH_CAPABILITY_ID, error: { code: "PROVIDER_ERROR", message: "down", retryable: true }, evidence: { evidenceId: "e-1", capabilityId: PUBLISH_CAPABILITY_ID, operation: "publish", providerId: "fake-publish", providerInvoked: true, workflowId: "workflow-1", correlationId: "correlation-1", agentId: "publisher", executedAt: "2026-08-14T00:00:00.000Z", durationMs: 1, succeeded: false, resultStatus: "failed" } };
     const agent2 = createPublisherAgent({ config: {}, capabilityExecution: boundary(failed) });
-    const result2 = await agent2.execute({ context: {}, input: input(baseArtifacts()) }, signal);
+    const result2 = await agent2.execute({ context: {}, input: input(finalChain(), { publisherAuthorization: finalAuthorization() }) }, signal);
     strictEqual(result2.output.status, "blocked");
     strictEqual(result2.output.executionEvidencePresent, false);
   });
 
   it("preserves workflowId and correlationId across the lineage", async () => {
     const agent = createPublisherAgent({ config: {}, capabilityExecution: boundary(capCompleted()) });
-    const result = await agent.execute({ context: {}, input: input(baseArtifacts()) }, signal);
+    const result = await agent.execute({ context: {}, input: input(finalChain(), { publisherAuthorization: finalAuthorization() }) }, signal);
     strictEqual(result.output.metadata.workflowId, "workflow-1");
     strictEqual(result.output.metadata.correlationId, "correlation-1");
   });
@@ -255,7 +296,7 @@ describe("PublisherAgent", () => {
     const agent = createPublisherAgent({ config: {}, capabilityExecution: {
       executeCapability: async (request) => { capturedRequest = request; return capCompleted(); },
     } });
-    await agent.execute({ context: {}, input: input(baseArtifacts(), { instructions: "A caption describing the video." }) }, signal);
+    await agent.execute({ context: {}, input: input(finalChain(), { publisherAuthorization: finalAuthorization(), instructions: "A caption describing the video." }) }, signal);
     strictEqual(capturedRequest.input.description, "A caption describing the video.");
   });
 });

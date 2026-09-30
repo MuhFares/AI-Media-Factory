@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import { strictEqual, ok } from "node:assert";
-import { VideoGenerationCapabilityExecutor } from "../dist/index.js";
+import { VideoGenerationCapabilityExecutor, videoGenerationIdentity } from "../dist/index.js";
 
 const descriptor = { capabilityId: "video.generate", description: "Generate a video", inputSchema: { type: "object" }, outputSchema: { type: "object" } };
 
@@ -36,6 +36,14 @@ const completed = (overrides = {}) => ({
 });
 
 describe("VideoGenerationCapabilityExecutor", () => {
+  it("includes runtime, version, and generation settings in stable identity", () => {
+    const base = request({ prompt: "identity", runtimeIdentity: "self-hosted-video:runpod:ry49lc45y50ldy", generationVersion: "v2", seed: 7, steps: 10 });
+    strictEqual(videoGenerationIdentity(base), videoGenerationIdentity({ ...base }));
+    ok(videoGenerationIdentity(base) !== videoGenerationIdentity({ ...base, input: { ...base.input, runtimeIdentity: "self-hosted-video:runpod:o54nlat1w78954" } }));
+    ok(videoGenerationIdentity(base) !== videoGenerationIdentity({ ...base, input: { ...base.input, generationVersion: "v3" } }));
+    ok(videoGenerationIdentity(base) !== videoGenerationIdentity({ ...base, input: { ...base.input, steps: 11 } }));
+  });
+
   it("executes a valid generation through the injected provider and confirms completion", async () => {
     const { executor, calls } = setup(async (value) => completed());
     const result = await executor.execute(request({ prompt: "A cinematic media pipeline video", durationSeconds: 30, aspectRatio: "16:9" }));

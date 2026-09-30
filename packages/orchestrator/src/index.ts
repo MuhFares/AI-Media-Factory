@@ -9,7 +9,7 @@
 
 export { Orchestrator } from "./orchestrator.js";
 export type { OrchestratorDeps } from "./orchestrator.js";
-export { directiveToWorkflowDefinition } from "./definition.js";
+export { directiveToWorkflowDefinition, withPreProductionOwnerGate, withInitialProviderAuthorityGate, PRE_PRODUCTION_OWNER_GATE_STEP_ID, PILOT_PROVIDER_AUTHORITY_GATE_STEP_ID, OWNER_PRE_MEDIA_GATE_STEP_ID } from "./definition.js";
 export { ArtifactProducingExecutor } from "./execution/artifact-producing-executor.js";
 export type { ArtifactProducingExecutorOptions, ArtifactSpec } from "./execution/artifact-producing-executor.js";
 export * from "./templates.js";

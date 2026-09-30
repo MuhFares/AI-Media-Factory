@@ -6,6 +6,7 @@ import {
   VoicetutTTSAdapter,
   ProviderConfigurationError,
   isProviderError,
+  SubmissionOutcomeUnknownError,
 } from "@ai-media-factory/provider-adapters";
 import { createVoicetutTTSMock } from "../helpers/mock-servers.ts";
 
@@ -23,6 +24,85 @@ function adapterFor(mockUrl: string, config: Record<string, unknown> = {}) {
 }
 
 describe("VoicetutTTSAdapter", () => {
+  it("durably captures acknowledgement before polling and resumes by status without a second run", async (t) => {
+    const mock = await createVoicetutTTSMock();
+    t.after(() => mock.close());
+    let providerJobId: string | null = null;
+    let crashAfterCapture = true;
+    const phases: string[] = [];
+    const lifecycle = {
+      findAcknowledged: async () => providerJobId === null ? null : { providerJobId },
+      persistIntent: async () => { phases.push("SUBMISSION_INTENT"); },
+      persistPhase: async (_identity: unknown, phase: string) => { phases.push(phase); },
+      persistAcknowledged: async (_identity: unknown, id: string) => {
+        providerJobId = id;
+        phases.push("PROVIDER_JOB_ID_CAPTURED_DURABLY");
+        if (crashAfterCapture) { crashAfterCapture = false; throw new Error("simulated process stop after durable acknowledgement"); }
+      },
+    };
+    const request = { text: "one chunk", voice: "Mohamed", logicalSubmissionId: "logical-r3-1", workflowId: "wf-r3", textFingerprint: "a".repeat(64), configurationFingerprint: "b".repeat(64) };
+    const first = adapterFor(mock.url, { submissionLifecycle: lifecycle });
+    await first.generate(request).then(() => ok(false, "expected simulated stop"), (error) => ok(String(error).includes("simulated process stop")));
+    strictEqual(mock.state.submissions, 1);
+    strictEqual(mock.state.polls, 0);
+    strictEqual(providerJobId, "vt-job-1");
+    const recovered = await adapterFor(mock.url, { submissionLifecycle: lifecycle }).generate(request);
+    strictEqual(recovered.providerId, "voicetut");
+    strictEqual(mock.state.submissions, 1);
+    ok(mock.state.polls >= 1);
+    ok(phases.indexOf("PROVIDER_JOB_ID_CAPTURED_DURABLY") < phases.indexOf("PROVIDER_JOB_STATUS"));
+  });
+
+  it("retains safe receipt-unknown transport diagnostics and never retries submit", async (t) => {
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      const cause = Object.assign(new Error("lookup failed"), { code: "ENOTFOUND" });
+      throw Object.assign(new TypeError("fetch failed"), { cause });
+    }) as typeof fetch;
+    t.after(() => { globalThis.fetch = originalFetch; });
+    const adapter = adapterFor("https://api.runpod.ai/v2");
+    await adapter.generate({ text: "provider-free transport test", voice: "Mohamed" }).then(
+      () => ok(false, "expected throw"),
+      (error) => {
+        ok(error instanceof SubmissionOutcomeUnknownError);
+        strictEqual(error.retryable, false);
+        strictEqual(error.providerAccepted, "unknown");
+        strictEqual(error.providerReceiptStatus, "UNKNOWN");
+        strictEqual(error.transportDiagnostic, "DNS_ERROR");
+        strictEqual(error.safeCauseCode, "ENOTFOUND");
+        strictEqual(error.transportPhase, "FETCH_INVOCATION_STARTED");
+        strictEqual(String(error).includes("rpa-test"), false);
+        strictEqual(String(error).includes("vt-endpoint"), false);
+      },
+    );
+    strictEqual(calls, 1);
+  });
+
+  it("classifies a locally denied fetch without claiming provider non-receipt", async (t) => {
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      throw Object.assign(new TypeError("fetch failed"), {
+        cause: Object.assign(new Error("access denied"), { code: "EACCES" }),
+      });
+    }) as typeof fetch;
+    t.after(() => { globalThis.fetch = originalFetch; });
+    await adapterFor("https://api.runpod.ai/v2").generate({ text: "offline mocked failure", voice: "Mohamed" }).then(
+      () => ok(false, "expected throw"),
+      (error) => {
+        ok(error instanceof SubmissionOutcomeUnknownError);
+        strictEqual(error.safeCauseCode, "EACCES");
+        strictEqual(error.transportDiagnostic, "LOCAL_TRANSPORT_ACCESS_RESTRICTION");
+        strictEqual(error.providerReceiptStatus, "UNKNOWN");
+        strictEqual(error.retryable, false);
+      },
+    );
+    strictEqual(calls, 1);
+  });
+
   it("generates a data URL WAV through run+poll", async (t) => {
     const mock = await createVoicetutTTSMock();
     t.after(() => mock.close());
