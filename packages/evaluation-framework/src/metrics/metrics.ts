@@ -3,7 +3,7 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { Timestamp, Json } from "./common";
+import type { Timestamp, Json } from "../core/common.js";
 
 /** Individual metric definition. */
 export interface MetricDefinition {
@@ -85,7 +85,6 @@ export const STANDARD_METRICS: Record<string, MetricDefinition> = {
   "agent.task_success_rate": {
     id: "agent.task_success_rate",
     name: "Task Success Rate",
-    description: "Percentage of agent tasks completed successfully",
     description: "Percentage of agent tasks completed successfully",
     unit: "percentage",
     higherIsBetter: true,

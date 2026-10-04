@@ -3,7 +3,7 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { AgentId, WorkflowId, StepId, TurnId, Json, Timestamp, Uuid } from "./common";
+import type { AgentId, WorkflowId, StepId, TurnId, Json, MemoryId, MemoryType } from "./common.js";
 
 export type ContextTrigger =
   | "turn_start"        // Normal turn start
@@ -63,16 +63,13 @@ export interface AgentState {
   kpis: Record<string, number>;
 }
 
-export interface MemoryType =
-  | "session"
-  | "company"
-  | "agent"
-  | "analytics"
-  | "decision"
-  | "workflow"
-  | "lessons"
-  | "checkpoint"
-  | "knowledge";
+export interface WorkflowContext {
+  workflowId: WorkflowId;
+  correlationId: string | null;
+  brandId: string | null;
+  outputs: Record<string, Json>;
+  data: Record<string, Json>;
+}
 
 export interface MemoryRecord {
   memory_id: string;

@@ -303,7 +303,10 @@ export class AlibabaProvider extends BaseLlmProvider {
       stream: false,
     };
 
-    if (request.responseFormat?.kind === 'json' || request.responseFormat?.kind === 'json_schema') {
+    if (request.responseFormat?.kind === 'json_schema') {
+      throw new Error('Alibaba adapter does not support json_schema; refusing silent schema downgrade');
+    }
+    if (request.responseFormat?.kind === 'json') {
       body.response_format = { type: 'json_object' };
     }
 
@@ -348,7 +351,7 @@ export class AlibabaProvider extends BaseLlmProvider {
 
     const text = choice.message.content;
     let output: import('./core/common.js').Json = text;
-    if (request.responseFormat?.kind === 'json' || request.responseFormat?.kind === 'json_schema') {
+    if (request.responseFormat?.kind === 'json') {
       try {
         output = JSON.parse(choice.message.content) as import('./core/common.js').Json;
       } catch {

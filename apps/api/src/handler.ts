@@ -17,9 +17,9 @@ import { createReadStream, lstatSync } from "node:fs";
 import path from "node:path";
 import { createHash, timingSafeEqual, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import type { PostgresPersistence, PostgresQueue, ControlPlaneStore, OwnerDecision, PostgresRevisionDispatcher, PostgresReviewResumeDispatcher, PostgresMediaResumeDispatcher, StrategicStore, StrategicEntityType, LifecycleStore, LearningLoopStore, ContentStore, SubjectStore, ChannelStore, AutomationStore, ModelIntelligenceStore, ModelBenchmarkRuntimeStore, ProductionModelRoutingStore, ProductionCallBudgetStore, OwnerAutonomyStore } from "@ai-media-factory/database";
-import { ownerOnboarding, ownerRouting, ownerRoutingActivate, ownerBudgetSet, ownerNextCycleList, ownerNextCycleDecide, ownerAudit, ownerOperationMatrix, ownerHealth, ownerWorkerControl, ownerCredentialHealthList, ownerCredentialHealthVerify } from "./owner-autonomy-api.js";
-import type { CredentialHealthVerifier } from "./owner-autonomy-api.js";
+import type { PostgresPersistence, PostgresQueue, ControlPlaneStore, OwnerDecision, PostgresRevisionDispatcher, PostgresReviewResumeDispatcher, PostgresMediaResumeDispatcher, StrategicStore, StrategicEntityType, LifecycleStore, LearningLoopStore, ContentStore, SubjectStore, ChannelStore, AutomationStore, ModelIntelligenceStore, ModelBenchmarkRuntimeStore, ProductionModelRoutingStore, ProductionCallBudgetStore, OwnerAutonomyStore, WanSupervisedExecutionStore } from "@ai-media-factory/database";
+import { ownerOnboarding, ownerRouting, ownerRoutingActivate, ownerBudgetSet, ownerNextCycleList, ownerNextCycleDecide, ownerAudit, ownerOperationMatrix, ownerHealth, ownerWorkerControl, ownerOpenRouterEgressProbe, ownerCredentialHealthList, ownerCredentialHealthVerify, ownerWanSupervisedList, ownerWanSingleSceneGenerate, ownerWanAttachProviderJob } from "./owner-autonomy-api.js";
+import type { CredentialHealthVerifier, WorkerDiagnosticClient } from "./owner-autonomy-api.js";
 import {
   automationPolicyGet, automationPolicySet, automationStatus, automationOverview,
   automationJobsList, automationJobSchedule, automationJobCancel, automationEvents,
@@ -104,7 +104,10 @@ export interface WorkflowApiDeps {
   readonly productionCallBudgets?: ProductionCallBudgetStore;
   /** Program 5 canonical Owner product operations over existing authorities. */
   readonly ownerAutonomy?: OwnerAutonomyStore;
+  readonly wanSupervised?: WanSupervisedExecutionStore;
+  readonly sourceBuildId?: string;
   readonly credentialHealthVerifier?: CredentialHealthVerifier;
+  readonly workerDiagnostics?: WorkerDiagnosticClient;
   /** Slice 3 approval actionability (optional for legacy deployments). */
   readonly actionability?: ApprovalActionabilityStore;
   /** Revision Cycle V1 owner authorization surface (optional for legacy deployments). */
@@ -367,6 +370,11 @@ export function createWorkflowApiHandler(deps: WorkflowApiDeps): (req: IncomingM
       if(credentialHealthMatch&&method==="POST")return await ownerCredentialHealthVerify(deps,req,res,decodeURIComponent(credentialHealthMatch[1]));
       if (path === "/control/owner/health" && method === "GET") return await ownerHealth(deps, res, url);
       if (path === "/control/owner/worker" && method === "POST") return await ownerWorkerControl(deps, req, res);
+      if (path === "/control/owner/diagnostics/openrouter-egress" && method === "POST") return await ownerOpenRouterEgressProbe(deps, req, res);
+      if(path==="/control/owner/wan-supervised"&&method==="GET")return await ownerWanSupervisedList(deps,res,url);
+      if(path==="/control/owner/wan-supervised/generate"&&method==="POST")return await ownerWanSingleSceneGenerate(deps,req,res);
+      const wanAttachMatch=path.match(/^\/control\/owner\/wan-supervised\/([^/]+)\/attach-provider-job$/);
+      if(wanAttachMatch&&method==="POST")return await ownerWanAttachProviderJob(deps,req,res,decodeURIComponent(wanAttachMatch[1]));
       const lifecycleMatch = path.match(/^\/control\/lifecycle\/([^/]+)$/);
       if (lifecycleMatch && method === "GET") return await lifecycleDetail(deps, res, decodeURIComponent(lifecycleMatch[1]));
 
@@ -714,7 +722,7 @@ async function mediaResumeState(deps: WorkflowApiDeps, res: ServerResponse, work
 async function dispatchCommand(deps: WorkflowApiDeps, orchestrator: Orchestrator, req: IncomingMessage, res: ServerResponse): Promise<void> {
   const body = await readBody(req) as Record<string, unknown>;
   const projectId = asText(body.projectId, 200); const message = asText(body.message); const mode = asText(body.mode, 30) ?? "MULTI_AGENT_REVIEW";
-  const directive = asText(body.directive, 30) ?? "research"; const selectedAgents = Array.isArray(body.selectedAgents) ? body.selectedAgents.filter((a): a is string => typeof a === "string") : [];
+  const selectedAgents = Array.isArray(body.selectedAgents) ? body.selectedAgents.filter((a): a is string => typeof a === "string") : [];
   const legacyModes: Record<string, "ASK_AGENT" | "MULTI_AGENT_REVIEW" | "START_GOVERNED_TASK"> = { ASK: "ASK_AGENT", ANALYZE: "MULTI_AGENT_REVIEW", ASSIGN_TASK: "START_GOVERNED_TASK" };
   const commandType = mode === "ANALYZE" && selectedAgents.length === 1 ? "ASK_AGENT" : legacyModes[mode] ?? mode;
   if (!projectId || !message || selectedAgents.length === 0 || !["ASK_AGENT", "MULTI_AGENT_REVIEW", "START_GOVERNED_TASK"].includes(commandType)) return sendJson(res, 400, { error: "projectId, message, mode and selectedAgents are required" });
@@ -722,6 +730,14 @@ async function dispatchCommand(deps: WorkflowApiDeps, orchestrator: Orchestrator
   const registered = new Set(agentCatalog().filter((a) => a.registered).map((a) => a.key));
   const unknown = selectedAgents.find((a) => !registered.has(a));
   if (unknown) return sendJson(res, 400, { error: `unknown agent: ${unknown}. Select only registered AI team members.` });
+  // ASK/MULTI commands are intercepted by the worker's governed-command
+  // runtime before workflow stages execute. They still need a current,
+  // persistable definition, but must never inherit a retired legacy directive
+  // such as `research`. START_GOVERNED_TASK alone accepts an Owner-selected
+  // production directive.
+  const directive = commandType === "START_GOVERNED_TASK"
+    ? asText(body.directive, 30) ?? "produce-pre-media"
+    : "produce-pre-media";
   try { orchestrator.stub(directive as OrchestratorDirective); } catch { return sendJson(res, 400, { error: "directive is not a governed workflow type" }); }
   const correlationId = generateId("corr"); const workflowId = generateId("wf"); const commandId = generateId("command");
   const context = isObject(body.context) ? body.context : {};
@@ -1146,6 +1162,39 @@ async function contentLink(deps: WorkflowApiDeps, req: IncomingMessage, res: Ser
 }
 
 const PILOT_BUDGETS: Readonly<Record<string, number>> = { research:1, text_agent:5, image_generation:3, video_generation:3, voice_generation:1, private_upload:1 };
+const MORROWAY_CYCLE_01 = "MORROWAY_PRODUCTION_CYCLE_01";
+const MORROWAY_CYCLE_01_BUDGET_PHASE = "MORROWAY_PRODUCTION_CYCLE_01_PRE_MEDIA";
+const CYCLE_01_CALL_ENVELOPE = { research:4, text_agent:10, image_generation:1 } as const;
+function preMediaBudgetPhase(brief:Record<string,unknown>):string{return brief.productionCycle===MORROWAY_CYCLE_01?MORROWAY_CYCLE_01_BUDGET_PHASE:"PRE_MEDIA_PHASE"}
+// Canonical explicit budget-phase identity (Golden Canary wiring).
+// An Owner may persist `budgetPhase` on the content production brief. When
+// present it takes precedence over the legacy productionCycle derivation, but
+// the string itself is never trusted: it must match the canonical shape AND
+// resolve to active Owner-authorized budget rows covering the canonical
+// pre-media envelope, otherwise resolution fails closed. Absent explicit
+// phase, the legacy derivation above remains the documented fallback so
+// historical Cycle-01 workflows keep resolving to MORROWAY_PRODUCTION_CYCLE_01_PRE_MEDIA.
+const EXPLICIT_BUDGET_PHASE_PATTERN = /^[A-Z][A-Z0-9_]{2,63}$/;
+type BudgetPhaseResolution =
+  | { ok:true; phase:string; explicit:boolean; cycleClass:boolean }
+  | { ok:false; error:"BUDGET_PHASE_FORMAT_INVALID"|"BUDGET_PHASE_UNAUTHORIZED"|"BUDGET_STORE_UNAVAILABLE" };
+async function resolveBudgetPhase(deps:WorkflowApiDeps,projectId:string,brief:Record<string,unknown>):Promise<BudgetPhaseResolution>{
+  const raw=brief.budgetPhase;
+  if(raw===undefined||raw===null||raw===""){
+    const phase=preMediaBudgetPhase(brief);
+    return { ok:true, phase, explicit:false, cycleClass:phase===MORROWAY_CYCLE_01_BUDGET_PHASE };
+  }
+  const phase=typeof raw==="string"?raw.trim():"";
+  if(!EXPLICIT_BUDGET_PHASE_PATTERN.test(phase))return { ok:false, error:"BUDGET_PHASE_FORMAT_INVALID" };
+  if(!deps.productionCallBudgets)return { ok:false, error:"BUDGET_STORE_UNAVAILABLE" };
+  const rows=await deps.productionCallBudgets.budgets(projectId,phase);
+  const byKind=new Map(rows.map(r=>[r.callKind,r]));
+  for(const [kind,needed] of Object.entries(CYCLE_01_CALL_ENVELOPE)){
+    const b=byKind.get(kind);
+    if(!b||!b.active||b.limit<needed||b.maxRetries!==0)return { ok:false, error:"BUDGET_PHASE_UNAUTHORIZED" };
+  }
+  return { ok:true, phase, explicit:true, cycleClass:true };
+}
 const PILOT_TEXT_MODELS: Readonly<Record<string,string>> = { planner:"glm-5.3",writer:"glm-5.3",seo:"glm-5.3",brand:"glm-5.3",review:"glm-5.3",qa:"deepseek-v4-flash" };
 const REVISION_LAYERS = new Set(["SCRIPT","SCENE","IMAGE","VIDEO_CLIP","VOICE","CAPTIONS","FINAL_COMPOSITION","METADATA"]);
 const QA_VALUES = new Set(["PASS","FAIL","NOT_APPLICABLE"]);
@@ -1161,21 +1210,29 @@ function productionBriefErrors(item:{projectId:string;productionBrief:Record<str
   if(String(b.format).toLowerCase()!=="short")errors.push("BRIEF_FORMAT_UNSUPPORTED");
   if(b.identityCriticalHuman===true)errors.push("PILOT_IDENTITY_CRITICAL_HUMAN_NOT_ALLOWED");
   if(!item.projectId)errors.push("BRIEF_PROJECT_REQUIRED");
+  if(b.budgetPhase!==undefined&&b.budgetPhase!==null&&b.budgetPhase!==""&&(typeof b.budgetPhase!=="string"||!EXPLICIT_BUDGET_PHASE_PATTERN.test(b.budgetPhase.trim())))errors.push("BRIEF_BUDGET_PHASE_INVALID");
   return [...new Set(errors)];
 }
 
 async function pilotPreflight(deps:WorkflowApiDeps,item:{contentId:string;projectId:string;productionBrief:Record<string,unknown>}):Promise<Record<string,unknown>>{
   const briefErrors=productionBriefErrors(item);
-  const roles=["orchestrator","research","ceo","planner","hooks","writer","director","visual-director","review","qa"];
+  const roles=["orchestrator","research","ceo","planner","writer","director","visual-director","review","qa"];
   const routes=[] as Record<string,unknown>[]; const routeErrors:string[]=[];
   if(!deps.productionModelRouting) routeErrors.push("CANONICAL_ROUTING_STORE_UNAVAILABLE");
   else for(const role of roles){try{const resolved=await deps.productionModelRouting.resolve(role,{projectId:item.projectId,slot:"primary"});routes.push({agent:role,provider:"openrouter",model:resolved.model,routingVersionId:resolved.routingVersionId,priceSnapshotId:resolved.priceSnapshotId,configurationSource:"ACTIVE_PROJECT_CANONICAL_ROUTING",availability:process.env.OPENROUTER_API_KEY?.trim()?"CONFIGURED_NOT_CALLED":"CREDENTIAL_UNAVAILABLE"});if(!process.env.OPENROUTER_API_KEY?.trim())routeErrors.push("OPENROUTER_CREDENTIAL_UNAVAILABLE");}catch(error){routeErrors.push(`ROUTE_${role.toUpperCase().replace(/-/g,"_")}_UNRESOLVED`);routes.push({agent:role,availability:"UNRESOLVED",reason:error instanceof Error?error.message:String(error)});}}
   const researchConfigured=Boolean(process.env.SEARCH_API_SERPER||process.env.SERPER_API_KEY||process.env.TAVILY_API_KEY||process.env.BRAVE_SEARCH_API_KEY||process.env.EXA_API_KEY);
   if(!researchConfigured)routeErrors.push("RESEARCH_RETRIEVAL_UNAVAILABLE");
-  const budgets=deps.productionCallBudgets?await deps.productionCallBudgets.budgets(item.projectId,"PRE_MEDIA_PHASE"):[];
+  const resolution=await resolveBudgetPhase(deps,item.projectId,item.productionBrief);
+  const budgetPhase=resolution.ok?resolution.phase:preMediaBudgetPhase(item.productionBrief);
+  const cycleClass=resolution.ok?resolution.cycleClass:budgetPhase===MORROWAY_CYCLE_01_BUDGET_PHASE;
+  const envelope=cycleClass?CYCLE_01_CALL_ENVELOPE:{research:1,text_agent:10};
+  const budgets=deps.productionCallBudgets?await deps.productionCallBudgets.budgets(item.projectId,budgetPhase):[];
   const budgetBy=new Map(budgets.map(b=>[b.callKind,b]));
-  const budgetErrors=[] as string[]; for(const [kind,needed] of Object.entries({research:1,text_agent:10})){const b=budgetBy.get(kind);if(!b)budgetErrors.push(`BUDGET_${kind.toUpperCase()}_MISSING`);else if(!b.active||b.limit<needed)budgetErrors.push(`BUDGET_${kind.toUpperCase()}_BELOW_PHASE_1`);else if(b.remaining<needed)budgetErrors.push(`BUDGET_${kind.toUpperCase()}_EXHAUSTED`);else if(b.maxRetries!==0)budgetErrors.push(`BUDGET_${kind.toUpperCase()}_RETRIES_NOT_ZERO`);}
-  return {phase:"PRE_MEDIA_PHASE",terminalState:"OWNER_PRE_MEDIA_REVIEW_REQUIRED",ready:briefErrors.length===0&&budgetErrors.length===0&&routeErrors.length===0,briefErrors,budgetErrors,routeErrors:[...new Set(routeErrors)],routes,researchRetrieval:{configured:researchConfigured,providerCallsMade:0},budgets,mediaReadinessRequired:false,phase2Authorized:false,providerCallsMade:0,disclosure:"Phase-1 preflight only. Media and publication providers are intentionally excluded. No provider was called and no budget was consumed."};
+  const budgetErrors=[] as string[]; if(!resolution.ok)budgetErrors.push(resolution.error); else for(const [kind,needed] of Object.entries(envelope)){const b=budgetBy.get(kind);if(!b)budgetErrors.push(`BUDGET_${kind.toUpperCase()}_MISSING`);else if(!b.active||b.limit<needed)budgetErrors.push(`BUDGET_${kind.toUpperCase()}_BELOW_PHASE_1`);else if(b.remaining<needed)budgetErrors.push(`BUDGET_${kind.toUpperCase()}_EXHAUSTED`);else if(b.maxRetries!==0)budgetErrors.push(`BUDGET_${kind.toUpperCase()}_RETRIES_NOT_ZERO`);}
+  const imageProvider={provider:"runpod-zimage",model:process.env.RUNPOD_ZIMAGE_MODEL_ID?.trim()||"z-image",configured:Boolean(process.env.RUNPOD_API_KEY?.trim()&&process.env.RUNPOD_ZIMAGE_ENDPOINT_ID?.trim()),healthState:"CONFIGURED_NOT_CALLED"};
+  if(cycleClass&&!imageProvider.configured)routeErrors.push("IMAGE_PROVIDER_CONFIGURATION_UNAVAILABLE");
+  const health=await deps.control.platformHealth();const workerReady=!health.workers.stale&&health.workers.liveCount===1;if(!workerReady)routeErrors.push("CURRENT_HEALTHY_SINGLETON_WORKER_REQUIRED");
+  return {phase:"PRE_MEDIA_PHASE",budgetPhase,budgetPhaseExplicit:resolution.ok?resolution.explicit:false,budgetPhaseSource:resolution.ok?(resolution.explicit?"EXPLICIT_AUTHORIZED":"LEGACY_FALLBACK"):"REJECTED",budgetPhaseError:resolution.ok?null:resolution.error,terminalState:"OWNER_PRE_MEDIA_REVIEW_REQUIRED",ready:briefErrors.length===0&&budgetErrors.length===0&&routeErrors.length===0,briefErrors,budgetErrors,routeErrors:[...new Set(routeErrors)],routes,researchRetrieval:{configured:researchConfigured,minCalls:1,maxCalls:cycleClass?4:1,providerCallsMade:0},callEnvelope:envelope,imageProvider,workerReady,youtubeCredentialRequired:false,budgets,mediaReadinessRequired:false,phase2Authorized:false,providerCallsMade:0,disclosure:"Capability-scoped Phase-1 preflight only. YouTube credential freshness is intentionally excluded from content pre-media readiness. Publication and analytics retain their independent credential gates. No provider was called and no budget was consumed."};
 }
 
 async function contentBriefUpdate(deps:WorkflowApiDeps,req:IncomingMessage,res:ServerResponse,contentId:string):Promise<void>{
@@ -1183,6 +1240,23 @@ async function contentBriefUpdate(deps:WorkflowApiDeps,req:IncomingMessage,res:S
   const body=await readBody(req) as Record<string,unknown>; const brief=(typeof body.brief==="object"&&body.brief!==null&&!Array.isArray(body.brief)?body.brief:{} ) as Record<string,unknown>;
   const merged={...item.productionBrief,...brief,brandProject:item.projectId}; const errors=productionBriefErrors({...item,productionBrief:merged});
   if(errors.length)return sendJson(res,400,{error:"PRODUCTION_BRIEF_INVALID",errors});
+  if(item.workflowId){
+    // budgetPhase is immutable after workflow binding: the bound submission's
+    // commandContext remains the single source of truth for worker,
+    // reconciliation and recovery. A post-binding brief edit may not repoint it.
+    const nextRaw=(merged as Record<string,unknown>).budgetPhase;
+    const nextNorm=nextRaw===undefined||nextRaw===null||nextRaw===""?null:String(nextRaw).trim();
+    if(nextNorm!==null){
+      let bound:string|null=null;
+      try{
+        const sub=await deps.queue.loadSubmissionByWorkflow(item.workflowId);
+        const ctx=sub?.commandContext as unknown;
+        const rec=typeof ctx==="string"?JSON.parse(ctx) as Record<string,unknown>:(ctx as Record<string,unknown>|null);
+        bound=typeof rec?.budgetPhase==="string"?rec.budgetPhase:null;
+      }catch{ bound=null; }
+      if(bound!==null&&nextNorm!==bound)return sendJson(res,409,{error:"BUDGET_PHASE_IMMUTABLE_AFTER_BINDING",boundBudgetPhase:bound});
+    }
+  }
   sendJson(res,200,{content:await store.updateProductionBrief(contentId,merged),disclosure:"Brief saved. No workflow or provider started."});
 }
 
@@ -1191,16 +1265,19 @@ async function contentPreflight(deps:WorkflowApiDeps,res:ServerResponse,contentI
 async function contentStartProduction(deps:WorkflowApiDeps,req:IncomingMessage,res:ServerResponse,contentId:string):Promise<void>{
   await readBody(req).catch(()=>({})); const store=requireContent(deps); let item=await store.getContent(contentId);if(!item)return sendJson(res,404,{error:"content not found"});
   if(item.workflowId){const existing=await deps.queue.loadSubmissionByWorkflow(item.workflowId);return sendJson(res,200,{created:false,workflowId:item.workflowId,status:existing?.status??"linked",content:item,disclosure:"Existing bound workflow reused; no duplicate created."});}
+  const resolution=await resolveBudgetPhase(deps,item.projectId,item.productionBrief);
+  if(!resolution.ok)return sendJson(res,409,{error:resolution.error,budgetPhase:typeof item.productionBrief.budgetPhase==="string"?item.productionBrief.budgetPhase:null,disclosure:"Explicit budget phase failed closed before any workflow, provider call, or budget mutation."});
   const preflight=await pilotPreflight(deps,item); if(preflight.ready!==true)return sendJson(res,409,{error:"PILOT_PREFLIGHT_BLOCKED",preflight});
   const submissionKey=`content-production:${contentId}`, proposedWorkflowId=generateId("wf"), correlationId=generateId("corr");
   const definition=directiveToWorkflowDefinition("produce-pre-media");
   const b=item.productionBrief;
-  const submitted=await deps.queue.submit({submissionKey,workflowId:proposedWorkflowId,directive:"produce-pre-media",correlationId,brandId:item.projectId,definition,commandContext:{source:"OWNER_CONTENT_PRODUCT",projectId:item.projectId,contentId,productionPhase:"PRE_MEDIA_PHASE",phaseAuthority:"OWNER_START_PRE_MEDIA",mediaAuthority:"NOT_GRANTED",publicationAuthority:"NOT_GRANTED",productionBrief:JSON.parse(JSON.stringify(b)),contentTopic:String(b.topic),objective:String(b.objective),platform:String(b.targetPlatform),audience:String(b.targetAudience),format:String(b.format),targetDurationSeconds:Number(b.targetDurationSeconds),sceneTarget:Number(b.sceneTarget),language:String(b.language),researchRequirement:String(b.researchRequirement),characterRequirement:String(b.characterRequirement)},status:"submitted"});
+  const budgetPhase=resolution.phase;
+  const submitted=await deps.queue.submit({submissionKey,workflowId:proposedWorkflowId,directive:"produce-pre-media",correlationId,brandId:item.projectId,definition,commandContext:{source:"OWNER_CONTENT_PRODUCT",projectId:item.projectId,contentId,productionPhase:"PRE_MEDIA_PHASE",budgetPhase,budgetPhaseExplicit:resolution.explicit,budgetPhaseSource:resolution.explicit?"EXPLICIT_AUTHORIZED":"LEGACY_FALLBACK",researchIntelligenceVersion:resolution.cycleClass?"V2":"V1",productionCycle:typeof b.productionCycle==="string"?b.productionCycle:null,phaseAuthority:"OWNER_START_PRE_MEDIA",mediaAuthority:"NOT_GRANTED",publicationAuthority:"NOT_GRANTED",productionBrief:JSON.parse(JSON.stringify(b)),contentTopic:String(b.topic),objective:String(b.objective),platform:String(b.targetPlatform),audience:String(b.targetAudience),format:String(b.format),targetDurationSeconds:Number(b.targetDurationSeconds),sceneTarget:Number(b.sceneTarget),language:String(b.language),researchRequirement:String(b.researchRequirement),characterRequirement:String(b.characterRequirement)},status:"submitted"});
   const canonical=submitted.created?await deps.queue.loadSubmissionByWorkflow(proposedWorkflowId):await deps.queue.loadSubmissionByKey(submissionKey);
   if(!canonical)throw new Error("CONTENT_PRODUCTION_SUBMISSION_MISSING");
   if(submitted.created)await deps.queue.enqueue(canonical.workflowId,submissionKey);
   item=(await store.linkRecords(contentId,{workflowId:canonical.workflowId}))!;
-  sendJson(res,submitted.created?201:200,{created:submitted.created,workflowId:canonical.workflowId,status:"QUEUED_PRE_MEDIA_PHASE",content:item,preflight,terminalState:"OWNER_PRE_MEDIA_REVIEW_REQUIRED",mediaAuthority:"NOT_GRANTED",disclosure:"Bounded Phase 1 queued. It ends at Owner pre-media review and cannot execute media or publication."});
+  sendJson(res,submitted.created?201:200,{created:submitted.created,workflowId:canonical.workflowId,budgetPhase:resolution.phase,budgetPhaseExplicit:resolution.explicit,status:"QUEUED_PRE_MEDIA_PHASE",content:item,preflight,terminalState:"OWNER_PRE_MEDIA_REVIEW_REQUIRED",mediaAuthority:"NOT_GRANTED",disclosure:"Bounded Phase 1 queued. It ends at Owner pre-media review and cannot execute media or publication."});
 }
 
 async function contentRevisionCreate(deps:WorkflowApiDeps,req:IncomingMessage,res:ServerResponse,contentId:string):Promise<void>{
@@ -1759,7 +1836,8 @@ async function decisionQueue(deps: WorkflowApiDeps, res: ServerResponse, url: UR
     .filter((x): x is NonNullable<typeof x> => x !== null)
     .sort((x, y) => rank(String(x.actionability)) - rank(String(y.actionability)));
   const credentialItems=deps.ownerAutonomy?await deps.ownerAutonomy.credentialDecisionItems(projectId):[];
-  const needsDecision = [...items.filter((i) => i.actionability === "ACTION_REQUIRED" || i.actionability === "CONFLICTED"),...credentialItems];
+  const wanItems=deps.wanSupervised?await deps.wanSupervised.decisionItems(projectId):[];
+  const needsDecision = [...items.filter((i) => i.actionability === "ACTION_REQUIRED" || i.actionability === "CONFLICTED"),...credentialItems,...wanItems];
   sendJson(res, 200, {
     projectId,
     needsDecision,
@@ -2018,7 +2096,10 @@ async function listWorkflows(deps: WorkflowApiDeps, res: ServerResponse, url: UR
 }
 
 async function platformHealth(deps: WorkflowApiDeps, res: ServerResponse): Promise<void> {
-  sendJson(res, 200, { health: await deps.control.platformHealth() });
+  sendJson(res, 200, {
+    health: await deps.control.platformHealth(),
+    runtime: { sourceBuildId: deps.sourceBuildId ?? null, pid: process.pid },
+  });
 }
 
 async function costSummary(deps: WorkflowApiDeps, res: ServerResponse, url: URL): Promise<void> {

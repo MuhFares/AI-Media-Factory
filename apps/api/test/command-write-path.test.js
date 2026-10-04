@@ -127,7 +127,7 @@ test("partial participant failure represented honestly", async () => {
 });
 
 test("START_GOVERNED_TASK uses governed workflow path (no command-status overwrite)", async () => {
-  const sub = await req("/control/commands", { method: "POST", body: JSON.stringify({ projectId: PID, mode: "START_GOVERNED_TASK", directive: "research", message: "Do research", selectedAgents: ["research"] }) });
+  const sub = await req("/control/commands", { method: "POST", body: JSON.stringify({ projectId: PID, mode: "START_GOVERNED_TASK", directive: "produce-pre-media", message: "Do governed pre-media research", selectedAgents: ["research"] }) });
   assert.equal(sub.status, 201);
   assert.equal(sub.body.authority.commandClass, "GOVERNED_WORK");
   const worker = makeWorker();

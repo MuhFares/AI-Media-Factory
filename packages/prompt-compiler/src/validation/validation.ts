@@ -5,8 +5,8 @@
  * Validates the final assembled prompt before it's sent to the provider.
  */
 
-import type { FinalPrompt } from "../sections/sections";
-import type { JsonSchema } from "../core/validation";
+import type { FinalPrompt } from "../sections/sections.js";
+import type { JsonSchema } from "../core/common.js";
 
 export type ValidationErrorCode =
   | "OVER_BUDGET"

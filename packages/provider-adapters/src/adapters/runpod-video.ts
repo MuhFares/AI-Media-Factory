@@ -43,6 +43,7 @@ export interface RunPodVideoConfig {
   resultDownloadTimeoutMs?: number;
   pollRetries?: number;
   onOperation?: OperationSink;
+  onLifecycle?: (event: { state: "ACKNOWLEDGED" | "GENERATING"; providerJobId: string }) => void | Promise<void>;
 }
 
 export interface RunPodVideoReceipt {
@@ -83,6 +84,7 @@ export class RunPodWanVideoAdapter implements VideoGenerationProvider {
   private readonly resultDownloadTimeoutMs: number;
   private readonly pollRetries: number;
   private readonly onOperation: OperationSink;
+  private readonly onLifecycle?: RunPodVideoConfig["onLifecycle"];
 
   constructor(config: RunPodVideoConfig) {
     if (typeof config.apiKey !== "string" || config.apiKey.trim().length === 0) {
@@ -106,6 +108,7 @@ export class RunPodWanVideoAdapter implements VideoGenerationProvider {
     assertPositive("self-hosted-video", this.statusRequestTimeoutMs, "statusRequestTimeoutMs");
     assertPositive("self-hosted-video", this.resultDownloadTimeoutMs, "resultDownloadTimeoutMs");
     this.onOperation = sinkOf(config.onOperation);
+    this.onLifecycle = config.onLifecycle;
   }
 
   /** Safe, secret-free timing policy for preflight, diagnostics, and tests. */
@@ -189,7 +192,7 @@ export class RunPodWanVideoAdapter implements VideoGenerationProvider {
         },
         {
           providerId: this.providerId,
-          operation: "submit",
+          operation: "SUBMISSION_ACK_WAIT",
           timeoutMs: this.submissionAckTimeoutMs,
           onOperation: this.onOperation,
           requestKey: request.clientExecutionId ?? request.idempotencyKey,
@@ -199,18 +202,23 @@ export class RunPodWanVideoAdapter implements VideoGenerationProvider {
       if (isProviderError(error) && error.category === "TIMEOUT") {
         throw new SubmissionOutcomeUnknownError(
           this.providerId,
-          "submit",
+          "SUBMISSION_ACK_WAIT",
           `Submission response timed out after ${this.submissionAckTimeoutMs}ms; provider acceptance and job id are unknown. Reconciliation is required; do not retry the submission.`,
         );
       }
       throw error;
     }
 
-    const submitJson = await this.readJson(submitRes, "submit");
+    const submitJson = await this.readJson(submitRes, "SUBMISSION_ACK_WAIT");
     const jobId = asString(submitJson.id) ?? asString((submitJson as unknown as Record<string, unknown>).jobId);
     if (!jobId || jobId.trim().length === 0) {
-      throw providerValidationError(this.providerId, "submit", "Provider did not return a job id");
+      throw new SubmissionOutcomeUnknownError(
+        this.providerId,
+        "SUBMISSION_ACK_WAIT",
+        "Submission response did not contain a provider job id; provider acceptance is ambiguous. Manual reconciliation is required; do not retry the submission.",
+      );
     }
+    await this.onLifecycle?.({ state: "ACKNOWLEDGED", providerJobId: jobId });
     const immediateStatus = asString(submitJson.status);
     if (immediateStatus === "COMPLETED") {
       const b64 = this.extractVideoBase64(submitJson);
@@ -219,6 +227,7 @@ export class RunPodWanVideoAdapter implements VideoGenerationProvider {
     if (immediateStatus !== undefined && TERMINAL_FAILED.has(immediateStatus)) {
       throw providerValidationError(this.providerId, "generate", `Provider job ${immediateStatus}: ${this.readError(submitJson)}`);
     }
+    await this.onLifecycle?.({ state: "GENERATING", providerJobId: jobId });
 
     const deadline = Date.now() + this.generationTimeoutMs;
     while (true) {
@@ -237,14 +246,14 @@ export class RunPodWanVideoAdapter implements VideoGenerationProvider {
         },
         {
           providerId: this.providerId,
-          operation: "poll",
+          operation: "GENERATION_STATUS_WAIT",
           timeoutMs: this.statusRequestTimeoutMs,
           maxRetries: this.pollRetries,
           onOperation: this.onOperation,
           requestKey: jobId,
         },
       );
-      const pollJson = await this.readJson(pollRes, "poll");
+      const pollJson = await this.readJson(pollRes, "GENERATION_STATUS_WAIT");
       const status = asString(pollJson.status);
       if (status === "COMPLETED") {
         const b64 = this.extractVideoBase64(pollJson);
@@ -391,7 +400,7 @@ export class RunPodWanVideoAdapter implements VideoGenerationProvider {
 }
 
 /** Construct a RunPod Wan video adapter from environment variables. */
-export function runPodVideoAdapterFromEnv(onOperation?: OperationSink): RunPodWanVideoAdapter {
+export function runPodVideoAdapterFromEnv(onOperation?: OperationSink, onLifecycle?: RunPodVideoConfig["onLifecycle"]): RunPodWanVideoAdapter {
   const apiKey = process.env.RUNPOD_API_KEY?.trim() ?? process.env.RUNPOD_VIDEO_API_KEY?.trim();
   const endpointId = process.env.RUNPOD_VIDEO_ENDPOINT_ID?.trim() ?? process.env.RUNPOD_VIDEO_API_ENDPOINT_ID?.trim();
   if (!apiKey || apiKey.length === 0) {
@@ -411,5 +420,6 @@ export function runPodVideoAdapterFromEnv(onOperation?: OperationSink): RunPodWa
     resultDownloadTimeoutMs: envNumber("self-hosted-video", "RUNPOD_VIDEO_RESULT_DOWNLOAD_TIMEOUT_MS", 120_000),
     pollRetries: envNumber("self-hosted-video", "RUNPOD_VIDEO_POLL_RETRIES", 2),
     onOperation,
+    onLifecycle,
   });
 }

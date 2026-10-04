@@ -33,8 +33,9 @@ import {
   PRE_PRODUCTION_OWNER_GATE_STEP_ID,
 } from "@ai-media-factory/orchestrator";
 import { buildDefaultEngine, createProductionAgentExecutor, WorkflowWorker } from "../dist/index.js";
-import { TEST_DATABASE_URL, assertTestDatabaseIsolation } from "./helpers.js";
+import { TEST_DATABASE_URL, assertTestDatabaseIsolation, truncateAll } from "./helpers.js";
 import { withV2ContractFixture } from "./visual-v2-fixtures.js";
+import { canonicalResearchPayload, canonicalResearchResults, isResearchPrompt } from "./canonical-production-fixtures.js";
 
 assertTestDatabaseIsolation();
 
@@ -67,10 +68,13 @@ const reviewReport = (status, sequence) => ({
   metadata: { createdAt: "2026-09-13T00:00:00.000Z", agentVersion: "1.0.0" },
 });
 
-globalThis.fetch = async () => {
+globalThis.fetch = async (_url, options) => {
   reviewFetchCalls += 1;
+  const body = JSON.parse(options.body);
+  const prompt = String(body.messages?.[1]?.content ?? "");
+  const payload = isResearchPrompt(prompt) ? canonicalResearchPayload(prompt) : currentReview;
   return new Response(
-    `data: ${JSON.stringify({ id: "gen-ppog", model: "nex-agi/nex-n2.5-pro:free", choices: [{ delta: { content: JSON.stringify(currentReview) }, finish_reason: "stop" }], usage: { prompt_tokens: 8, completion_tokens: 12, completion_tokens_details: { reasoning_tokens: 0 }, cost: 0 } })}\n\ndata: [DONE]\n\n`,
+    `data: ${JSON.stringify({ id: "gen-ppog", model: body.model, choices: [{ delta: { content: JSON.stringify(payload) }, finish_reason: "stop" }], usage: { prompt_tokens: 8, completion_tokens: 12, completion_tokens_details: { reasoning_tokens: 0 }, cost: 0 } })}\n\ndata: [DONE]\n\n`,
     { status: 200, headers: { "x-request-id": "ppog-review" } },
   );
 };
@@ -92,7 +96,7 @@ function mediaBoundary(counts) {
       executeCapability: async (request) => {
         counts[request.capabilityId] = (counts[request.capabilityId] ?? 0) + 1;
         const i = request.input ?? {};
-        if (request.capabilityId === "web.search") return success(request, { results: [{ title: "Egypt travel", url: "https://example.test/egypt", snippet: "fixture" }] });
+        if (request.capabilityId === "web.search") return success(request, { results: canonicalResearchResults });
         if (request.capabilityId === "tts.generate") return success(request, { audioUrl: fixtureAudioUrl, audioId: "narration-fixture", providerId: "mock-tts", durationMs: 12640, audioIntegrity: "VALID" });
         if (request.capabilityId === "timeline.plan") return success(request, { timelineId: "timeline-ppog", narrationDurationMs: i.narrationDurationMs, sceneIds: ["scene-001", "scene-002", "scene-003"] });
         if (request.capabilityId === "image.generate") return success(request, { imageId: `image-${i.sceneId}`, url: `file:///${i.sceneId}.png`, providerId: "mock-image" });
@@ -115,15 +119,10 @@ let queue;
 let control;
 
 async function resetTables() {
-  assertTestDatabaseIsolation();
-  await pool.query(
-    `TRUNCATE workflow_submissions, workflow_jobs, workflow_instances, workflow_steps,
-             workflow_checkpoints, artifacts, capability_executions, execution_evidence, decisions,
-             control_approvals, control_commands, review_revision_tasks,
-             execution_provenance, execution_lifecycle_events, execution_failure_fallback_events,
-             workflow_recovery_dispatches, provider_publications, provider_upload_sessions
-      RESTART IDENTITY CASCADE`,
-  );
+  await truncateAll(pool);
+  await pool.query(`TRUNCATE control_approvals, control_commands, review_revision_tasks,
+                    execution_provenance, execution_lifecycle_events, execution_failure_fallback_events,
+                    provider_publications, provider_upload_sessions RESTART IDENTITY CASCADE`);
 }
 
 before(async () => {

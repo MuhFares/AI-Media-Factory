@@ -24,6 +24,10 @@ export interface MediaBuildIdentity {
 
 /** Dist roots whose bytes execute or govern media work. */
 export const MEDIA_BUILD_PACKAGES: readonly string[] = [
+  // The Node control plane and worker report one platform build identity.
+  // Include API bytes so a changed route/contract cannot masquerade as
+  // current merely because worker-only packages were unchanged.
+  "apps/api",
   "apps/worker",
   "packages/provider-adapters",
   "packages/database",

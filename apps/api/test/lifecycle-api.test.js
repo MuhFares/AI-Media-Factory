@@ -34,13 +34,13 @@ after(async () => { await new Promise((r) => server.close(r)); await persistence
 
 test("lifecycle detail resolves fixture workflow end to end", async () => {
   const pid = `lc-api-${Date.now().toString(36)}`;
-  const sub = await req("/workflows", { method: "POST", body: JSON.stringify({ directive: "research", correlationId: "lc-1", brandId: pid, idempotencyKey: `lc-idem-${pid}` }) });
+  const sub = await req("/workflows", { method: "POST", body: JSON.stringify({ directive: "produce-pre-media", correlationId: "lc-1", brandId: pid, idempotencyKey: `lc-idem-${pid}` }) });
   assert.equal(sub.status, 201);
   const det = await req(`/control/lifecycle/${sub.body.workflowId}`);
   assert.equal(det.status, 200);
   const lc = det.body.lifecycle;
   assert.equal(lc.workflowId, sub.body.workflowId);
-  assert.ok(lc.title.includes(pid) || lc.title.includes("Research"));
+  assert.ok(lc.title.includes(pid) || lc.title.includes("Produce-pre-media"), lc.title);
   assert.ok(Array.isArray(lc.phases) && lc.phases.length === 8);
   assert.ok(Array.isArray(lc.milestones) && lc.milestones.length === 10);
   assert.ok(lc.nextStep.length > 0 && lc.ifYouDoNothing.length > 0);
@@ -67,7 +67,7 @@ test("reload returns identical lifecycle; unknown workflow 404s", async () => {
 test("ASK/MULTI executions never hijack project lifecycle truth", async () => {
   const pid = `lc-hijack-${Date.now().toString(36)}`;
   // content workflow first (older)
-  await req("/workflows", { method: "POST", body: JSON.stringify({ directive: "research", correlationId: "lc-h1", brandId: pid, idempotencyKey: `lc-h1-${pid}` }) });
+  await req("/workflows", { method: "POST", body: JSON.stringify({ directive: "produce-pre-media", correlationId: "lc-h1", brandId: pid, idempotencyKey: `lc-h1-${pid}` }) });
   // then a live ASK command (newer) on the same project
   const ask = await req("/control/commands", { method: "POST", body: JSON.stringify({ projectId: pid, mode: "ASK_AGENT", message: "hi", selectedAgents: ["research"] }) });
   assert.equal(ask.status, 201);
@@ -81,7 +81,7 @@ test("ASK/MULTI executions never hijack project lifecycle truth", async () => {
 
 test("project lifecycle list is scoped and bounded", async () => {
   const pid = `lc-scope-${Date.now().toString(36)}`;
-  await req("/workflows", { method: "POST", body: JSON.stringify({ directive: "research", correlationId: "lc-s", brandId: pid, idempotencyKey: `lc-scope-${pid}` }) });
+  await req("/workflows", { method: "POST", body: JSON.stringify({ directive: "produce-pre-media", correlationId: "lc-s", brandId: pid, idempotencyKey: `lc-scope-${pid}` }) });
   const list = await req(`/control/lifecycle?projectId=${pid}`);
   assert.equal(list.status, 200);
   assert.ok(list.body.lifecycles.length >= 1);

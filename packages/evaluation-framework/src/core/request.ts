@@ -10,9 +10,8 @@ import type {
   EvaluationStatus,
   GateDecision,
   Timestamp,
-  Json,
-  EvaluationTargetType
-} from "./common";
+  Json
+} from "./common.js";
 
 /** Request to run an evaluation. */
 export interface EvaluationRequest {

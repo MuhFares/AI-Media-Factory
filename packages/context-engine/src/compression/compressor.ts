@@ -3,14 +3,9 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { MemoryRecord } from "../selection/selector";
+import type { MemoryRecord } from "../selection/selector.js";
+import type { TokenBudget } from "./budget.js";
 
-export interface Summary {
-  sourceIds: string[];
-  summary: string;
-  tokens: number;
-  confidence: number;
-}
 
 export interface CompressionResult {
   compressedPackage: any;

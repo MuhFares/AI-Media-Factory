@@ -3,7 +3,7 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { PromptVersion, SectionType } from "../core/common";
+import type { AgentId, SectionType, Timestamp } from "./common.js";
 
 /**
  * A versioned prompt template. The template defines the structure and

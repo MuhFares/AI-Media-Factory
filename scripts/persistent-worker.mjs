@@ -79,6 +79,6 @@ if (!["start", "status", "stop"].includes(command)) {
   } else {
     const result = await singleton.inspect();
     print(result);
-    if (!["HEALTHY_SINGLETON", "STOPPED", "STALE_PID", "STALE_PID_REUSED", "STALE_HEARTBEAT"].includes(result.state)) process.exitCode = 1;
+    if (!["HEALTHY_SINGLETON", "STOPPED", "STALE_BUILD", "STALE_PID", "STALE_PID_REUSED", "STALE_HEARTBEAT"].includes(result.state)) process.exitCode = 1;
   }
 }

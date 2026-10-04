@@ -3,7 +3,7 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { Timestamp, Json } from "./common";
+import type { Timestamp, Json } from "../core/common.js";
 
 /** Benchmark definition. */
 export interface Benchmark {

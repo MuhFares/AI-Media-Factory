@@ -178,6 +178,29 @@ P4 = Media/Publication/Analytics, P5 = Owner Autonomy.
   recovered through an audited Owner output import without falsifying provider
   proof. Source hardening is provider-free certified, but the hardened handler,
   persistent receipts and endpoint digest parity are not deployed or certified.
+- 2026-09-30 deployment-certification evidence: still
+  `PARTIALLY_REMEDIATED`. The owned-handler zero-GPU suite passed 10/10 and the
+  Wan adapter/boundary selection passed 54/54, but guarded preflight stopped
+  before any RunPod call because the dedicated management credential, network
+  volume identity and immutable image digest were not configured. The operator
+  host also lacked Docker, the handler build context was untracked at checkpoint
+  `a0e92ff62126022b6c0db946f334bb4a65269fdb`, and the AMF worker was not live on
+  the current source build. No endpoint mutation or generation occurred; future
+  submissions remain prohibited.
+- 2026-09-30 bootstrap follow-up: the owned handler is now checkpointed at
+  `0cfde0d` with 13/13 zero-GPU tests and complete build/boot assets. This
+  resolves the untracked-source reproducibility blocker only. Image build/push,
+  immutable digest, management authentication, compatible persistent volume,
+  endpoint digest parity, deployed receipt durability and current-build worker
+  parity remain open; F-10 stays `PARTIALLY_REMEDIATED`.
+- 2026-10-01 Owner disposition: deployment certification is
+  `DEFERRED_BY_OWNER`. The immutable hardened image build is now proven and its
+  digest is preserved as
+  `sha256:716e7b7fa7b0d80d7a1ca5dbc31c9e50301da921a6ac01b992d84462bc77a326`.
+  This does not resolve the live portion of F-10: no compatible network volume
+  is provisioned, persistent receipts and endpoint digest parity are unproven,
+  and deployed client-execution correlation/no-blind-retry behavior remains
+  pending. `FUTURE_WAN_SUBMISSIONS_ALLOWED = NO`.
 
 ### F-11 — Caption/narration verification
 - ROOT_CAUSE: Burned-caption verification + narration-fit verification missing
@@ -443,8 +466,9 @@ elimination are provider-free tested. STATUS remains `PARTIALLY_REMEDIATED`;
 The Owner normal-operation portion is `RESOLVED_LIVE` as of 2026-09-30: one
 authenticated credential verification and one DEFER decision completed through
 AMF Control with no script/direct DB, no workflow start and no forbidden side
-effect. Remaining independent debt is backup/restore operationalization,
-durable object storage, horizontal scaling, hardened Wan deployment/persistent
+effect. The backup/restore sub-risk was subsequently resolved operationally on
+2026-10-01. Remaining independent debt is durable object storage, horizontal
+scaling, hardened Wan deployment/persistent
 receipts/endpoint digest parity, and Google OAuth production-domain migration.
 
 ---
@@ -458,3 +482,66 @@ receipts/endpoint digest parity, and Google OAuth production-domain migration.
 - P5: R-9, R-10 (plus all BLOCKS_AUTONOMY risks as entry conditions).
 
 Counts: functional risks registered = 16; architectural roots = 10; total = 26.
+
+## Operational update — backup/restore — 2026-10-01
+
+The backup/restore sub-risk of R-10 is `RESOLVED_OPERATIONALLY` for local
+logical PostgreSQL backup and isolated restore. Custom dump, manifest/SHA-256,
+critical-file allowlist, raw-secret exclusion, new-target-only guard, restored
+lineage/governance checks and a temporary restored-DB API read check all passed;
+production was not mutated. R-10 remains `PARTIALLY_REMEDIATED`: scheduled
+off-host replication, encryption/key custody, durable object storage,
+horizontal scaling, broader monitoring, Wan deployment and OAuth
+productionization remain independent open risks.
+At backup-certification time the isolated API boot reconfirmed that production
+lacked `uq_review_resume_idempotency_identity`, while current-source `migrate()`
+added it to the isolated restored copy. That certification did not authorize or
+execute the production migration; the later update below is authoritative.
+
+REVIEW_RESUME_SCHEMA_UPDATE (2026-10-01): the narrow production migration is
+now `APPLIED / VERIFIED`. The nullable identity column and partial unique index
+match current source, historical rows were preserved, the transactional
+duplicate probe rolled back with zero persistent rows, and Program 3 passed
+70/70. This closes the schema sub-risk. Runtime build parity remains an
+operational start gate: the canonical worker must be refreshed and rechecked
+before a bounded production cycle.
+
+OBJECT_STORAGE_UPDATE (2026-10-01): the design/integrity sub-risk is
+`RESOLVED_PROVIDER_FREE`. A provider-neutral contract, content-addressed local
+test backend, additive receipt schema, guarded deletion rules, publication
+resolver, restore integration and retention policy passed provider-free.
+Production durability remains `OPEN`: no provider/account/region/encryption
+policy is selected, no production migration or binary promotion occurred, and
+no cloud object/replication/versioning behavior is live-proven. R-10 therefore
+remains `PARTIALLY_REMEDIATED`.
+
+TEMPORARY_WAN_MODE_UPDATE (2026-10-01): Owner authorized a narrowly bounded,
+supervised legacy-endpoint posture, but activation is fail-closed. Source policy
+and 24 provider-free timeout/supervision tests prove separate 300-second ACK and
+900-second generation windows, one POST maximum, no retry after ambiguity, and
+zero-budget Owner reconciliation/import semantics. AMF Control displays the
+temporary warnings. Live activation remains `OPEN` because the current video
+stage can batch multiple scenes and no durable single-scene Owner Generate
+mutation exists; the production worker also requires current-build parity.
+Hardened deployment, persistent receipts and endpoint digest parity remain
+deferred and unresolved.
+
+WAN_SINGLE_SCENE_UPDATE (2026-10-01): the previously missing Owner-controlled
+single-scene path is `RESOLVED_PROVIDER_FREE`. A Node-only mutation, durable
+per-scene ledger, cross-process DB idempotency, pre-transport one-POST intent,
+exactly-once budget claim, canonical worker wiring/output evidence, explicit
+lifecycle feedback, Decision Center reconciliation and batch fail-closed gate
+passed 43 focused assertions. Live
+risk remains `OPEN`: the narrow production migration is unapplied, worker build
+parity is stale, and API/UI were offline at the check. Hardened deployment,
+persistent receipts and endpoint digest parity are still deferred; no live Wan
+call is authorized.
+
+WAN_RUNTIME_ACTIVATION_UPDATE (2026-10-01): the narrow production ledger
+migration, current worker build, singleton heartbeat, Node API, authenticated
+AMF Control proxy and temporary mode are now `VERIFIED_READY`. One approved
+scene is eligible and there are zero prior supervised executions. This closes
+the runtime-activation sub-risk only. The first real call remains bounded Owner
+authority; legacy endpoint digest parity, durable receipts/network volume and
+hardened deployment remain open, and autonomous/batch/retry operation remains
+forbidden.

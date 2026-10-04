@@ -69,6 +69,10 @@ export {
   finalizeWebSearchQuery,
   evaluateDiscoveryQueryQuality,
   materializeDiscoveryRetrievalPlan,
+  researchCapabilityInvocationIdentity,
+  researchDirectionResponseSchema,
+  normalizeResearchDirectionStageForRecovery,
+  RESEARCH_DIRECTION_REQUIRED_FIELDS,
   normalizeRuntimeIdentityEchoes,
 } from "./research-agent.js";
 export type {
@@ -80,4 +84,5 @@ export type {
   RuntimeIdentityEcho,
   WebSearchPackingTrace,
   WebSearchSemanticRequirement,
+  ResearchCapabilityInvocationIdentityInput,
 } from "./research-agent.js";

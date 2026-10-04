@@ -15,6 +15,7 @@ import type { WorkflowContext } from "../model/context.js";
 import type { StartInput, WorkflowEngine } from "../core/engine.js";
 import type { ApprovalDecision } from "../execution/approval.js";
 import type { StepExecutor } from "../execution/step-executor.js";
+import { ceoNoGoHaltBlocksResume } from "./step-executor.js";
 import type { Scheduler } from "../execution/scheduler.js";
 import type { WorkflowStateMachine } from "../core/common.js";
 import type { CheckpointCoordinator } from "../resilience/checkpoint.js";
@@ -167,6 +168,22 @@ export class DefaultWorkflowEngine implements WorkflowEngine {
   async resume(workflowId: Uuid): Promise<WorkflowInstance> {
     const instance = await this.recoveryManager.recover(workflowId);
     if (!instance) throw new Error(`Workflow not found: ${workflowId}`);
+    if (ceoNoGoHaltBlocksResume(instance)) {
+      // CEO NO-GO halt is sticky: a completed CEO halt marker blocks
+      // resumption until Owner-authorized action clears or replaces it.
+      // Plain redelivery/restart must never advance past the verdict, so
+      // return the halted instance without relaunching the loop.
+      // Non-CEO bounded markers keep legacy resume behavior below.
+      const haltReason = ((instance.context.data as Record<string, unknown>).boundedExecution as Record<string, unknown> | undefined)?.reason;
+      await this.auditTrail.append({
+        workflowId,
+        kind: "bounded_stop",
+        stepId: null,
+        detail: { reason: typeof haltReason === "string" ? haltReason : "CEO_NO_GO_HALT_RETAINED" },
+        at: new Date().toISOString(),
+      });
+      return instance;
+    }
     if (this.persistence && this.policyEnforcer) {
       const decisions = await this.persistence.listDecisions(workflowId);
       const definition = this.definitions.get(workflowId);

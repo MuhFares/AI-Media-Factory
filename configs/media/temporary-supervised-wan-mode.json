@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "operationMode": "TEMPORARY_GOVERNED_LEGACY_ENDPOINT",
+  "endpointId": "ry49lc45y50ldy",
+  "deploymentCertification": "DEFERRED_BY_OWNER",
+  "activationState": "PREPARED_NOT_RUNTIME_ENABLED",
+  "liveGeneration": "ALLOWED_ONLY_AFTER_ALL_PER_SCENE_GATES_PASS",
+  "autonomousGeneration": false,
+  "batchGeneration": false,
+  "automaticRetry": false,
+  "maxNewVideoPostsPerLogicalExecution": 1,
+  "timeoutsMs": {
+    "submissionAck": 300000,
+    "generation": 900000,
+    "pollInterval": 4000,
+    "statusRequest": 30000,
+    "resultDownload": 120000
+  },
+  "ambiguousAcknowledgementState": "MANUAL_RECONCILIATION_REQUIRED",
+  "ownerJobIdClassification": "OWNER_SUPPLIED_PROVIDER_JOB_ID",
+  "unverifiedProviderIdentityProof": "OWNER_ATTESTED_NOT_PROVIDER_VERIFIED",
+  "warnings": [
+    "PERSISTENT_RECEIPTS_UNAVAILABLE",
+    "ENDPOINT_DIGEST_PARITY_UNPROVEN",
+    "NO_AUTOMATIC_RETRIES",
+    "MANUAL_RECONCILIATION_MAY_BE_REQUIRED"
+  ],
+  "activationBlockers": [
+    "CANONICAL_SINGLE_SCENE_OWNER_GENERATE_ACTION_REQUIRED",
+    "CURRENT_WORKER_BUILD_PARITY_REQUIRED"
+  ]
+}

@@ -2,6 +2,10 @@
 
 import { describe, it } from "node:test";
 import { strictEqual, ok } from "node:assert";
+import { createHash } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   ImageProviderRegistry,
   imageAdapterFromEnv,
@@ -174,7 +178,13 @@ describe("publishingAdapterFromEnv", () => {
       withEnv({ YOUTUBE_ACCESS_TOKEN: "tok", GOOGLE_API_BASE_URL: yt.url });
       const r = publishingAdapterFromEnv({});
       strictEqual(r.activeProviderId, "youtube");
-      const res = await r.publish({ assetId: `${media.url}/asset.mp4`, title: "t" });
+      const mediaBytes = Buffer.alloc(4096, 0x42);
+      const mediaSha256 = createHash("sha256").update(mediaBytes).digest("hex");
+      const mediaDir = await mkdtemp(join(tmpdir(), "amf-publish-registry-"));
+      const mediaPath = join(mediaDir, "asset.mp4");
+      await writeFile(mediaPath, mediaBytes);
+      t.after(() => rm(mediaDir, { recursive: true, force: true }));
+      const res = await r.publish({ finalMediaArtifactId: "art-registry-video", finalMediaSha256: mediaSha256, mediaTransportRef: { type: "LOCAL_FILE", path: mediaPath, expectedSha256: mediaSha256 }, title: "t" });
       strictEqual(res.providerId, "youtube");
       strictEqual(res.status, "completed");
     } finally { Object.assign(process.env, backup); }

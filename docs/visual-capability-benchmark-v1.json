@@ -1,0 +1,139 @@
+{
+  "name": "VISUAL CAPABILITY BENCHMARK V1",
+  "scope": [
+    "real-world",
+    "travel/location",
+    "football/sports",
+    "cinematic/editorial",
+    "stylized cartoon"
+  ],
+  "wanStillImageGeneration": "NOT_PROVEN",
+  "manualSourceI2V": "COMPLETED_PROVIDER_OUTPUT",
+  "manualSourceI2VTechnicalQa": "PASS",
+  "manualSourceI2VAutomatedSemanticGate": "HUMAN_REVIEW_REQUIRED",
+  "manualSourceI2VHumanReview": "REJECTED",
+  "wanManualSourceIdentityPreservation": "FAIL",
+  "wanManualSourceSemanticVerdict": "REJECTED_FOR_IDENTITY_DRIFT",
+  "wanManualSourceProductionCandidate": "NO",
+  "budgets": {
+    "zImageT2I": 4,
+    "zImageI2I": 3,
+    "wanI2V": 2,
+    "wanStill": 0,
+    "retries": 0
+  },
+  "actualProviderInvocations": {
+    "zImageT2I": 4,
+    "zImageI2I": 0,
+    "wanI2V": 1,
+    "wanStill": 0,
+    "research": 0,
+    "voiceTuT": 0,
+    "flux": 0,
+    "experimentalWan": 0,
+    "publishing": 0,
+    "agentRouterContent": 0
+  },
+  "externalExecutionStatus": "PARTIAL_BLOCKED_BY_ENVIRONMENT",
+  "liveCompletion": {
+    "zImageTransport": "I2I_BLOCKED_BY_ENVIRONMENT",
+    "zImageT2I": "COMPLETED_4_CALLS_VIA_CAPABILITY_EXECUTOR",
+    "zImageI2I": "COMPLETED_3_CALLS_AUTOMATED_REVIEW_PENDING_HUMAN_REVIEW",
+    "wanManualSource": "COMPLETED_PROVIDER_OUTPUT",
+    "wanSecondCall": "NOT_RUN",
+    "wanStill": "NOT_PROVEN",
+    "retries": 0,
+    "bestZImageI2V": "PENDING_HUMAN_APPROVAL",
+    "evidence": "output/visual-capability-benchmark-v1/manual-source-wan-i2v-evidence.json"
+  },
+  "artifacts": {
+    "attempts": "output/visual-capability-benchmark-v1/attempts.json",
+    "manifest": "output/visual-capability-benchmark-v1/manifest.json",
+    "wanForensics": "docs/wan-forensics-visual-capability-v1.md"
+  },
+  "routing": {
+    "photoreal_documentary": "production-candidate-after-human-review",
+    "travel/location": "production-candidate-with-location-reference",
+    "sports/action": "specialist-pending-human-review",
+    "cinematic/editorial": "production-candidate-after-human-review",
+    "stylized_cartoon/illustration": "specialist-or-production-after-human-review",
+    "identity_preservation": "rejected-as-unproven",
+    "wan_still_image_generation": "rejected-not-proven"
+  },
+  "liveCompletionRouting": {
+    "real-world/location": "unproven-in-this-live-completion; prior accepted candidate remains subject to existing human gate",
+    "natural-contemporary-people": "blocked-by-environment; no live verdict",
+    "football/sports-action": "blocked-by-environment; no live verdict",
+    "stylized-cartoon": "blocked-by-environment; no live verdict",
+    "reference_i2i": "technical-provider-pass; HUMAN_REJECTED_FOR_LOCATION_IDENTITY_DRIFT",
+    "wan_manual_source": "technical-pass; automated semantic gate human-review-required; human verdict rejected for identity drift",
+    "wan_i2v_general_source_preservation": "MIXED / USE_CASE_DEPENDENT",
+    "wan_person_identity_preservation": "FAIL_IN_TESTED_MANUAL_SOURCE_CASE",
+    "wan_character_continuity_role": "NOT_APPROVED_WITHOUT_STRONGER_REFERENCE/CONTROL",
+    "second_image_model_benchmark": "not_decided_until_human_I2I_review"
+  },
+  "humanReview": {
+    "zImageT2I": {
+      "realWorld": "HUMAN_PASS",
+      "people": "HUMAN_PASS",
+      "sports": "HUMAN_PASS",
+      "cartoon": "HUMAN_PASS"
+    },
+    "automatedReviewer": "HUMAN_REVIEW_REQUIRED",
+    "automatedQA": "HUMAN_REVIEW_REQUIRED",
+    "reviewerAgentPass": false,
+    "qaAgentPass": false
+  },
+  "i2iReferencePlan": {
+    "selectedReference": {
+      "path": "D:\\AIWorkspace\\AI-Media-Factory\\output\\visual-capability-benchmark-v1\\A-real-world-location.png",
+      "sha256": "375e720edb02ee71eefa608a6ec18b2be2d5a43bb4c853f23fac60eb9db079f9",
+      "bytes": 1045012,
+      "dimensions": {
+        "width": 768,
+        "height": 1024
+      },
+      "reason": "Single coherent real-world scene suitable for measuring source/composition/subject/style preservation under controlled transformation."
+    },
+    "transportStatus": "BLOCKED_BY_ENVIRONMENT",
+    "strengths": [
+      0.35,
+      0.55,
+      0.75
+    ],
+    "actualProviderInvocations": 0,
+    "retries": 0
+  },
+  "referenceAssetTransport": {
+    "status": "RESOLVED_FOR_THIS_EXTERNAL_REFERENCE",
+    "providerCalls": 3,
+    "forensics": "output/visual-capability-benchmark-v1/reference-asset-transport-forensics.json",
+    "selectedReference": {
+      "path": "https://cnn-arabic-images.cnn.io/cloudinary/image/upload/w_1920,c_scale,q_auto/cnnarabic/2022/05/26/images/213338.jpg",
+      "sha256": "fd904b1d04370bd09fb653e30c76f60f9b319b92a6da16d64c8390b952d2e6f3",
+      "bytes": 298572,
+      "dimensions": {
+        "width": 1920,
+        "height": 1080
+      }
+    },
+    "requiredInfrastructure": [
+      "approved object/blob storage bucket or equivalent controlled asset store",
+      "service identity/secret-manager binding for upload and read",
+      "short-lived scoped read-only signed URL issuer",
+      "allowlisted provider URL origin and expiry metadata",
+      "ReferenceAsset resolver integrated upstream of provider adapter",
+      "integration tests against a local storage emulator or controlled mock; no fake provider-reachable localhost path"
+    ],
+    "resolvedReference": {
+      "url": "https://cnn-arabic-images.cnn.io/cloudinary/image/upload/w_1920,c_scale,q_auto/cnnarabic/2022/05/26/images/213338.jpg",
+      "provenance": "external visual reference; not identity benchmark",
+      "expiry": null
+    }
+  },
+  "referenceI2IHumanReview": {
+    "status": "REJECTED",
+    "reason": "HUMAN_REJECTED: reference Cairo Tower and skyline identity were not preserved; generated outputs substitute a different tower/landmark and materially alter the location composition.",
+    "reviewedBy": "user"
+  }
+}

@@ -165,7 +165,15 @@ This is not productionized OAuth readiness.
   poll 4000 ms; status request 30000 ms; result download 120000 ms.
 - No-blind-retry and exactly-once accounting are certified provider-free.
 - `FUTURE_WAN_SUBMISSIONS_ALLOWED = NO`.
-- `WAN_DEPLOYMENT_CERTIFICATION = NOT_PROVEN`.
+- `WAN_DEPLOYMENT_CERTIFICATION = BLOCKED_PRE_DEPLOYMENT` (2026-09-30 guarded
+  certification attempt; zero provider calls). Source tests remain green, but
+  the dedicated management credential, persistent network-volume identity,
+  immutable image digest, deployed parity and current-build worker were not
+  available. The handler build-context blocker was subsequently resolved by
+  dedicated source commit `0cfde0d` with 13/13 zero-GPU tests and immutable GHCR
+  build identity reporting. That commit was not pushed and no image digest was
+  produced, so endpoint parity and deployment certification remain blocked. No
+  endpoint update, image push, or generation occurred.
 
 Required before future Wan generation:
 
@@ -180,6 +188,35 @@ Required before future Wan generation:
 Historical Phase-3 proof remains
 `OWNER_ATTESTED_NOT_PROVIDER_VERIFIED`; local output technical proof is
 `VERIFIED`. The ambiguity must never be rewritten.
+
+Owner backlog decision (2026-10-01): `WAN_DEPLOYMENT_CERTIFICATION =
+DEFERRED_BY_OWNER`. Source hardening remains `PROVIDER_FREE_PASS`. The immutable
+handler image build is preserved at
+`ghcr.io/muhfares/amf-wan22-i2v:sha-0cfde0da42e196751e679950f20972f049af18e1`
+with digest
+`sha256:716e7b7fa7b0d80d7a1ca5dbc31c9e50301da921a6ac01b992d84462bc77a326`.
+No persistent volume, endpoint deployment/parity proof, receipt durability
+proof, or live generation certification exists. Infrastructure/cost commitment
+is intentionally deferred; future submissions remain prohibited.
+
+Re-entry requires, in order: a compatible RunPod volume of at least 50 GB
+(100 GB recommended); `/runpod-volume` mount; receipt directory
+`/runpod-volume/amf-video-receipts`; required models under
+`/runpod-volume/models`; endpoint/template attachment; deployment of the exact
+immutable digest; endpoint/source parity; durable receipt lookup; current-build
+AMF worker; and one separately authorized, bounded, no-retry canary. Only then
+may governed future Wan submissions be reconsidered.
+
+Temporary supervised mode update (2026-10-01): the Owner authorized the
+governance target `TEMPORARY_GOVERNED_LEGACY_ENDPOINT` for endpoint
+`ry49lc45y50ldy`. Source policy now enforces one POST maximum, separate ACK and
+generation waits, no automatic retry, honest manual reconciliation evidence and
+zero-additional-budget audited MP4 import. AMF Control labels this as temporary
+and not hardened. Activation is currently fail-closed (`PREPARED_NOT_RUNTIME_ENABLED`):
+the existing production media-chain video stage is batch-oriented rather than
+a durable, exact-scene Owner action, and current worker build parity is absent.
+Consequently the Owner decision is preserved without weakening the canonical
+`FUTURE_WAN_SUBMISSIONS_ALLOWED = NO` runtime gate. Programs 1–5 remain closed.
 
 ## 9. Closed Research Pilot
 
@@ -259,11 +296,13 @@ because an engineering agent is present.
 
 ## 14. Next separately authorized work candidates
 
-All candidates are `NOT_AUTHORIZED / NOT_STARTED`:
+Except for the explicitly completed backup/restore item noted below, the
+remaining candidates are `NOT_AUTHORIZED / NOT_STARTED`:
 
 - A. `GOOGLE_OAUTH_PRODUCTIONIZATION`
 - B. `WAN_DEPLOYMENT_CERTIFICATION`
-- C. `BACKUP_RESTORE_OPERATIONALIZATION`
+- C. `BACKUP_RESTORE_OPERATIONALIZATION` — subsequently authorized and
+  completed `PASS` on 2026-10-01; no longer a not-started candidate
 - D. `DURABLE_OBJECT_STORAGE`
 - E. `HORIZONTAL_SCALING`
 - F. `FINAL_BRAND_VOICE_SELECTION`
@@ -315,3 +354,24 @@ new exact Owner authorization.
 - production database mutations: `0`
 - budget/routing/automation/runtime mutations: `0`
 - next program started: `NO`
+
+## Post-snapshot operational update — 2026-10-01
+
+`BACKUP_RESTORE_OPERATIONALIZATION`, previously listed as a separately
+authorized candidate, was authorized and completed as `PASS`. The canonical
+procedure is `docs/operations/AMF_BACKUP_AND_RESTORE_RUNBOOK.md`. This does not
+change closed Programs 1–5. Scheduled/off-host backups, encryption custody and
+durable object storage remain not-started independent work.
+
+Subsequent operational update: durable object storage reached
+`PROVIDER_FREE_DESIGN_PASS` on 2026-10-01. No production provider was selected,
+no binary was migrated and no production schema was changed. See
+`docs/operations/AMF_OBJECT_STORAGE_AND_RETENTION_RUNBOOK.md`; live durability
+remains separately authorized work.
+
+Subsequent schema update: production migration
+`review-resume-idempotency-identity-v1` was applied and verified on 2026-10-01.
+It added only the nullable review-resume identity and its partial unique index;
+historical rows were preserved and Program 3 passed 70/70. Programs 1–5 remain
+closed. The live worker still requires an Owner refresh to the current source
+build before any separately authorized bounded cycle.

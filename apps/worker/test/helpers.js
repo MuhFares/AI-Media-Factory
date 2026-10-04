@@ -23,6 +23,10 @@ export function truncateAll(pool) {
   return pool.query(
     `TRUNCATE workflow_submissions, workflow_jobs, workflow_instances, workflow_steps,
             workflow_checkpoints, artifacts, capability_executions, execution_evidence, decisions
+            , workflow_recovery_dispatches, targeted_verification_dispatches,
+            targeted_verification_reevaluation_recoveries, media_resume_dispatches,
+            media_resume_provider_usage, media_stage_claims, amf_worker_presence,
+            wan_supervised_executions
      RESTART IDENTITY CASCADE`
   );
 }

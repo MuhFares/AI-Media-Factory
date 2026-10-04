@@ -6,7 +6,7 @@
  * It can block, warn, or rewrite the prompt.
  */
 
-import type { Json } from "../core/common";
+import type { Json } from "../core/common.js";
 
 export interface Guardrail {
   id: string;
@@ -38,13 +38,6 @@ export interface VoiceRules {
   grounded: boolean;
   expertApproachable: boolean;
   showDontTell: boolean;
-}
-
-export interface GuardrailViolation {
-  guardrailId: string;
-  severity: "hard" | "soft";
-  message: string;
-  location?: { start: number; end: number };
 }
 
 export interface SafetyLayer {

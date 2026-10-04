@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -203,9 +204,16 @@ def _require_project(project_id: str) -> None:
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
+def health() -> dict[str, object]:
     """Liveness probe."""
-    return {"status": "ok", "env": settings.app_env, "version": __version__}
+    digest = hashlib.sha256()
+    for source in (Path(__file__), STATIC_DIR / "app.js", STATIC_DIR / "index.html"):
+        if source.exists():
+            digest.update(str(source.relative_to(REPOSITORY_ROOT)).replace("\\", "/").encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(source.read_bytes())
+            digest.update(b"\0")
+    return {"status": "ok", "env": settings.app_env, "version": __version__, "sourceBuildId": digest.hexdigest(), "pid": os.getpid()}
 
 
 SESSION_COOKIE = "amf_session"
@@ -385,7 +393,7 @@ def runtime_resource(resource: str, project_id: str = "morroway", workflow_id: s
                 "analytics-comparisons", "analytics-experiments", "analytics-insights",
                 "analytics-availability", "analytics-agent-query"}
     allowed |= {"owner-onboarding", "owner-routing", "owner-next-cycle", "owner-audit",
-                "owner-operation-matrix", "owner-health", "owner-credential-health"}
+                "owner-operation-matrix", "owner-health", "owner-credential-health", "owner-wan-supervised"}
     if resource not in allowed:
         raise HTTPException(status_code=404, detail="Unknown control resource")
     mapping = {"configuration-map": "configuration/map", "configuration-history": "configuration/history",
@@ -417,7 +425,7 @@ def runtime_resource(resource: str, project_id: str = "morroway", workflow_id: s
     mapping.update({"owner-onboarding": "owner/onboarding", "owner-routing": "owner/routing",
                     "owner-next-cycle": "owner/next-cycle", "owner-audit": "owner/audit",
                     "owner-operation-matrix": "owner/operation-matrix", "owner-health": "owner/health",
-                    "owner-credential-health": "owner/credential-health"})
+                    "owner-credential-health": "owner/credential-health", "owner-wan-supervised": "owner/wan-supervised"})
     control = mapping.get(resource, resource)
     if resource == "content-detail":
         if not content_id:
@@ -1139,11 +1147,36 @@ class OwnerWorkerRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=2000)
 
 
+class OwnerWorkerDiagnosticRequest(BaseModel):
+    project_id: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
 class OwnerCredentialHealthRequest(BaseModel):
     project_id: str
     action: str = Field(default="VERIFY_HEALTH", pattern="^(VERIFY_HEALTH|REFRESH_AND_VERIFY)$")
     reason: str = Field(min_length=1, max_length=2000)
     idempotency_key: str = Field(min_length=8, max_length=300)
+
+
+class OwnerWanSingleSceneRequest(BaseModel):
+    project_id: str = Field(min_length=1, max_length=200)
+    content_id: str = Field(min_length=1, max_length=300)
+    workflow_id: str = Field(min_length=1, max_length=300)
+    scene_id: str = Field(min_length=1, max_length=300)
+    scene_visual_artifact_id: str = Field(min_length=1, max_length=300)
+    scene_visual_sha256: str = Field(pattern="^[A-Fa-f0-9]{64}$")
+    provider: str = Field(min_length=1, max_length=100)
+    model: str = Field(min_length=1, max_length=200)
+    model_config: dict[str, Any] = {}
+    reason: str = Field(min_length=1, max_length=2000)
+    idempotency_identity: str = Field(min_length=8, max_length=300)
+
+
+class OwnerWanAttachJobRequest(BaseModel):
+    project_id: str = Field(min_length=1, max_length=200)
+    provider_job_id: str = Field(min_length=1, max_length=300)
+    reason: str = Field(min_length=1, max_length=2000)
 
 
 @app.post("/api/owner/budgets")
@@ -1206,12 +1239,42 @@ def owner_worker_control(request: OwnerWorkerRequest) -> dict[str, Any]:
         "reason": request.reason, "actor": "owner-ui"}, timeout_seconds=35)
 
 
+@app.post("/api/owner/diagnostics/openrouter-egress")
+def owner_openrouter_egress_probe(request: OwnerWorkerDiagnosticRequest) -> dict[str, Any]:
+    """CSRF/auth proxy; the non-inference GET executes inside the worker."""
+    return _runtime_request("/control/owner/diagnostics/openrouter-egress", "POST", {
+        "projectId": request.project_id, "reason": request.reason,
+        "actor": "owner-ui"}, timeout_seconds=25)
+
+
 @app.post("/api/owner/credentials/{binding_id}/verify")
 def owner_credential_health_verify(binding_id: str, request: OwnerCredentialHealthRequest) -> dict[str, Any]:
     """Proxy only: credential resolution and verification remain Node authority."""
     return _runtime_request(f"/control/owner/credentials/{quote(binding_id, safe='')}/verify", "POST", {
         "projectId": request.project_id, "action": request.action, "reason": request.reason,
         "idempotencyKey": request.idempotency_key, "actor": "owner-ui"}, timeout_seconds=45)
+
+
+@app.post("/api/owner/wan-supervised/generate")
+def owner_wan_single_scene_generate(request: OwnerWanSingleSceneRequest) -> dict[str, Any]:
+    """CSRF/auth proxy only; Node owns authorization, ledger and execution state."""
+    return _runtime_request("/control/owner/wan-supervised/generate", "POST", {
+        "projectId": request.project_id, "contentId": request.content_id,
+        "workflowId": request.workflow_id, "sceneId": request.scene_id,
+        "sceneVisualArtifactId": request.scene_visual_artifact_id,
+        "sceneVisualSha256": request.scene_visual_sha256,
+        "provider": request.provider, "model": request.model,
+        "modelConfig": request.model_config, "reason": request.reason,
+        "idempotencyIdentity": request.idempotency_identity, "actor": "owner-ui"})
+
+
+@app.post("/api/owner/wan-supervised/{execution_id}/attach-provider-job")
+def owner_wan_attach_provider_job(execution_id: str, request: OwnerWanAttachJobRequest) -> dict[str, Any]:
+    """Attach Owner-attested reconciliation identity; never calls RunPod."""
+    return _runtime_request(
+        f"/control/owner/wan-supervised/{quote(execution_id, safe='')}/attach-provider-job", "POST", {
+            "projectId": request.project_id, "providerJobId": request.provider_job_id,
+            "reason": request.reason, "actor": "owner-ui"})
 
 
 class AutomationPolicyRequest(BaseModel):

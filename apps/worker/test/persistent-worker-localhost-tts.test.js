@@ -101,7 +101,7 @@ before(async () => {
 
 after(async () => {
   globalThis.fetch = realFetch;
-  await pool.end();
+  if (!pool.ended) await pool.end();
 });
 
 test("operational persistent worker executes localhost TTS with durable ack and zero duplicate runs", async () => {
@@ -260,9 +260,9 @@ test("operational persistent worker executes localhost TTS with durable ack and 
       assert.equal(recovered.providerId, "voicetut");
       assert.equal(mock.state.submissions, 1, "stored job ID reused — zero additional /run submissions");
       assert.ok(mock.state.polls > pollsBefore, "recovery reconciles through the status path");
-      runtime.worker.stop();
     } finally {
       runtime.worker.stop();
+      await runtime.close();
     }
   } finally {
     await mock.close();

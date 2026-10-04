@@ -10,29 +10,33 @@
  */
 
 // core
-export * from "./core/common";
-export * from "./core/engine";
-export * from "./core/request";
-export * from "./core/package";
+export * from "./core/common.js";
+export * from "./core/engine.js";
+export * from "./core/request.js";
+export * from "./core/package.js";
 // brain
-export * from "./brain/selector";
+export * from "./brain/selector.js";
 // context types
-export * from "./context/workflow";
-export * from "./context/session";
+export { type NorthStarMetric } from "./context/session.js";
 // selection
-export * from "./selection/selector";
+export {
+  type ContextSelector,
+  type ContextSelectionRequest,
+  type SelectionResult,
+  type LoadedMemory,
+  type RankingSummary,
+} from "./selection/selector.js";
 // rules
-export * from "./rules/retrieval";
-export * from "./rules/freshness";
-export * from "./rules/relevance";
+export * from "./rules/freshness.js";
+export { type RelevanceScorer } from "./rules/relevance.js";
 // ranking
-export * from "./ranking/ranker";
+export { type ContextRanker, type RankedRecord, type RankSignals, type RankingContext } from "./ranking/ranker.js";
 // compression
-export * from "./compression/compressor";
-export * from "./compression/budget";
+export * from "./compression/compressor.js";
+export * from "./compression/budget.js";
 // thresholds
-export * from "./thresholds/thresholds";
+export * from "./thresholds/thresholds.js";
 // cache
-export * from "./cache/cache";
+export { type ContextCache, type CacheEntry, type CacheConfig } from "./cache/cache.js";
 // observability
-export * from "./observability/metrics";
+export * from "./observability/metrics.js";

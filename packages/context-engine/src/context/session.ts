@@ -3,7 +3,7 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { AgentId, Json, Timestamp, Uuid } from "../core/common";
+import type { AgentId, Json, Timestamp, Uuid } from "../core/common.js";
 
 export interface SessionContextSection {
   turnId: string;

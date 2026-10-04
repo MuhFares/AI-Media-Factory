@@ -45,6 +45,43 @@ export function processExists(pid) {
   }
 }
 
+export function terminateExactProcess(pid) {
+  if (process.platform !== "win32") return process.kill(pid, "SIGTERM");
+  // Node's process.kill commonly returns EPERM for an Owner-launched Windows
+  // process even after identity has been proven.  Stop-Process is the canonical
+  // narrow Windows primitive; the caller supplies only a previously correlated
+  // PID and still verifies exit before clearing launcher state.
+  const result = spawnSync("powershell.exe", [
+    "-NoProfile", "-NonInteractive", "-Command",
+    `Stop-Process -Id ${pid} -ErrorAction Stop`,
+  ], { windowsHide: true, encoding: "utf8" });
+  if (result.status !== 0) {
+    const error = new Error(`WINDOWS_PROCESS_TERMINATION_FAILED:${pid}`);
+    error.cause = String(result.stderr ?? result.stdout ?? "").trim();
+    throw error;
+  }
+}
+
+/**
+ * Windows may allow Get-Process while denying both CIM command-line access and
+ * the executable Path property.  In that case the process start time, together
+ * with the database-backed worker identity/heartbeat checked by the caller, is
+ * the remaining non-PID identity proof.  A reported path is still required to
+ * resolve to node.exe; an unavailable path must not turn a healthy canonical
+ * worker into a false stale-PID result.
+ */
+export function windowsProcessProofMatches(proof, expectedStartedAt) {
+  const expectedStart = Date.parse(String(expectedStartedAt ?? ""));
+  const actualStart = Date.parse(String(proof?.startedAt ?? ""));
+  const processName = String(proof?.name ?? "").toLocaleLowerCase("en-US");
+  const reportedPath = String(proof?.path ?? "").trim();
+  const pathMatches = reportedPath === ""
+    || path.basename(reportedPath).toLocaleLowerCase("en-US") === "node.exe";
+  return proof?.kind === "process" && processName === "node" && pathMatches
+    && Number.isFinite(expectedStart) && Number.isFinite(actualStart)
+    && Math.abs(expectedStart - actualStart) <= 10_000;
+}
+
 /**
  * A PID is not an identity. Windows can reuse a terminated worker's PID for an
  * unrelated process, so launcher decisions must also prove that the process
@@ -56,18 +93,13 @@ export function processCommandMatches(pid, workerEntry, expectedStartedAt = null
   if (process.platform === "win32") {
     const result = spawnSync("powershell.exe", [
       "-NoProfile", "-NonInteractive", "-Command",
-      `$c=$null; try{$c=Get-CimInstance Win32_Process -Filter \"ProcessId = ${pid}\" -ErrorAction Stop}catch{}; if($null -ne $c){@{kind='command';commandLine=[string]$c.CommandLine}|ConvertTo-Json -Compress;exit 0}; $p=Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if($null -eq $p){exit 3}; @{kind='process';name=[string]$p.ProcessName;path=[string]$p.Path;startedAt=$p.StartTime.ToUniversalTime().ToString('o')}|ConvertTo-Json -Compress`,
+      `$c=$null; try{$c=Get-CimInstance Win32_Process -Filter \"ProcessId = ${pid}\" -ErrorAction Stop}catch{}; if($null -ne $c -and -not [string]::IsNullOrWhiteSpace([string]$c.CommandLine)){@{kind='command';commandLine=[string]$c.CommandLine}|ConvertTo-Json -Compress;exit 0}; $p=Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if($null -eq $p){exit 3}; @{kind='process';name=[string]$p.ProcessName;path=[string]$p.Path;startedAt=$p.StartTime.ToUniversalTime().ToString('o')}|ConvertTo-Json -Compress`,
     ], { windowsHide: true, encoding: "utf8" });
     if (result.status !== 0) return false;
     try {
       const proof = JSON.parse(String(result.stdout ?? "").trim());
       if (proof.kind === "command") return String(proof.commandLine ?? "").toLocaleLowerCase("en-US").includes(expected);
-      const expectedStart = Date.parse(String(expectedStartedAt ?? ""));
-      const actualStart = Date.parse(String(proof.startedAt ?? ""));
-      return proof.kind === "process" && String(proof.name).toLocaleLowerCase("en-US") === "node"
-        && path.basename(String(proof.path ?? "")).toLocaleLowerCase("en-US") === "node.exe"
-        && Number.isFinite(expectedStart) && Number.isFinite(actualStart)
-        && Math.abs(expectedStart - actualStart) <= 10_000;
+      return windowsProcessProofMatches(proof, expectedStartedAt);
     } catch { return false; }
   }
   try {
@@ -115,11 +147,10 @@ function releaseLock(lockDir) {
   fs.rmSync(lockDir, { recursive: true, force: true });
 }
 
-function matchingPresence(rows, identity, buildId, now, exists, commandMatches) {
+function matchingPresence(rows, identity, now, exists, commandMatches) {
   return rows.filter((row) => {
     if (row.runtime_mode !== identity.mode || row.launcher !== LAUNCHER) return false;
     if (row.singleton_key && row.singleton_key !== identity.key) return false;
-    if (row.build_id !== buildId) return false;
     const heartbeat = Date.parse(String(row.last_heartbeat_at));
     if (!Number.isFinite(heartbeat) || now - heartbeat > HEARTBEAT_LIVE_MS) return false;
     const pid = Number(row.process_id);
@@ -137,7 +168,7 @@ export function createPersistentWorkerController(config, injected = {}) {
   const commandMatches = injected.processCommandMatches ?? ((pid, startedAt) => processCommandMatches(pid, config.workerEntry, startedAt));
   const now = injected.now ?? (() => Date.now());
   const listPresence = injected.listPresence ?? (async () => []);
-  const terminate = injected.terminate ?? ((pid) => process.kill(pid, "SIGTERM"));
+  const terminate = injected.terminate ?? terminateExactProcess;
   const wait = injected.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const spawnWorker = injected.spawnWorker ?? (() => {
     fs.mkdirSync(runtimeDir, { recursive: true });
@@ -172,26 +203,29 @@ export function createPersistentWorkerController(config, injected = {}) {
     const trackedIdentityMatches = state?.singletonKey === identity.key;
     const trackedAlive = trackedPid !== null && exists(trackedPid);
     const trackedCommandMatches = trackedAlive && trackedIdentityMatches
-      && state?.buildId === config.buildId && commandMatches(trackedPid, state?.startedAt);
+      && commandMatches(trackedPid, state?.startedAt);
+    const trackedBuildMatches = state?.buildId === config.buildId;
     let presenceRows;
     try { presenceRows = await listPresence(); }
     catch (error) {
       return { state: "HEARTBEAT_UNAVAILABLE", error: error instanceof Error ? error.message : String(error), trackedPid, trackedAlive, stateRecord: state, activePids: trackedAlive && trackedIdentityMatches ? [trackedPid] : [] };
     }
-    const livePresence = matchingPresence(presenceRows, identity, config.buildId, now(), exists, commandMatches);
+    const canonicalPresence = matchingPresence(presenceRows, identity, now(), exists, commandMatches);
+    const livePresence = canonicalPresence.filter((row) => row.build_id === config.buildId);
     const active = new Set();
-    for (const row of livePresence) {
+    for (const row of canonicalPresence) {
       const pid = Number(row.process_id);
       if (Number.isSafeInteger(pid) && pid > 0) active.add(pid);
     }
     const activePids = [...active].sort((a, b) => a - b);
     let status = "STOPPED";
-    if (activePids.length > 1 || livePresence.length > 1) status = "DUPLICATE";
+    if (activePids.length > 1 || canonicalPresence.length > 1) status = "DUPLICATE";
     else if (activePids.length === 1 && livePresence.length === 1) status = "HEALTHY_SINGLETON";
+    else if (activePids.length === 1 && canonicalPresence.length === 1) status = "STALE_BUILD";
     else if (trackedAlive && !trackedCommandMatches) status = "STALE_PID_REUSED";
     else if (trackedCommandMatches) status = "STALE_HEARTBEAT";
     else if (trackedPid !== null && !trackedAlive) status = "STALE_PID";
-    return { state: status, trackedPid, trackedAlive, trackedCommandMatches, stateRecord: state, livePresence, activePids, identity };
+    return { state: status, trackedPid, trackedAlive, trackedCommandMatches, trackedBuildMatches, stateRecord: state, livePresence, canonicalPresence, activePids, identity };
   }
 
   async function start() {
@@ -206,6 +240,7 @@ export function createPersistentWorkerController(config, injected = {}) {
         const observed = before.activePids[0] ?? Number(before.livePresence?.[0]?.process_id);
         return { outcome: "ALREADY_RUNNING", pid: Number.isSafeInteger(observed) ? observed : null, detail: before };
       }
+      if (before.state === "STALE_BUILD") return { outcome: "REFUSED_STALE_BUILD_REQUIRES_HANDOVER", detail: before };
       if (["STALE_PID", "STALE_PID_REUSED"].includes(before.state)) {
         fs.rmSync(pidFile, { force: true });
         fs.rmSync(stateFile, { force: true });

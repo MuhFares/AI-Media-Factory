@@ -6,7 +6,8 @@
  * It contains all 9 sections in the canonical order.
  */
 
-import type { AgentId, Json, Timestamp, Uuid, MemoryType, SectionType } from "./common";
+import type { AgentId, Json, Timestamp, Uuid, MemoryType, SectionType } from "./common.js";
+import type { MemoryRecord } from "./request.js";
 
 export interface ContextPackage {
   /** Unique ID for this context package. */
@@ -26,10 +27,6 @@ export interface ContextPackage {
   sessionContext: SessionContextSection;
   /** Relevant memory (RAG results). */
   memory: MemorySection;
-  /** Agent brain section. */
-  agentBrain: AgentBrainSection;
-  /** Workflow context (if applicable). */
-  workflowContext?: WorkflowContextSection;
   /** Few-shot examples. */
   examples?: ExamplesSection;
   /** Current task/input. */

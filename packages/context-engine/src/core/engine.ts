@@ -6,9 +6,9 @@
  * It is called by the Runtime (for agent turns) and Workflow Engine (for workflow steps).
  */
 
-import type { AgentId, WorkflowId, StepId, TurnId, Uuid, Timestamp, Json } from "./common";
-import type { ContextRequest } from "./request";
-import type { ContextPackage } from "./package";
+import type { AgentId, WorkflowId, StepId, TurnId, Uuid, Timestamp, Json } from "./common.js";
+import type { ContextRequest } from "./request.js";
+import type { ContextPackage } from "./package.js";
 
 export interface ContextEngine {
   /**

@@ -2,6 +2,7 @@
 
 import pg from "pg";
 import { SCHEMA_DDL } from "./schema.js";
+import { WAN_SUPERVISED_EXECUTION_DDL } from "./wan-supervised-execution-migration.js";
 
 const { Pool } = pg;
 
@@ -57,7 +58,14 @@ export async function migrate(pool: pg.Pool): Promise<void> {
   try {
     await client.query("SELECT pg_advisory_lock($1)", [SCHEMA_MIGRATION_LOCK_ID]);
     try {
-      await client.query(SCHEMA_DDL);
+      // A freshly-created isolated database must contain every table touched by
+      // the canonical worker idle loop. The Wan ledger was originally shipped
+      // as an explicitly applied production migration, but leaving it out of
+      // the idempotent bootstrap made clean worker test/runtime databases fail
+      // before they could process any workflow. Both DDL blocks are additive
+      // and idempotent; production installations that already applied the
+      // narrow migration remain no-ops here.
+      await client.query(`${SCHEMA_DDL}\n${WAN_SUPERVISED_EXECUTION_DDL}`);
     } finally {
       await client.query("SELECT pg_advisory_unlock($1)", [SCHEMA_MIGRATION_LOCK_ID]);
     }

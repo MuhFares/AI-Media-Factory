@@ -12,23 +12,22 @@
  */
 
 // core
-export * from "./core/common";
-export * from "./core/engine";
-export * from "./core/request";
+export * from "./core/common.js";
+export * from "./core/engine.js";
+export * from "./core/request.js";
 // metrics
-export * from "./metrics/metrics";
-export * from "./metrics/scorecard";
+export * from "./metrics/metrics.js";
 // gates
-export * from "./gates/gates";
+export * from "./gates/gates.js";
 // benchmarks
-export * from "./benchmarks/benchmarks";
+export * from "./benchmarks/benchmarks.js";
 // regression
-export * from "./regression/regression";
+export * from "./regression/regression.js";
 // leaderboards
-export * from "./leaderboards/leaderboards";
+export * from "./leaderboards/leaderboards.js";
 // trends
-export * from "./trends/trends";
+export * from "./trends/trends.js";
 // improvement
-export * from "./improvement/improvement";
+export * from "./improvement/improvement.js";
 // reports
-export * from "./reports/reports";
+export * from "./reports/reports.js";

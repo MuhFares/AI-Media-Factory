@@ -15,7 +15,7 @@
 "scripts": {
     "build": "tsc -p tsconfig.json",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test",
+    "test": "node --test test/structured-output-modes.test.js",
     "test:smoke": "tsx test/smoke.ts",
     "test:alibaba-smoke": "tsx test/alibaba-smoke.ts"
   },

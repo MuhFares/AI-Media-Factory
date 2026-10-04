@@ -501,3 +501,24 @@ export type { ImageArtifactView, ImageExpectation, ImageCheck, ConsistencyState 
 export { intentToImageRequest } from "./content-factory/generation-intent.js";
 export type { ReferenceResolution, SceneGenerationIntent, AdapterImageRequest, CapabilityResolution } from "./content-factory/generation-intent.js";
 export type { ClosureDisposition, ResearchEvidenceContract, SceneContract, FinalDeliveryContract, ProviderAccountingContract } from "./production-policy.js";
+export {
+  STORAGE_CLASSES,
+  SHA256_PATTERN,
+  assertArtifactStorageIdentity,
+  canonicalStorageKey,
+} from "./artifact-storage/contracts.js";
+export type {
+  StorageClass,
+  DurabilityStatus,
+  RetentionClass,
+  ArtifactStorageIdentity,
+  ArtifactStorageReceipt,
+  PutObjectRequest,
+  StoredObjectHead,
+  ReadTransportReference,
+  DeleteObjectGuard,
+  ObjectStorageAdapter,
+} from "./artifact-storage/contracts.js";
+export { LocalDurableObjectStorage, LOCAL_DURABLE_TEST_ACKNOWLEDGEMENT } from "./artifact-storage/local-durable-backend.js";
+export { resolveDurablePublicationTransport } from "./publishing/durable-media-transport.js";
+export type { DurablePublicationMedia } from "./publishing/durable-media-transport.js";

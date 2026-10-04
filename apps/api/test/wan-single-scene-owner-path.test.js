@@ -1,0 +1,11 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),"../../..");
+const handler=readFileSync(path.join(root,"apps/api/src/handler.ts"),"utf8"),api=readFileSync(path.join(root,"apps/api/src/owner-autonomy-api.ts"),"utf8"),py=readFileSync(path.join(root,"apps/api/src/ai_media_factory/main.py"),"utf8"),ui=readFileSync(path.join(root,"apps/api/src/ai_media_factory/static/app.js"),"utf8"),media=readFileSync(path.join(root,"apps/worker/src/media-chain/production-media-chain.ts"),"utf8");
+test("B/O: arrays, wildcard scenes and supervised batch path fail closed",()=>{assert.match(api,/EXACTLY_ONE_SCENE_REQUIRED/);assert.match(api,/Array\.isArray\(b\.sceneId\)/);assert.match(media,/BATCH_WAN_NOT_ALLOWED_IN_SUPERVISED_MODE/)});
+test("P: Owner auth, Python CSRF proxy and Node authority remain canonical",()=>{assert.match(handler,/requireOwner/);assert.match(py,/_require_csrf/);assert.match(py,/Proxy only|proxy only/);assert.match(handler,/ownerWanSingleSceneGenerate/);assert.doesNotMatch(py,/INSERT INTO wan_supervised|UPDATE wan_supervised/)});
+test("Owner UI warns, confirms, sends one exact scene and exposes every state",()=>{for(const token of ["TEMPORARY SUPERVISED WAN","One submission only","Automatic retry disabled","Manual reconciliation may be required","Generate Video","AUTHORIZED","SUBMISSION_STARTED","ACKNOWLEDGED","GENERATING","COMPLETED","MANUAL_RECONCILIATION_REQUIRED","FAILED"])assert.match(ui,new RegExp(token));assert.match(ui,/confirmModal/);assert.match(ui,/scene_id:scene\.sceneId/);assert.doesNotMatch(ui,/scene_ids/)});
+test("manual reconciliation actions make no generation request",()=>{assert.match(ui,/attach-provider-job/);assert.match(ui,/canonical audited import path/);const attach=api.slice(api.indexOf("ownerWanAttachProviderJob"),api.indexOf("export async function ownerOnboarding"));assert.doesNotMatch(attach,/generate\(|video\.generate|RunPod/)});

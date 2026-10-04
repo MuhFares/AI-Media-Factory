@@ -4,6 +4,8 @@ This directory is the single structured documentation hub for the AI Media Facto
 
 The legacy `docs/architecture.md` file is retained for historical reference. Its content is being progressively expanded and migrated into `docs/architecture/`, where it will live as a set of focused, maintainable documents.
 
+For current platform state, start with [`platform/current-platform-state.md`](./platform/current-platform-state.md). It is the canonical entry point for future agent sessions (milestones, Owner UI, strategic state, open V1.1 items, next task). The legacy [`project-state.md`](./project-state.md) is retained as dated 2026-09-09 historical evidence, not current truth.
+
 ## Subfolders
 
 | Subfolder | Purpose |

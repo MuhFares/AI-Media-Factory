@@ -13,9 +13,18 @@ function testDatabaseUrl() {
 }
 
 export const TEST_DATABASE_URL = testDatabaseUrl();
+// Make the derived, isolated URL visible to tests that explicitly require the
+// environment variable after importing this shared guard.
+process.env.TEST_DATABASE_URL ??= TEST_DATABASE_URL;
 
 export function assertTestDatabaseIsolation() {
-  if (TEST_DATABASE_URL === process.env.DATABASE_URL) {
+  const testUrl = new URL(TEST_DATABASE_URL);
+  const productionUrl = process.env.DATABASE_URL ? new URL(process.env.DATABASE_URL) : null;
+  const testDatabase = decodeURIComponent(testUrl.pathname.replace(/^\//, ""));
+  if (productionUrl && testUrl.origin === productionUrl.origin && testUrl.pathname === productionUrl.pathname) {
     throw new Error("TEST_DATABASE_URL must not reference DATABASE_URL");
+  }
+  if (!/(?:^|[_-])test(?:$|[_-])/i.test(testDatabase)) {
+    throw new Error(`TEST_DATABASE_URL must name an explicitly isolated test database; received ${testDatabase || "<empty>"}`);
   }
 }

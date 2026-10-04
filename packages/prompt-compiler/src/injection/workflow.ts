@@ -6,7 +6,7 @@
  * into the prompt so the agent knows where it is in the workflow.
  */
 
-import type { WorkflowContext } from "../../workflow-engine/src/model/context";
+import type { WorkflowContext } from "@ai-media-factory/shared";
 
 export interface WorkflowContextInjector {
   /** Inject workflow context into the prompt. */

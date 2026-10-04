@@ -239,19 +239,24 @@ export class ControlPlaneStore {
   }
 
   /** Queue + worker + DB health projection. Never fabricates green: UNKNOWN when unmeasurable. */
-  async platformHealth():Promise<{db:string; queue:{queued:number; running:number; succeeded:number; failed:number}; workers:{liveCount:number; latestHeartbeatAt:string|null; buildIds:string[]; stale:boolean}; recentFailures:Array<{jobId:number; workflowId:string; error:string|null; updatedAt:string}>}>{
+  async platformHealth():Promise<{db:string; queue:{queued:number; running:number; succeeded:number; failed:number}; workers:{liveCount:number; recentHeartbeatHistoryCount:number; latestHeartbeatAt:string|null; buildIds:string[]; recentBuildIds:string[]; stale:boolean; identityBasis:string}; recentFailures:Array<{jobId:number; workflowId:string; error:string|null; updatedAt:string}>}>{
     await this.pool.query(`SELECT 1`);
     const qc=await this.pool.query(`SELECT status, count(*)::int AS n FROM workflow_jobs GROUP BY status`);
     const counts:{queued:number; running:number; succeeded:number; failed:number}={queued:0, running:0, succeeded:0, failed:0};
     for(const r of qc.rows){ if(r.status in counts) (counts as any)[r.status]=Number(r.n); }
-    let workers={liveCount:0, latestHeartbeatAt:null as string|null, buildIds:[] as string[], stale:true};
+    let workers={liveCount:0, recentHeartbeatHistoryCount:0, latestHeartbeatAt:null as string|null, buildIds:[] as string[], recentBuildIds:[] as string[], stale:true, identityBasis:"DB_PRESENCE_HEARTBEAT_OS_PID_SINGLETON_LAUNCHER"};
     let recentFailures:Array<{jobId:number; workflowId:string; error:string|null; updatedAt:string}>=[];
     try{
-      const w=await this.pool.query(`SELECT worker_instance_id, build_id, last_heartbeat_at FROM amf_worker_presence WHERE runtime_mode='PERSISTENT_PRODUCTION_WORKER' ORDER BY last_heartbeat_at DESC LIMIT 5`);
+      const w=await this.pool.query(`SELECT worker_instance_id, build_id, last_heartbeat_at, process_id, singleton_key, worker_role, launcher FROM amf_worker_presence WHERE runtime_mode='PERSISTENT_PRODUCTION_WORKER' ORDER BY last_heartbeat_at DESC LIMIT 20`);
       const now=Date.now();
-      const live=w.rows.filter((r:any)=>{ const t=Date.parse(r.last_heartbeat_at); return Number.isFinite(t) && now-t<=300000; });
-      workers={liveCount: live.length, latestHeartbeatAt: w.rows[0]?.last_heartbeat_at ?? null, buildIds: [...new Set(w.rows.map((r:any)=>String(r.build_id)))], stale: live.length===0};
-    }catch{ workers={liveCount:0, latestHeartbeatAt:null, buildIds:[], stale:true}; }
+      const recent=w.rows.filter((r:any)=>{ const t=Date.parse(r.last_heartbeat_at); return Number.isFinite(t) && now-t<=120000; });
+      const live=recent.filter((r:any)=>{
+        const pid=Number(r.process_id);
+        if(!Number.isSafeInteger(pid)||pid<=0||!r.singleton_key||r.worker_role!=="canonical-production-queue-worker"||r.launcher!=="persistent-worker-script")return false;
+        try{process.kill(pid,0);return true}catch(error:any){return error?.code==="EPERM"}
+      });
+      workers={liveCount:live.length,recentHeartbeatHistoryCount:recent.length,latestHeartbeatAt:w.rows[0]?.last_heartbeat_at??null,buildIds:[...new Set(live.map((r:any)=>String(r.build_id)))],recentBuildIds:[...new Set(recent.map((r:any)=>String(r.build_id)))],stale:live.length===0,identityBasis:"DB_PRESENCE_HEARTBEAT_OS_PID_SINGLETON_LAUNCHER"};
+    }catch{ workers={liveCount:0,recentHeartbeatHistoryCount:0,latestHeartbeatAt:null,buildIds:[],recentBuildIds:[],stale:true,identityBasis:"UNAVAILABLE"}; }
     try{
       const f=await this.pool.query(`SELECT job_id, workflow_id, error, updated_at FROM workflow_jobs WHERE status='failed' ORDER BY updated_at DESC LIMIT 10`);
       recentFailures=f.rows.map((r:any)=>({jobId:Number(r.job_id), workflowId:r.workflow_id, error:r.error, updatedAt:r.updated_at}));

@@ -5,7 +5,7 @@
  * Decides which brains to include for a given agent/task.
  */
 
-import type { AgentId, Json } from "./common";
+import type { AgentId, Json } from "../core/common.js";
 
 export interface BrainSelector {
   /** Select which brains to include for this agent/task. */

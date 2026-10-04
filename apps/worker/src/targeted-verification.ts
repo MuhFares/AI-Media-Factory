@@ -23,6 +23,24 @@ import { executeGovernedVisibleJson, groundResearchReport } from "./production-e
 
 type RecordLike = Record<string, unknown>;
 const record = (value: unknown): RecordLike => value !== null && typeof value === "object" && !Array.isArray(value) ? value as RecordLike : {};
+/**
+ * Bound budget-phase resolution for targeted-verification reservations.
+ * The workflow submission's commandContext is the single source of truth:
+ * workflows bound to an explicit Owner-authorized phase (e.g. the Golden
+ * Canary envelope) reserve under that phase so recovery/replay retains it.
+ * Submissions without a bound phase keep the exact legacy behavior
+ * (PRE_MEDIA_PHASE).
+ */
+async function boundBudgetPhase(pool: pg.Pool, workflowId: string): Promise<string> {
+  try {
+    const q = await pool.query(`SELECT command_context FROM workflow_submissions WHERE workflow_id=$1`, [workflowId]);
+    const raw: unknown = q.rows[0]?.command_context;
+    const ctx: RecordLike = typeof raw === "string" ? record(JSON.parse(raw)) : record(raw);
+    const phase = ctx.budgetPhase;
+    if (typeof phase === "string" && phase.trim()) return phase.trim();
+  } catch { /* legacy fallback below */ }
+  return "PRE_MEDIA_PHASE";
+}
 const canonicalUrl = (value: unknown): string | null => {
   if (typeof value !== "string" || !value.trim()) return null;
   try { const url = new URL(value); url.hash = ""; url.hostname = url.hostname.toLowerCase(); if (url.pathname.length > 1) url.pathname = url.pathname.replace(/\/+$/, ""); return url.toString(); } catch { return null; }
@@ -166,7 +184,7 @@ export async function executeTargetedVerification(
     let reconciled = false;
     try {
       const request = {
-        requestId: `${dispatch.dispatchId}:verify-${entry.candidateId}-q1`, capabilityId: "web.search",
+        requestId: `${dispatch.dispatchId}:verification-${entry.candidateId}-q1`, capabilityId: "web.search",
         agentId: "research", workflowId: dispatch.workflowId, correlationId: dispatch.dispatchId,
         requestedAt: new Date().toISOString(),
         input: { query: entry.query, maxResults: 5, laneId: "targeted-verification", candidateId: entry.candidateId },
@@ -242,7 +260,7 @@ export async function executeTargetedReevaluationRecovery(
   if(results.length!==plan.length)throw new Error("TARGETED_REEVALUATION_RECOVERY_RESULT_COUNT_MISMATCH");
   plan.forEach((entry,index)=>{
     const result=record(results[index]);const evidence=record(result.evidence);
-    const expectedResult=`web-search-result-${recovery.sourceDispatchId}:verify-${entry.candidateId}-q1`;
+    const expectedResult=`web-search-result-${recovery.sourceDispatchId}:verification-${entry.candidateId}-q1`;
     if(result.status!=="success"||result.capabilityId!=="web.search"||result.resultId!==expectedResult||evidence.evidenceId!==`evidence-${expectedResult}`||evidence.workflowId!==recovery.workflowId||evidence.correlationId!==recovery.sourceDispatchId||evidence.succeeded!==true)throw new Error(`TARGETED_REEVALUATION_RECOVERY_EVIDENCE_INTEGRITY_FAILED:${entry.candidateId}`);
   });
   // Availability + immutable price snapshot validation happens before the
@@ -281,7 +299,7 @@ export function createProductionTargetedVerificationRuntime(input: {
         prompt, maxOutputTokens: 1800, onTransportEvent });
     },
     reserve: async ({ dispatch, callKind, idempotencyKey, callLeg, route }) => budgets.reserve({
-      projectId: dispatch.projectId, workflowId: dispatch.workflowId, phase: "PRE_MEDIA_PHASE", stage: "research-targeted-verification",
+      projectId: dispatch.projectId, workflowId: dispatch.workflowId, phase: await boundBudgetPhase(input.pool, dispatch.workflowId), stage: "research-targeted-verification",
       role: "research", callKind, idempotencyKey,
       routingVersionId:route?.routingVersionId??null,exactModelId:route?.model??null,priceSnapshotId:route?.priceSnapshotId??null,
       provenance: { dispatchId: dispatch.dispatchId, callLeg, executionMode: TARGETED_VERIFICATION_MODE, ...(route?{route}: {}) },
@@ -314,10 +332,10 @@ export function createProductionTargetedReevaluationRecoveryRuntime(input:{pool:
     loadArtifact:(artifactId)=>input.persistence.getArtifactById(artifactId),
     loadPersistedResults:async({sourceDispatchId,workflowId,candidateIds})=>{
       const values:CapabilityResult[]=[];
-      for(const candidateId of candidateIds){const resultId=`web-search-result-${sourceDispatchId}:verify-${candidateId}-q1`;const q=await input.pool.query(`SELECT c.payload,e.payload AS persisted_evidence FROM capability_executions c JOIN execution_evidence e ON e.evidence_id=c.evidence_id WHERE c.result_id=$1 AND c.workflow_id=$2 AND c.correlation_id=$3 AND c.status='success' AND c.capability_id='web.search' AND e.workflow_id=$2 AND e.correlation_id=$3 AND e.succeeded=TRUE`,[resultId,workflowId,sourceDispatchId]);if(!q.rowCount)throw new Error(`TARGETED_REEVALUATION_RECOVERY_EVIDENCE_MISSING:${candidateId}`);const value=record(q.rows[0].payload);const evidence=record(value.evidence);if(JSON.stringify(evidence)!==JSON.stringify(record(q.rows[0].persisted_evidence)))throw new Error(`TARGETED_REEVALUATION_RECOVERY_EVIDENCE_PAYLOAD_MISMATCH:${candidateId}`);values.push(value as unknown as CapabilityResult);}return values;
+      for(const candidateId of candidateIds){const resultId=`web-search-result-${sourceDispatchId}:verification-${candidateId}-q1`;const q=await input.pool.query(`SELECT c.payload,e.payload AS persisted_evidence FROM capability_executions c JOIN execution_evidence e ON e.evidence_id=c.evidence_id WHERE c.result_id=$1 AND c.workflow_id=$2 AND c.correlation_id=$3 AND c.status='success' AND c.capability_id='web.search' AND e.workflow_id=$2 AND e.correlation_id=$3 AND e.succeeded=TRUE`,[resultId,workflowId,sourceDispatchId]);if(!q.rowCount)throw new Error(`TARGETED_REEVALUATION_RECOVERY_EVIDENCE_MISSING:${candidateId}`);const value=record(q.rows[0].payload);const evidence=record(value.evidence);if(JSON.stringify(evidence)!==JSON.stringify(record(q.rows[0].persisted_evidence)))throw new Error(`TARGETED_REEVALUATION_RECOVERY_EVIDENCE_PAYLOAD_MISMATCH:${candidateId}`);values.push(value as unknown as CapabilityResult);}return values;
     },
     resolveReevaluationRoute:async(projectId,prompt)=>{const checked=await routing.preflight("research",{projectId,slot:"primary",requirements:{executionType:"HYBRID",prompt,expectedOutputTokens:1800,structuredOutput:"JSON_MODE",executionEnvironmentAllowed:true}});const r=checked.provenance;return{provider:"openrouter",model:r.model,routingVersionId:r.routingVersionId,priceSnapshotId:r.priceSnapshotId,source:"CANONICAL_PRODUCTION_ROUTING",routingScope:"PROJECT",availabilityState:"CATALOG_AVAILABLE",liveHealthState:checked.liveHealthState,configurationFingerprint:checked.configurationFingerprint};},
-    reserveText:async({recovery,idempotencyKey,route})=>budgets.reserve({projectId:recovery.projectId,workflowId:recovery.workflowId,phase:"PRE_MEDIA_PHASE",stage:"research-targeted-verification-reevaluation-recovery",role:"research",callKind:"text_agent",idempotencyKey,routingVersionId:route.routingVersionId,exactModelId:route.model,priceSnapshotId:route.priceSnapshotId,provenance:{recoveryId:recovery.recoveryId,sourceDispatchId:recovery.sourceDispatchId,callLeg:"TARGETED_VERIFICATION_REEVALUATION_RECOVERY",executionMode:"TARGETED_VERIFICATION_REEVALUATION_RECOVERY",route}}),
+    reserveText:async({recovery,idempotencyKey,route})=>budgets.reserve({projectId:recovery.projectId,workflowId:recovery.workflowId,phase:await boundBudgetPhase(input.pool,recovery.workflowId),stage:"research-targeted-verification-reevaluation-recovery",role:"research",callKind:"text_agent",idempotencyKey,routingVersionId:route.routingVersionId,exactModelId:route.model,priceSnapshotId:route.priceSnapshotId,provenance:{recoveryId:recovery.recoveryId,sourceDispatchId:recovery.sourceDispatchId,callLeg:"TARGETED_VERIFICATION_REEVALUATION_RECOVERY",executionMode:"TARGETED_VERIFICATION_REEVALUATION_RECOVERY",route}}),
     reconcile:(value)=>budgets.reconcile({reservationId:value.reservationId,providerSubmissionStarted:value.transportStarted,success:value.success,calculableCostUsd:value.calculableCostUsd,provenance:{executionMode:"TARGETED_VERIFICATION_REEVALUATION_RECOVERY"}}),
     executeReevaluation:({recovery,route,prompt,onTransportEvent})=>executeGovernedVisibleJson({agentId:"research",workflowId:recovery.workflowId,correlationId:recovery.recoveryId,provider:route.provider,model:route.model,system:"You are the Research Agent in TARGETED_VERIFICATION_REEVALUATION_RECOVERY mode. Return only the required JSON.",prompt,maxOutputTokens:1800,onTransportEvent}),
     reviseArtifact:async({recovery,priorPayload,repairedPayload})=>{const revisionId=`targeted-verification-revision-${recovery.sourceDispatchId}`;await repairs.repairResearchArtifact({repairId:revisionId,artifactId:recovery.artifactId,workflowId:recovery.workflowId,recoveryExecutionId:recovery.recoveryId,repairKind:`TARGETED_VERIFICATION_REVISION:${recovery.sourceDispatchId}`,authorizationRef:recovery.authorizationKey,evidenceRef:`${recovery.sourceDispatchId}:persisted-targeted-evidence`,expectedPriorPayloadHash:artifactPayloadHash(priorPayload),repairedPayload});return{revisionId};},

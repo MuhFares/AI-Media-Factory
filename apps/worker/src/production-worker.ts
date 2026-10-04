@@ -30,17 +30,21 @@ import {
   VisualIterationStore,
   ProductionModelRoutingStore,
   PostgresWorkerSingletonLease,
+  PostgresWorkerDiagnosticListener,
+  WanSupervisedExecutionStore,
 } from "@ai-media-factory/database";
 import { resolveStrategicProjectContext, resolveOperationalContext } from "./project-context.js";
 import type { Json } from "@ai-media-factory/shared";
 import type { ProviderCapabilityBoundary } from "@ai-media-factory/provider-adapters";
-import { createProductionAgentExecutor, buildProviderBoundary, resolveProductionTtsVoice } from "./production-executor.js";
+import { runPodVideoAdapterFromEnv } from "@ai-media-factory/provider-adapters";
+import { createProductionAgentExecutor, buildProviderBoundary, probeProductionOpenRouterTransport, resolveProductionTtsVoice } from "./production-executor.js";
 export { buildProviderBoundary } from "./production-executor.js";
 import { WorkflowWorker } from "./worker.js";
 import { bootstrapCanonicalAgentRegistry } from "./agent-bootstrap.js";
 import { createWorkerRuntimeIdentity, type WorkerRuntimeIdentity, type WorkerRuntimeMode } from "./worker-runtime-identity.js";
 import { computeMediaBuildId } from "./media-build-identity.js";
 import { createProductionTargetedVerificationRuntime, executeTargetedVerification, createProductionTargetedReevaluationRecoveryRuntime, executeTargetedReevaluationRecovery } from "./targeted-verification.js";
+import { CanonicalWanVisualSourceResolver, LocalCanonicalWanOutputPersister, SupervisedWanSingleSceneRunner } from "./supervised-wan-runtime.js";
 
 export interface ProductionWorkerOptions {
   readonly pool: pg.Pool;
@@ -127,6 +131,17 @@ export async function createProductionWorker(options: ProductionWorkerOptions): 
   if (typeof (heartbeatTimer as unknown as { unref?: () => void }).unref === "function") {
     (heartbeatTimer as unknown as { unref: () => void }).unref();
   }
+  // Owner-authorized, non-inference diagnostics use a dedicated PostgreSQL
+  // notification channel. The handler executes inside this exact process and
+  // never enters the workflow queue, provider budget, or agent runtime.
+  const diagnostics = identity.runtimeMode === "PERSISTENT_PRODUCTION_WORKER"
+    ? new PostgresWorkerDiagnosticListener(
+      options.pool,
+      { workerInstanceId:identity.workerInstanceId, workerBuild:buildId, workerPid:process.pid },
+      probeProductionOpenRouterTransport,
+    )
+    : null;
+  if (diagnostics) await diagnostics.start();
   // MEDIA CAPABILITY PREFLIGHT V1: construct the REAL production capability
   // boundary ONCE — the SAME exported buildProviderBoundary the production
   // executor uses (identical env selectors, adapters, and registration rules;
@@ -190,6 +205,14 @@ export async function createProductionWorker(options: ProductionWorkerOptions): 
     providerBoundary,
   });
   const targetedReevaluationRecoveryRuntime=createProductionTargetedReevaluationRecoveryRuntime({pool:options.pool,persistence});
+  const supervisedWan=process.env.WAN_OPERATION_MODE==="TEMPORARY_GOVERNED_LEGACY_ENDPOINT"
+    ?new SupervisedWanSingleSceneRunner(
+      new WanSupervisedExecutionStore(options.pool),
+      (_execution,lifecycle)=>runPodVideoAdapterFromEnv(undefined,async event=>{try{if(event.state==="ACKNOWLEDGED")await lifecycle.acknowledged(event.providerJobId);else await lifecycle.generating(event.providerJobId)}catch{throw Object.assign(new Error("WAN_LIFECYCLE_PERSISTENCE_FAILED"),{reconciliationRequired:true})}}),
+      new CanonicalWanVisualSourceResolver(persistence),
+      identity.workerInstanceId,
+      new LocalCanonicalWanOutputPersister(persistence),
+    ):undefined;
   const worker = new WorkflowWorker({
     queue,
     persistence,
@@ -213,6 +236,7 @@ export async function createProductionWorker(options: ProductionWorkerOptions): 
     resolveOperationalContext: resolveOperational,
     resolveStrategicContext,
     workerInstanceId: identity.workerInstanceId,
+    ...(supervisedWan?{supervisedWan}:{}),
     ...(options.pollMs !== undefined ? { pollMs: options.pollMs } : {}),
     ...(options.orphanStaleMs !== undefined ? { orphanStaleMs: options.orphanStaleMs } : {}),
   });
@@ -230,6 +254,7 @@ export async function createProductionWorker(options: ProductionWorkerOptions): 
     buildId,
     close: async () => {
       clearInterval(heartbeatTimer);
+      if (diagnostics) await diagnostics.close();
       await singletonLease.release();
       await persistence.close();
     },

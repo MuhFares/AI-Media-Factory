@@ -57,8 +57,8 @@ function fixture(overrides = {}) {
     ],
     capabilityExecutions: [
       execution("lane-history", "evidence:discovery", rows.discovery),
-      execution("verify-candidate-1-q1", "evidence:verify-candidate-1", rows.candidate1),
-      execution("verify-candidate-2-q1", "evidence:verify-candidate-2", rows.candidate2),
+      execution("verification-candidate-1-q1", "evidence:verify-candidate-1", rows.candidate1),
+      execution("verification-candidate-2-q1", "evidence:verify-candidate-2", rows.candidate2),
     ],
     ...overrides,
   };

@@ -61,6 +61,37 @@ CREATE TABLE IF NOT EXISTS artifacts (
 );
 CREATE INDEX IF NOT EXISTS idx_artifacts_workflow ON artifacts (workflow_id);
 
+-- Provider-neutral durable binary location. Artifact identity and lineage stay
+-- in artifacts; transport and replaceable storage location live here.
+CREATE TABLE IF NOT EXISTS artifact_storage_records (
+  storage_record_id   TEXT PRIMARY KEY,
+  artifact_id         TEXT NOT NULL REFERENCES artifacts(artifact_id),
+  sha256              TEXT NOT NULL CHECK (sha256 ~ '^[a-f0-9]{64}$'),
+  byte_count          BIGINT NOT NULL CHECK (byte_count > 0),
+  mime_type           TEXT NOT NULL,
+  storage_class       TEXT NOT NULL CHECK (storage_class IN ('EPHEMERAL_WORK','CANONICAL_DURABLE','HISTORICAL_EVIDENCE','PUBLISHED_MEDIA','REGENERABLE_CACHE')),
+  storage_provider    TEXT NOT NULL,
+  storage_key         TEXT NOT NULL,
+  local_cache_path    TEXT,
+  source_execution_id TEXT NOT NULL,
+  project_id          TEXT NOT NULL,
+  content_id          TEXT,
+  created_at          TEXT NOT NULL,
+  retention_class     TEXT NOT NULL,
+  durability_status   TEXT NOT NULL CHECK (durability_status IN ('PENDING','VERIFIED','CORRUPT','MISSING')),
+  verified_at         TEXT,
+  is_current          BOOLEAN NOT NULL DEFAULT TRUE,
+  receipt             JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_artifact_storage_current
+  ON artifact_storage_records (artifact_id) WHERE is_current;
+CREATE INDEX IF NOT EXISTS idx_artifact_storage_project
+  ON artifact_storage_records (project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_artifact_storage_sha256
+  ON artifact_storage_records (sha256);
+CREATE INDEX IF NOT EXISTS idx_artifact_storage_location
+  ON artifact_storage_records (storage_provider, storage_key);
+
 -- Append-only audit history for narrowly authorized artifact integrity repairs.
 -- The artifact keeps its canonical identity; the complete prior and repaired
 -- payloads plus hashes make the in-place revision reviewable and replay-safe.
@@ -278,7 +309,8 @@ CREATE INDEX IF NOT EXISTS idx_review_resume_dispatches_task ON review_resume_di
 -- deterministic identity and is protected across processes.
 ALTER TABLE review_resume_dispatches ADD COLUMN IF NOT EXISTS idempotency_identity TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_review_resume_idempotency_identity
-  ON review_resume_dispatches (idempotency_identity);
+  ON review_resume_dispatches (idempotency_identity)
+  WHERE idempotency_identity IS NOT NULL;
 
 -- Execution-scoped temporary Review model override provenance for a review
 -- resume. Nullable: absent = the canonical control-plane configuration is

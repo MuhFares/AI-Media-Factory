@@ -6,8 +6,7 @@
  * Uses the MemoryEngine.retrieve() results (LoadedMemory).
  */
 
-import type { LoadedMemory } from "../../memory-engine/src/core/record";
-import type { MemoryQuery } from "../../memory-engine/src/core/query";
+import type { LoadedMemory } from "@ai-media-factory/memory-engine";
 
 export interface DynamicMemoryInjector {
   /** Inject relevant memory into the prompt. */

@@ -206,21 +206,25 @@ test("E/F/G/H/I/J: one claim executes; duplicates/recovery/restarts observe; bud
   const worker = new WorkflowWorker({ queue, persistence, executor: exec2, control, pollMs: 10, resolveCommandConfiguration: (p) => control.agentConfigurationMap(p) });
   const run = worker.runOnce();
   run.catch(() => undefined);
-  await waitFor(async () => {
-    const w = await persistence.loadWorkflow(workflowId);
-    return w?.steps.find((s) => s.stepId === "timeline")?.status === "completed";
-  }, "timeline completed");
-  assert.equal(calls.timelineCalls ?? 0, 1, "E: exactly one timeline execution");
-  const usage1 = await pool.query(`SELECT count(*)::int AS n FROM media_resume_provider_usage WHERE resume_id=$1 AND stage='timeline'`, [auth.resumeId]);
-  assert.equal(usage1.rows[0].n, 1, "J: exactly one timeline budget unit");
-  // Mimic bridge-side persistence of the canonical timeline artifact for reuse.
-  await persistence.saveArtifact({ artifactId: `art-${workflowId}-timeline`, kind: "timeline_plan", producerAgent: "timeline", workflowId, correlationId: `corr-${workflowId}`, status: "completed", payload: { timelineId: "tl-fixture", sceneIds: ["scene-001", "scene-002", "scene-003"] }, contentType: "application/json", schemaVersion: "1.0", createdAt: new Date().toISOString() });
-  // Let the run continue to the visual gate, then settle it so the loop ends.
-  await waitFor(async () => {
-    const w = await persistence.loadWorkflow(workflowId);
-    return w?.state === "AWAITING_APPROVAL" && w.steps.find((s) => s.stepId === "visual-human-gate")?.status === "running";
-  }, "visual gate");
-  await control.decideApproval(`approval-${workflowId}-visual-human-gate`, "REJECT", "matrix teardown");
+  try {
+    await waitFor(async () => {
+      const w = await persistence.loadWorkflow(workflowId);
+      return w?.steps.find((s) => s.stepId === "timeline")?.status === "completed";
+    }, "timeline completed");
+    assert.equal(calls.timelineCalls ?? 0, 1, "E: exactly one timeline execution");
+    const usage1 = await pool.query(`SELECT count(*)::int AS n FROM media_resume_provider_usage WHERE resume_id=$1 AND stage='timeline'`, [auth.resumeId]);
+    assert.equal(usage1.rows[0].n, 1, "J: exactly one timeline budget unit");
+    // The current executor persists the canonical timeline artifact before
+    // advancing. Do not inject a second fixture artifact while the worker is
+    // paused at the visual gate; reuse must observe the real persisted output.
+    await waitFor(async () => {
+      const w = await persistence.loadWorkflow(workflowId);
+      return w?.state === "AWAITING_APPROVAL" && w.steps.find((s) => s.stepId === "visual-human-gate")?.status === "running";
+    }, "visual gate");
+  } finally {
+    const approval = await control.getApproval(`approval-${workflowId}-visual-human-gate`);
+    if (approval?.status === "PENDING") await control.decideApproval(approval.approvalId, "REJECT", "matrix teardown");
+  }
   await run;
 
   // Duplicate delivery with a FRESH executor (restart): drive the timeline step directly again.
@@ -276,16 +280,20 @@ test("R/P: forbidden downstream untouched on timeline run", async () => {
   const worker = new WorkflowWorker({ queue, persistence, executor: exec, control, pollMs: 10, resolveCommandConfiguration: (p) => control.agentConfigurationMap(p) });
   const run = worker.runOnce();
   run.catch(() => undefined);
-  await waitFor(async () => {
+  try {
+    await waitFor(async () => {
+      const w = await persistence.loadWorkflow(workflowId);
+      return w?.state === "AWAITING_APPROVAL" && w.steps.find((s) => s.stepId === "visual-human-gate")?.status === "running";
+    }, "visual gate");
+    assert.equal(calls.forbidden ?? 0, 0, "no forbidden bridge calls");
     const w = await persistence.loadWorkflow(workflowId);
-    return w?.state === "AWAITING_APPROVAL" && w.steps.find((s) => s.stepId === "visual-human-gate")?.status === "running";
-  }, "visual gate");
-  assert.equal(calls.forbidden ?? 0, 0, "no forbidden bridge calls");
-  const w = await persistence.loadWorkflow(workflowId);
-  for (const s of ["wan-authorization", "video", "composer", "publisher", "analytics"]) {
-    assert.equal(w.steps.find((x) => x.stepId === s)?.status, "pending", `${s} untouched`);
+    for (const s of ["wan-authorization", "video", "composer", "publisher", "analytics"]) {
+      assert.equal(w.steps.find((x) => x.stepId === s)?.status, "pending", `${s} untouched`);
+    }
+  } finally {
+    const approval = await control.getApproval(`approval-${workflowId}-visual-human-gate`);
+    if (approval?.status === "PENDING") await control.decideApproval(approval.approvalId, "REJECT", "matrix teardown");
+    await run;
   }
-  await control.decideApproval(`approval-${workflowId}-visual-human-gate`, "REJECT", "matrix teardown");
-  await run;
   await pool.query(`UPDATE media_resume_dispatches SET outcome='FAILED' WHERE resume_id=$1`, [auth.resumeId]);
 });

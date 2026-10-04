@@ -13,8 +13,8 @@ const oldRows = {
 };
 
 const oldExecution = (candidateId, rows) => ({
-  resultId: `web-search-result:verify-${candidateId}-q1`, capabilityId: "web.search", status: "success",
-  output: { results: rows }, evidence: { evidenceId: `evidence:verify-${candidateId}-q1`, succeeded: true, providerId: "mock", executedAt: "2026-09-26T00:00:00.000Z" },
+  resultId: `web-search-result:verification-${candidateId}-q1`, capabilityId: "web.search", status: "success",
+  output: { results: rows }, evidence: { evidenceId: `evidence:verification-${candidateId}-q1`, succeeded: true, providerId: "mock", executedAt: "2026-09-26T00:00:00.000Z" },
 });
 
 function payload() {
@@ -111,8 +111,8 @@ const recovery = { recoveryId: "targeted-reevaluation-recovery-test", authorizat
   projectId: "morroway", contentId: "content-mug6d970-jrkufn", workflowId: dispatch.workflowId, artifactId: dispatch.artifactId,
   selectedCandidateIds: ["candidate-1", "candidate-2"], maxReevaluationTextCalls: 1, status: "AUTHORIZED", jobId: 90, revisionId: null };
 
-const recoveredResult = (candidateId, row) => ({ status: "success", resultId: `web-search-result-${sourceDispatchId}:verify-${candidateId}-q1`, capabilityId: "web.search",
-  output: { results: [row] }, evidence: { evidenceId: `evidence-web-search-result-${sourceDispatchId}:verify-${candidateId}-q1`, capabilityId: "web.search", workflowId: dispatch.workflowId,
+const recoveredResult = (candidateId, row) => ({ status: "success", resultId: `web-search-result-${sourceDispatchId}:verification-${candidateId}-q1`, capabilityId: "web.search",
+  output: { results: [row] }, evidence: { evidenceId: `evidence-web-search-result-${sourceDispatchId}:verification-${candidateId}-q1`, capabilityId: "web.search", workflowId: dispatch.workflowId,
     correlationId: sourceDispatchId, agentId: "research", operation: "search", providerId: "mock", resultCount: 1, executedAt: "2026-09-27T00:00:00.000Z", durationMs: 1, succeeded: true, resultStatus: "success", providerInvoked: true } });
 
 function recoveryHarness(options = {}) {

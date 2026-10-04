@@ -6,9 +6,9 @@
  * PromptContext and receives a FinalPrompt ready for the Provider Layer.
  */
 
-import type { AgentId, Json, Uuid } from "./common";
-import type { PromptContext } from "./context";
-import type { FinalPrompt } from "./builder";
+import type { AgentId, Json, Uuid } from "./common.js";
+import type { PromptContext } from "./context.js";
+import type { FinalPrompt } from "../sections/sections.js";
 
 export interface PromptCompiler {
   /**

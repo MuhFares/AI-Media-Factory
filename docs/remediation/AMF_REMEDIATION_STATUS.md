@@ -40,7 +40,7 @@ Allowed statuses: `NOT_STARTED` | `IN_PROGRESS` | `BLOCKED` |
 - CURRENT_GOVERNANCE: Morroway remains `OFF / L0_MANUAL / DISABLED`; proposal
   `ncp-294f1942f013` is `OWNER_DEFERRED` and unexecuted.
 - INDEPENDENT_DEBT: Google OAuth productionization, hardened Wan deployment and
-  receipts, backup/restore, durable object storage, scaling, retention,
+  receipts, scheduled/off-host backup retention, live object-storage provider/deployment, scaling,
   repository hygiene, final brand standards, and public-publication readiness.
 - GIT_CHECKPOINT: `RETRY_READY / COMMIT_NOT_CREATED`. The V2 blockers were
   remediated by `AMF_PROGRAM_03_COLD_RESUME_AND_REVIEW_RESUME_CONCURRENCY_REMEDIATION_V1`.
@@ -880,6 +880,98 @@ Allowed statuses: `NOT_STARTED` | `IN_PROGRESS` | `BLOCKED` |
   enforced. Program-4 private publication, empty live observation, insufficient-
   data learning and recommendation records remain intact.
 
+### Wan deployment certification V1 — 2026-09-30
+
+- RESULT: `BLOCKED_PRE_DEPLOYMENT_NO_PROVIDER_CALL`; this separately authorized
+  operational certification did not reopen Programs 1-5.
+- SOURCE: current AMF media build is
+  `c9e5dd77d1f72275d1a32fecaca53b7372aa974b5971225b87111e7b71dc8d18`.
+  The zero-GPU owned-handler suite passed 10/10 and the provider-adapter Wan
+  boundary/hardening selection passed 54/54. These results prove source
+  behavior only, not the deployed RunPod endpoint.
+- PREDEPLOYMENT_GATE: the canonical guarded preflight stopped because
+  `RUNPOD_MANAGEMENT_API_KEY`, `RUNPOD_VIDEO_NETWORK_VOLUME_ID`, and an immutable
+  `RUNPOD_VIDEO_HANDLER_IMAGE_DIGEST` were not configured. Docker is not
+  available on the operator host, so no image was built or pushed. The
+  repository-owned GitHub workflow remains the available build/push path, but
+  it was not dispatched. Its required `experimental/wan2.2-i2v-v1/` build
+  context is currently untracked at checkpoint `a0e92ff62126022b6c0db946f334bb4a65269fdb`,
+  so a deterministic checkpoint-to-image provenance claim is also blocked
+  until that source is separately reviewed and checkpointed.
+- WORKER_PARITY: the canonical launcher reports `STALE_PID_REUSED`, no live
+  worker presence, and no current-build worker. The last recorded worker build
+  was `6a4fca473d493f241e7e2d5fb2c12877506ec8584accb3c0fa565133a40a2e4b`.
+- SIDE_EFFECTS: zero RunPod management calls, endpoint mutations, image pushes,
+  generation submissions, production database mutations, or budget mutations.
+- GOVERNANCE: `WAN_DEPLOYMENT_CERTIFICATION = BLOCKED_PRE_DEPLOYMENT` and
+  `FUTURE_WAN_SUBMISSIONS_ALLOWED = NO`. Morroway remains
+  `OFF / L0_MANUAL / DISABLED`; historical Phase-3 evidence remains
+  `OWNER_ATTESTED_NOT_PROVIDER_VERIFIED` with verified local technical proof.
+- NEXT_GATE: configure a scoped RunPod management credential, provision/select
+  a compatible persistent network volume, review/checkpoint the owned handler
+  build context, build and push it to an immutable digest, then refresh the AMF
+  worker to the current build before rerunning deployment certification. No Wan
+  POST is allowed before those gates pass.
+
+### Wan predeployment bootstrap V1 — 2026-09-30
+
+- RESULT: `PARTIAL_EXTERNAL_OWNER_PREREQUISITES_REQUIRED`.
+- SOURCE_CHECKPOINT: commit `0cfde0d` (`feat(wan): checkpoint hardened RunPod
+  video handler`) contains only the reviewed owned-handler source, tests, build
+  assets and GHCR workflow update. Generated caches, the backup workflow JSON
+  and historical `FORENSIC.md` were excluded; candidate and staged secret scans
+  passed. No push occurred.
+- SOURCE_VALIDATION: zero-GPU handler tests passed 13/13; Python compilation,
+  workflow JSON and GitHub Actions YAML validation passed. The checkpoint fixes
+  missing build/boot assets discovered during validation: serverless handler
+  startup, ComfyUI readiness entrypoint, `extra_model_paths.yaml`, persistent
+  receipt-path enforcement, pinned custom-node revisions, and digest reporting.
+- BUILD_PATH: `.github/workflows/build-amf-wan22-i2v.yml` is the canonical GHCR
+  build/push path and now emits source commit, immutable tag and image digest.
+  It requires an Owner-authorized push and workflow dispatch; local Docker is
+  unavailable and no image was built or pushed in this task.
+- EXTERNAL_GATES: `RUNPOD_MANAGEMENT_API_KEY` remains absent; management auth,
+  template/image inspection, compatible volume region/ID and endpoint binding
+  remain unproven. `RUNPOD_VIDEO_HANDLER_IMAGE_DIGEST` and
+  `RUNPOD_VIDEO_NETWORK_VOLUME_ID` remain absent.
+- WORKER: refresh remains required after the source checkpoint; it was not
+  started or stopped in this bootstrap.
+- GOVERNANCE: zero provider/media/generation calls and zero production DB or
+  budget mutations. `FUTURE_WAN_SUBMISSIONS_ALLOWED = NO`; deployment mutation
+  is not authorized. Detailed Owner steps and gates are in
+  `AMF_PROGRAM_06_WAN_PREDEPLOYMENT_BOOTSTRAP.md`.
+
+### Wan deployment Owner deferral and backlog registration — 2026-10-01
+
+- OWNER_DECISION: `DEFER_WAN_DEPLOYMENT_CERTIFICATION`. There is no immediate
+  need for new Wan production generation; persistent RunPod infrastructure and
+  its cost are intentionally deferred until separately authorized work resumes.
+- WAN_DEPLOYMENT_CERTIFICATION: `DEFERRED_BY_OWNER`.
+- PRESERVED_SOURCE_PROOF: `WAN_SOURCE_HARDENING = PROVIDER_FREE_PASS`; source
+  checkpoint `0cfde0da42e196751e679950f20972f049af18e1` remains canonical.
+- PRESERVED_IMAGE_PROOF: `WAN_IMAGE_BUILD = PASS`; immutable image
+  `ghcr.io/muhfares/amf-wan22-i2v:sha-0cfde0da42e196751e679950f20972f049af18e1`
+  with digest
+  `sha256:716e7b7fa7b0d80d7a1ca5dbc31c9e50301da921a6ac01b992d84462bc77a326`.
+- MANAGEMENT_CREDENTIAL: Owner reports it configured. This documentation-only
+  task did not read, print, validate, or use the secret and makes no management-
+  authentication claim.
+- DEFERRED_INFRASTRUCTURE: `RUNPOD_NETWORK_VOLUME = REQUIRED_NOT_PROVISIONED`;
+  `RUNPOD_HARDENED_HANDLER_DEPLOYMENT = PENDING`;
+  `PERSISTENT_RECEIPTS = PENDING`; `ENDPOINT_DIGEST_PARITY = PENDING`;
+  `CLIENT_EXECUTION_ID_DEPLOYMENT_PROOF = PENDING`;
+  `NO_BLIND_RETRY_DEPLOYED_PROOF = PENDING`.
+- GOVERNANCE: `FUTURE_WAN_SUBMISSIONS_ALLOWED = NO`. No RunPod inspection or
+  mutation, volume provisioning, deployment, video generation, production DB
+  mutation, or budget mutation occurred. No Program 7 was created.
+- REENTRY: provision a compatible persistent volume (minimum safe 50 GB;
+  recommended 100 GB), mount `/runpod-volume`, configure
+  `/runpod-volume/amf-video-receipts`, persist required models under
+  `/runpod-volume/models`, attach the volume, deploy the preserved immutable
+  digest, prove endpoint/source parity and receipt durability, refresh the AMF
+  worker, then run one separately authorized no-retry live canary. Only after
+  every gate passes may `YES_GOVERNED` be considered.
+
 ---
 
 ## Status consistency notes
@@ -894,3 +986,183 @@ Allowed statuses: `NOT_STARTED` | `IN_PROGRESS` | `BLOCKED` |
   program or workflow is automatically authorized.
 - Timestamps are `UNKNOWN` where no program lifecycle event has occurred; no
   timestamps are invented.
+
+### Operational backup and restore certification — 2026-10-01
+
+- RESULT: `BACKUP_RESTORE_OPERATIONALIZATION = PASS`.
+- BACKUP: exported-snapshot PostgreSQL set
+  `amf-backup-2026-09-30T22-17-37-348Z` was
+  created read-only outside the repository with manifest/checksum, critical-file
+  allowlist and secret scan. Safe DB fingerprint:
+  `9ac133330fd37d5967d9125a77afdb6b3a7d6d7f44ec600d478e415e6b4d9376`;
+  PostgreSQL 18.6; 37,934,592 bytes; SHA-256
+  `d7aca9ef901ac4be48b71febe33a0e6ab1e4b22341e8362b68c15a685ebbdeb2`.
+- RESTORE: isolated DB `ai_media_factory_restore_test_20261001_001737`
+  restored 78 tables, 161 indexes and 837 constraints. All critical Program-4/5
+  records, lineage, credential metadata/history, Job 68, Research Pilot and
+  governance assertions passed. Production writes: zero.
+- APPLICATION_CHECK: temporary restored-DB Node API on port 18081 returned 200
+  for health/projects/onboarding/credentials/next-cycle/artifacts/budgets and
+  was stopped. Its canonical migration added
+  `uq_review_resume_idempotency_identity` only to the isolated DB (index count
+  161→162), exposing the already-documented unapplied production schema item.
+- SAFETY: secrets remain `EXTERNAL_OWNER_MANAGED`; production/shared/
+  nonconforming/existing targets were proven fail-closed. Production recovery
+  requires explicit Owner authorization and has no generic operator switch.
+- RUNBOOK: `docs/operations/AMF_BACKUP_AND_RESTORE_RUNBOOK.md`. Retention
+  scheduling/off-host replication and durable object storage remain separate.
+- GOVERNANCE: Morroway remains `OFF / L0_MANUAL / DISABLED`; Wan remains
+  deferred/blocked; provider calls, workflows and production mutations were 0.
+- NEXT_CYCLE_READINESS: `NO` until the narrow additive Program-3
+  review-resume-idempotency production migration is separately authorized,
+  applied and verified. Backup/restore certification itself remains PASS.
+
+### Durable object storage and retention design — 2026-10-01
+
+- RESULT: `DURABLE_OBJECT_STORAGE = PROVIDER_FREE_DESIGN_PASS`;
+  `PRODUCTION_STORAGE_PROVIDER = NOT_SELECTED`; `OUTPUT_RETENTION = POLICY_DEFINED`.
+- INVENTORY: `output/` 706 files / 347,094,901 bytes; `artifacts/` 180 /
+  40,261,474 bytes; `logs/` 21 / 147,334 bytes. No file was migrated or deleted.
+- CONTRACT: artifact identity/hash/lineage is separate from transport and
+  replaceable storage location. Additive `artifact_storage_records` schema and
+  a narrow idempotent migration are source-only; production was not migrated.
+- ADAPTER: provider-neutral put/head/get/exists/delete/read-reference interface
+  plus isolated local test backend. Hash, byte count, atomic/idempotent put,
+  duplicate content, corruption detection, path confinement and fail-closed
+  deletion passed 10/10 provider-free tests. Additive schema passed 2/2 on the
+  isolated test DB.
+- INTEGRATION: durable publication transport resolves only after artifact ID,
+  SHA-256, receipt and storage head agree. Analytics/learning continue to join
+  on IDs/hashes, not local paths. DB backup contains receipt metadata; object
+  durability must be verified separately after restore.
+- RUNBOOK: `docs/operations/AMF_OBJECT_STORAGE_AND_RETENTION_RUNBOOK.md`.
+- GOVERNANCE: no cloud/provider call, production DB mutation, output deletion,
+  media migration or workflow execution. Live durability remains unproven.
+- READINESS: production provider selection, provider adapter, production schema
+  migration and a bounded no-delete artifact canary remain required. The
+  independent review-resume production index was subsequently applied by the
+  narrow migration recorded below. Local canonical storage remains explicitly
+  permitted for a first bounded cycle; live durable storage is not claimed.
+
+### Review-resume idempotency production migration — 2026-10-01
+
+- RESULT: `REVIEW_RESUME_PRODUCTION_SCHEMA = APPLIED / VERIFIED`.
+- MIGRATION: `review-resume-idempotency-identity-v1`, applied only to production
+  DB fingerprint `9ac133330fd37d5967d9125a77afdb6b3a7d6d7f44ec600d478e415e6b4d9376`.
+  Added nullable `review_resume_dispatches.idempotency_identity` and partial
+  unique index `uq_review_resume_idempotency_identity WHERE
+  idempotency_identity IS NOT NULL`. No broad migration/bootstrap ran.
+- PRECONDITION: backup `amf-backup-2026-09-30T22-17-37-348Z` remains present;
+  its 37,934,592-byte dump matches manifest SHA-256
+  `d7aca9ef901ac4be48b71febe33a0e6ab1e4b22341e8362b68c15a685ebbdeb2`.
+- DATA SAFETY: table row count remained 2; both historical rows were preserved;
+  duplicate non-null identities were zero. A transactional duplicate probe hit
+  the unique constraint and was fully rolled back; persistent probe rows: 0.
+- CERTIFICATION: exact Program-3 checkpoint suite passed 70/70, including cold
+  gate restoration and concurrent review-resume exactly-once behavior. Provider,
+  workflow and media calls were zero.
+- RUNTIME GATE: current canonical source build is
+  `30730d04548d2ff7e07ec544004f3d975f38349c6cc3d94d2710a475d0a05de6`,
+  while the live presence reports
+  `6a4fca473d493f241e7e2d5fb2c12877506ec8584accb3c0fa565133a40a2e4b`.
+  The launcher also detects `STALE_PID_REUSED`. An Owner worker refresh and
+  post-refresh singleton/build check are required before the first bounded
+  cycle. `READY_FOR_FIRST_BOUNDED_MORROWAY_CYCLE = NO` until that runtime gate
+  passes.
+
+### Temporary supervised Wan operation-mode preparation — 2026-10-01
+
+- OWNER_DECISION: temporary use of endpoint `ry49lc45y50ldy` is authorized only
+  as `TEMPORARY_GOVERNED_LEGACY_ENDPOINT`, with an authenticated Owner present,
+  a single explicitly selected/approved scene, and at most one new generation
+  POST per logical execution. Batch, autonomous operation and automatic retry
+  remain prohibited.
+- SOURCE_POLICY: ACK and generation waits are explicitly separate. Canonical
+  values remain ACK 300000 ms, generation 900000 ms, poll 4000 ms, status
+  request 30000 ms and result download 120000 ms. Missing/ambiguous provider
+  job identity is `MANUAL_RECONCILIATION_REQUIRED`; a second POST is forbidden.
+- RECONCILIATION: provider-free contracts preserve
+  `OWNER_SUPPLIED_PROVIDER_JOB_ID` and the honest
+  `OWNER_ATTESTED_NOT_PROVIDER_VERIFIED` classification unless provider lookup
+  succeeds. The existing audited MP4 import remains the canonical recovered-
+  output path and consumes zero additional AMF generation budget.
+- UI: AMF Control now labels the mode `TEMPORARY SUPERVISED`, lists absent
+  persistent receipts/digest parity and no-retry/manual-reconciliation warnings,
+  and does not render a misleading active Generate action.
+- ACTIVATION_STATUS: `PREPARED_NOT_RUNTIME_ENABLED`. Current production video
+  execution is stage-level batch processing, not the required durable one-scene
+  Owner action, and the worker is not on the current source build. Therefore
+  `WAN_LIVE_GENERATION = OWNER_AUTHORIZED_BUT_NOT_RUNTIME_ENABLED` and
+  `FUTURE_WAN_SUBMISSIONS_ALLOWED = NO` until both blockers are closed.
+- DEPLOYMENT: `WAN_DEPLOYMENT_CERTIFICATION = DEFERRED_BY_OWNER`; network volume,
+  persistent receipts, endpoint digest parity and hardened deployment remain
+  open. No provider/RunPod/video call or production-state mutation occurred.
+
+### Temporary supervised Wan single-scene Owner path — 2026-10-01
+
+- RESULT: `WAN_SINGLE_SCENE_OWNER_PATH = PROVIDER_FREE_PASS` and
+  `WAN_LIVE_GENERATION = PENDING_RUNTIME_ACTIVATION`.
+- CONTROL PATH: authenticated/CSRF/project-scoped AMF Control requests
+  `GENERATE_WAN_SINGLE_SCENE` from the Node control plane. The request accepts
+  exactly one approved scene and one exact source-visual hash; arrays,
+  wildcards, `all` and the workflow batch path fail closed.
+- DURABILITY: narrow migration `wan-supervised-single-scene-execution-v1`
+  defines the DB-backed execution ledger, seven-state lifecycle, unique
+  unresolved-scene guard and durable idempotency/budget identities. The
+  migration applied and reapplied successfully only on the isolated test DB.
+  It has not been applied to production.
+- EXACTLY ONCE: advisory locking plus unique DB constraints produced one
+  execution under concurrent requests. `SUBMISSION_STARTED`, one POST intent
+  and one video budget charge are committed together before transport;
+  ambiguity becomes `MANUAL_RECONCILIATION_REQUIRED` with no retry.
+- RECONCILIATION/UI: Owner Job-ID attachment and the audited downloaded-MP4
+  import path add no POST and no budget charge. AMF Control warns, confirms,
+  disables duplicate action, displays every lifecycle state, and surfaces
+  manual reconciliation in Decision Center.
+- CERTIFICATION: 43 focused provider-free assertions passed in the clean final
+  runs (database 6, Node/Python/UI/worker 11, adapter/policy 26);
+  failures/timeouts/provider calls
+  were zero.
+- WORKER WIRING: the canonical production worker checks the supervised ledger
+  before its ordinary workflow queue only when the temporary mode flag is
+  active. It resolves and hash-checks one canonical visual, persists provider
+  acknowledgement/generation lifecycle, writes the returned video to canonical
+  local storage plus a `scene_video_clip` artifact, and stores only safe output
+  evidence in the ledger. Output/ledger persistence ambiguity requires manual
+  reconciliation rather than a second POST.
+- RUNTIME GATE: canonical source build is
+  `585421a9b35f0ddd2486f9243f817c2cd9be0e238a727e251e2d7b12c982a3ed`;
+  live worker build is
+  `6a4fca473d493f241e7e2d5fb2c12877506ec8584accb3c0fa565133a40a2e4b`.
+  Production lacks `wan_supervised_executions`; Node API and AMF Control were
+  unreachable at certification time. Therefore runtime activation and real
+  generation remain prohibited.
+
+### Temporary supervised Wan runtime activation/readiness — 2026-10-01
+
+- RESULT: `PASS`; `WAN_LIVE_GENERATION = READY_FOR_ONE_BOUNDED_OWNER_ACTION`.
+  No generation, provider call, workflow execution, upload or budget mutation
+  occurred during activation.
+- PRECONDITION: production DB fingerprint
+  `9ac133330fd37d5967d9125a77afdb6b3a7d6d7f44ec600d478e415e6b4d9376`
+  matched the certified backup source. Backup
+  `amf-backup-2026-09-30T22-17-37-348Z` retained its 37,934,592-byte size and
+  SHA-256 `d7aca9ef901ac4be48b71febe33a0e6ab1e4b22341e8362b68c15a685ebbdeb2`.
+  Queue, running-job and running-workflow counts were zero.
+- SCHEMA: narrow migration `wan-supervised-single-scene-execution-v1` was
+  applied idempotently. Table `wan_supervised_executions` and partial unique
+  index `uq_wan_supervised_unresolved_scene` match source; business row count
+  remains zero. No broad migration operator was invoked.
+- MODE/RUNTIME: local external configuration now selects
+  `TEMPORARY_GOVERNED_LEGACY_ENDPOINT`. The canonical worker is
+  `HEALTHY_SINGLETON` on build
+  `585421a9b35f0ddd2486f9243f817c2cd9be0e238a727e251e2d7b12c982a3ed`.
+  Node API and AMF Control both return HTTP 200; Owner auth is configured,
+  signed-out mutations return HTTP 401, and CSRF/session support is active.
+- OWNER READINESS: the read-only product path reports mode active, zero
+  executions, zero reconciliation items, and exactly one approved/eligible
+  scene (`scene-001`) with no active execution. AMF Control visibly preserves
+  the one-submission/no-retry/manual-reconciliation warnings.
+- GOVERNANCE: batch, autonomous generation and automatic retry remain blocked.
+  Hardened deployment, persistent receipts, network volume and endpoint digest
+  parity remain deferred. A real POST requires a new bounded Owner action.

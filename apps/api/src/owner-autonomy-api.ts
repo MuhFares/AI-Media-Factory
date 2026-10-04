@@ -8,20 +8,43 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { OwnerAutonomyStore, NextCycleOwnerDecision, ControlPlaneStore, ChannelStore, CredentialHealthAction, SafeCredentialHealthResult } from "@ai-media-factory/database";
+import type { OwnerAutonomyStore, NextCycleOwnerDecision, ControlPlaneStore, ChannelStore, CredentialHealthAction, SafeCredentialHealthResult, WanSupervisedExecutionStore, WorkerDiagnosticResult } from "@ai-media-factory/database";
 
 export interface CredentialHealthVerificationInput {
   action: CredentialHealthAction; provider: string; credentialReference: string;
   expectedExternalChannelId: string; projectId: string; bindingId: string; channelId: string;
 }
 export interface CredentialHealthVerifier { verify(input:CredentialHealthVerificationInput):Promise<SafeCredentialHealthResult> }
+export interface WorkerDiagnosticClient { probeOpenRouterEgress():Promise<WorkerDiagnosticResult> }
 
 export interface OwnerAutonomyApiDeps {
   ownerAutonomy?: OwnerAutonomyStore;
   control: ControlPlaneStore;
   channels?: ChannelStore;
   credentialHealthVerifier?: CredentialHealthVerifier;
+  wanSupervised?: WanSupervisedExecutionStore;
+  workerDiagnostics?: WorkerDiagnosticClient;
+  sourceBuildId?: string;
 }
+
+function wanStore(deps:OwnerAutonomyApiDeps):WanSupervisedExecutionStore{if(!deps.wanSupervised)throw new Error("wan supervised execution store is not configured");return deps.wanSupervised}
+
+export async function ownerWanSupervisedList(deps:OwnerAutonomyApiDeps,res:ServerResponse,url:URL){
+  const projectId=url.searchParams.get("projectId");if(!projectId)return send(res,400,{error:"projectId is required"});
+  try{const executions=await wanStore(deps).list(projectId);send(res,200,{projectId,operationMode:"TEMPORARY_GOVERNED_LEGACY_ENDPOINT",modeActive:process.env.WAN_OPERATION_MODE==="TEMPORARY_GOVERNED_LEGACY_ENDPOINT",approvedScenes:await wanStore(deps).approvedScenes(projectId),executions,decisionItems:await wanStore(deps).decisionItems(projectId),warnings:["ONE_SUBMISSION_ONLY","AUTOMATIC_RETRY_DISABLED","MANUAL_RECONCILIATION_MAY_BE_REQUIRED"]})}catch(e){send(res,errorStatus(e),{error:errorText(e)})}
+}
+
+export async function ownerWanSingleSceneGenerate(deps:OwnerAutonomyApiDeps,req:IncomingMessage,res:ServerResponse){
+  const b=await body(req);
+  const required=["projectId","contentId","workflowId","sceneId","sceneVisualArtifactId","sceneVisualSha256","provider","model","reason","idempotencyIdentity"] as const;
+  const sceneId=typeof b.sceneId==="string"?b.sceneId.trim():"";
+  const modelConfig=b.modelConfig&&typeof b.modelConfig==="object"&&!Array.isArray(b.modelConfig)?b.modelConfig as Record<string,unknown>:{};
+  if(required.some(k=>typeof b[k]!=="string"||!(b[k] as string).trim())||Array.isArray(b.sceneId)||!sceneId||sceneId.includes("*")||sceneId.includes(",")||sceneId.toLowerCase()==="all")return send(res,400,{error:"EXACTLY_ONE_SCENE_REQUIRED"});
+  if(typeof modelConfig.prompt!=="string"||!modelConfig.prompt.trim())return send(res,400,{error:"WAN_PROMPT_REQUIRED"});
+  try{const result=await wanStore(deps).authorize({projectId:b.projectId as string,contentId:b.contentId as string,workflowId:b.workflowId as string,sceneId,sceneVisualArtifactId:b.sceneVisualArtifactId as string,sceneVisualSha256:b.sceneVisualSha256 as string,provider:b.provider as string,model:b.model as string,endpointId:typeof b.endpointId==="string"?b.endpointId:"ry49lc45y50ldy",modelConfig,ownerActor:typeof b.actor==="string"?b.actor:"owner-ui",ownerRationale:b.reason as string,idempotencyIdentity:b.idempotencyIdentity as string,expectedWorkerBuild:deps.sourceBuildId??"UNAVAILABLE",operationMode:process.env.WAN_OPERATION_MODE??"DISABLED"});send(res,result.outcome==="EXISTING_EXECUTION_ACTIVE"?409:200,result)}catch(e){send(res,errorStatus(e),{error:errorText(e)})}
+}
+
+export async function ownerWanAttachProviderJob(deps:OwnerAutonomyApiDeps,req:IncomingMessage,res:ServerResponse,executionId:string){const b=await body(req);if(typeof b.projectId!=="string"||typeof b.providerJobId!=="string"||typeof b.reason!=="string")return send(res,400,{error:"projectId, providerJobId and reason are required"});try{send(res,200,{execution:await wanStore(deps).attachProviderJobId({projectId:b.projectId,executionId,providerJobId:b.providerJobId,actor:typeof b.actor==="string"?b.actor:"owner-ui",rationale:b.reason})})}catch(e){send(res,errorStatus(e),{error:errorText(e)})}}
 
 function send(res: ServerResponse, status: number, body: unknown): void {
   const data = JSON.stringify(body);
@@ -122,8 +145,8 @@ export async function ownerHealth(deps:OwnerAutonomyApiDeps,res:ServerResponse,u
     for(const c of onboarding.channels)if(c.status!=="VERIFIED")alerts.push({kind:"CHANNEL_NOT_VERIFIED",severity:"BLOCKING",subject:c.channelId,action:"Verify channel identity."});
     for(const c of credentialHealth)if(c.bindingStatus==="ACTIVE"&&(!c.fresh||c.state!=="VALID"))alerts.push({kind:"CREDENTIAL_HEALTH_REQUIRED",severity:"BLOCKING",subject:c.bindingId,state:c.state,action:"Open AMF Control → Credentials → Verify Health."});
     const providers = [{provider:"openrouter",configured:Boolean(process.env.OPENROUTER_API_KEY),catalogState:Boolean(process.env.OPENROUTER_API_KEY)?"CONFIGURED":"UNAVAILABLE",liveHealth:"UNKNOWN_LIVE_HEALTH",lastVerifiedAt:null},
-      {provider:"self-hosted-video",configured:Boolean(process.env.RUNPOD_API_KEY),catalogState:Boolean(process.env.RUNPOD_API_KEY)?"CONFIGURED":"UNAVAILABLE",liveHealth:"UNKNOWN_LIVE_HEALTH",lastVerifiedAt:null,sourceHardening:"PASS",deployment:"NOT_CERTIFIED",futureGeneration:"BLOCKED"}];
-    send(res,200,{projectId,worker:health.workers,queue:health.queue,recentFailures:health.recentFailures,providers,alerts,wan:{futureSubmissionsAllowed:false,sourceHardening:"PROVIDER_FREE_PASS",deploymentCertification:"NOT_CERTIFIED",blockerPreserved:true,reasons:["HARDENED_HANDLER_NOT_DEPLOYED","PERSISTENT_RECEIPT_STORAGE_NOT_CERTIFIED","ENDPOINT_DIGEST_SOURCE_PARITY_NOT_PROVEN"]}});
+      {provider:"self-hosted-video",configured:Boolean(process.env.RUNPOD_API_KEY),catalogState:Boolean(process.env.RUNPOD_API_KEY)?"CONFIGURED":"UNAVAILABLE",liveHealth:"UNKNOWN_LIVE_HEALTH",lastVerifiedAt:null,sourceHardening:"PASS",deployment:"DEFERRED_BY_OWNER",futureGeneration:"TEMPORARY_PREPARED_NOT_RUNTIME_ENABLED"}];
+    send(res,200,{projectId,worker:health.workers,queue:health.queue,recentFailures:health.recentFailures,providers,alerts,wan:{operationMode:"TEMPORARY_GOVERNED_LEGACY_ENDPOINT",endpointId:"ry49lc45y50ldy",activationState:"PENDING_RUNTIME_ACTIVATION",liveGeneration:"PENDING_SCHEMA_AND_RUNTIME_PARITY",autonomousGeneration:false,batchGeneration:false,automaticRetry:false,maxNewVideoPostsPerExecution:1,futureSubmissionsAllowed:false,sourceHardening:"PROVIDER_FREE_PASS",singleSceneOwnerPath:"PROVIDER_FREE_PASS",deploymentCertification:"DEFERRED_BY_OWNER",blockerPreserved:true,reasons:["PERSISTENT_RECEIPTS_UNAVAILABLE","ENDPOINT_DIGEST_PARITY_UNPROVEN","NO_AUTOMATIC_RETRIES","MANUAL_RECONCILIATION_MAY_BE_REQUIRED"],activationBlockers:["WAN_SINGLE_SCENE_LEDGER_SCHEMA_REQUIRED","CURRENT_WORKER_API_UI_BUILD_PARITY_REQUIRED"]}});
   } catch(e) { send(res,errorStatus(e),{error:errorText(e)}); }
 }
 
@@ -142,6 +165,23 @@ export async function ownerWorkerControl(deps:OwnerAutonomyApiDeps,req:IncomingM
     const audit=await store(deps).recordOwnerAction({projectId,action:`WORKER_${action}`,subjectType:"canonical_worker",subjectId:"canonical-production-queue-worker",actor:typeof b.actor==="string"?b.actor:"owner",reason,after:{launcher:"scripts/persistent-worker.mjs",outputs},metadata:{arbitraryProcessKill:false}});
     send(res,200,{action,launcher:"CANONICAL_PERSISTENT_WORKER",outputs,audit});
   } catch(e) { send(res,409,{error:`WORKER_CONTROL_FAILED:${errorText(e)}`}); }
+}
+
+/** Owner-only control-plane command; execution occurs inside the canonical worker. */
+export async function ownerOpenRouterEgressProbe(deps:OwnerAutonomyApiDeps,req:IncomingMessage,res:ServerResponse) {
+  const b=await body(req);const projectId=typeof b.projectId==="string"?b.projectId.trim():"";const reason=typeof b.reason==="string"?b.reason.trim():"";
+  if(!projectId||!reason)return send(res,400,{error:"projectId and reason are required"});
+  if(!deps.workerDiagnostics)return send(res,503,{error:"WORKER_DIAGNOSTIC_CHANNEL_UNAVAILABLE"});
+  try{
+    const result=await deps.workerDiagnostics.probeOpenRouterEgress();
+    const safe={
+      timestamp:result.timestamp,workerInstanceId:result.workerInstanceId,workerPid:result.workerPid,workerBuild:result.workerBuild,
+      dnsStatus:result.dnsStatus,tcpStatus:result.tcpStatus,tlsStatus:result.tlsStatus,httpStatus:result.httpStatus,
+      latencyMs:result.latencyMs,errorClass:result.errorClass,errorCode:result.errorCode,providerReached:result.providerReached,outcome:result.outcome,
+    };
+    const audit=await store(deps).recordOwnerAction({projectId,action:"PROBE_OPENROUTER_EGRESS",subjectType:"canonical_worker",subjectId:result.workerInstanceId,actor:typeof b.actor==="string"?b.actor:"owner-ui",reason,after:safe,metadata:{inference:false,workflowCreated:false,budgetMutated:false,responseBodyPersisted:false,credentialMaterialPersisted:false}});
+    send(res,result.outcome==="PROBE_ALREADY_ACTIVE"||result.outcome==="PROBE_COOLDOWN_ACTIVE"?409:200,{probe:safe,audit});
+  }catch(e){send(res,errorText(e).includes("TIMEOUT")?504:503,{error:errorText(e)})}
 }
 
 function errorText(e:unknown):string{return e instanceof Error?e.message:String(e)}

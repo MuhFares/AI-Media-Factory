@@ -145,6 +145,33 @@ describe("two-phase research synthesis", () => {
     strictEqual(result.output.candidateStories.length, 0);
   });
 
+  it("canonical negative outcome accepts absent/null visual and rejects the empty-object placeholder", async () => {
+    const negative = { ...synthesisOutput(), candidateStories: [], status: "insufficient_evidence", confidence: 0.05, visual: null };
+    const agent = createResearchAgent({ config: {}, execute: twoCallExecute([], () => negative), capabilityExecution: fakeBoundary() });
+    const result = await agent.execute({ context: {}, input: baseInput() }, signal);
+    strictEqual(result.output.status, "insufficient_evidence");
+    strictEqual(result.output.candidateStories.length, 0);
+    strictEqual("visual" in result.output, false);
+
+    const emptyPlaceholder = { ...synthesisOutput(), candidateStories: [], status: "insufficient_evidence", confidence: 0.05, visual: {} };
+    const placeholderAgent = createResearchAgent({ config: {}, execute: twoCallExecute([], () => emptyPlaceholder), capabilityExecution: fakeBoundary() });
+    await rejects(placeholderAgent.execute({ context: {}, input: baseInput() }, signal), /malformed visual research contract/);
+
+    const invalidPositive = { ...synthesisOutput(), visual: {} };
+    const positiveAgent = createResearchAgent({ config: {}, execute: twoCallExecute([], () => invalidPositive), capabilityExecution: fakeBoundary() });
+    await rejects(positiveAgent.execute({ context: {}, input: baseInput() }, signal), /malformed visual research contract/);
+  });
+
+  it("status discriminator rejects contradictory positive and negative shapes", async () => {
+    const negativeWithCandidate = { ...synthesisOutput(), status: "insufficient_evidence" };
+    const a = createResearchAgent({ config: {}, execute: twoCallExecute([], () => negativeWithCandidate), capabilityExecution: fakeBoundary() });
+    await rejects(a.execute({ context: {}, input: baseInput() }, signal), /invalid report structure/);
+
+    const groundedWithoutCandidate = { ...synthesisOutput(), status: "grounded", candidateStories: [] };
+    const b = createResearchAgent({ config: {}, execute: twoCallExecute([], () => groundedWithoutCandidate), capabilityExecution: fakeBoundary() });
+    await rejects(b.execute({ context: {}, input: baseInput() }, signal), /invalid report structure/);
+  });
+
   it("synthesis prompt receives bounded retrieved evidence, never invented metadata", async () => {
     const calls = [];
     const agent = createResearchAgent({ config: {}, execute: twoCallExecute(calls, synthesisOutput), capabilityExecution: fakeBoundary() });

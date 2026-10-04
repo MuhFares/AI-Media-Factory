@@ -39,6 +39,7 @@ import { directiveToWorkflowDefinition } from "@ai-media-factory/orchestrator";
 import { createProductionAgentExecutor, WorkflowWorker } from "../dist/index.js";
 import { TEST_DATABASE_URL, assertTestDatabaseIsolation } from "./helpers.js";
 import { withV2ContractFixture } from "./visual-v2-fixtures.js";
+import { canonicalResearchPayload, canonicalResearchResults, isResearchPrompt } from "./canonical-production-fixtures.js";
 
 assertTestDatabaseIsolation();
 
@@ -68,10 +69,15 @@ const reviewReport = (status, sequence) => ({
 });
 
 function installFrozenFetch() {
-  globalThis.fetch = async () => new Response(
-    `data: ${JSON.stringify({ id: "gen-gate", model: "dots-studio/dots-3-note-preview:free", choices: [{ delta: { content: JSON.stringify(reviewReport("approved", 1)) }, finish_reason: "stop" }], usage: { prompt_tokens: 9, completion_tokens: 12, completion_tokens_details: { reasoning_tokens: 0 }, cost: 0 } })}\n\ndata: [DONE]\n\n`,
-    { status: 200, headers: { "x-request-id": "gate-fixture" } },
-  );
+  globalThis.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    const prompt = String(body.messages?.[1]?.content ?? "");
+    const payload = isResearchPrompt(prompt) ? canonicalResearchPayload(prompt) : reviewReport("approved", 1);
+    return new Response(
+      `data: ${JSON.stringify({ id: "gen-gate", model: body.model, choices: [{ delta: { content: JSON.stringify(payload) }, finish_reason: "stop" }], usage: { prompt_tokens: 9, completion_tokens: 12, completion_tokens_details: { reasoning_tokens: 0 }, cost: 0 } })}\n\ndata: [DONE]\n\n`,
+      { status: 200, headers: { "x-request-id": "gate-fixture" } },
+    );
+  };
 }
 
 function mediaBoundary(counts, options = {}) {
@@ -90,7 +96,7 @@ function mediaBoundary(counts, options = {}) {
           return { status: "blocked", reason: "FIXTURE_INJECTED_FAILURE", resultId: `${request.capabilityId}-${request.requestId}`, capabilityId: request.capabilityId };
         }
         const i = request.input ?? {};
-        if (request.capabilityId === "web.search") return success(request, { results: [{ title: "Gate fixture", url: "https://example.test/gate", snippet: "fixture" }] });
+        if (request.capabilityId === "web.search") return success(request, { results: canonicalResearchResults });
         if (request.capabilityId === "tts.generate") return success(request, { audioUrl: fixtureAudioUrl, audioId: "narration-gate-fixture", providerId: "mock-tts", durationMs: 12640, audioIntegrity: "VALID" });
         if (request.capabilityId === "timeline.plan") return success(request, { timelineId: "timeline-gate", narrationDurationMs: i.narrationDurationMs, sceneIds: ["scene-001", "scene-002", "scene-003"] });
         if (request.capabilityId === "image.generate") return success(request, { imageId: `image-${i.sceneId}`, url: `file:///${i.sceneId}.png`, providerId: "mock-image" });

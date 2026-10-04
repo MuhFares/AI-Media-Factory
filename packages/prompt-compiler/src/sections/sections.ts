@@ -3,7 +3,8 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { SectionType } from "./common";
+import type { SectionType } from "../core/common.js";
+import type { PromptVersion } from "../core/template.js";
 
 /** A single section in the final assembled prompt. */
 export interface PromptSection {
@@ -59,13 +60,6 @@ export interface CacheKey {
   templateVersion: PromptVersion;
   contextHash: string;
   schemaHash: string;
-}
-
-export interface PromptVersion {
-  major: number;
-  minor: number;
-  patch: number;
-  hash: string;
 }
 
 export interface CompileMetadata {

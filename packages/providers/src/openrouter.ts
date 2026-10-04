@@ -47,7 +47,7 @@ interface OpenRouterRequest {
   presence_penalty?: number;
   stop?: string[];
   stream?: boolean;
-  response_format?: { type: 'json_object' };
+  response_format?: { type: 'json_object' } | { type: 'json_schema'; json_schema: { name: string; strict: boolean; schema: unknown } };
   tools?: Array<{ type: 'function'; function: { name: string; description: string; parameters: unknown } }>;
   // reasoning parameter intentionally OMITTED for baseline Nemotron canary (see task §7)
 }
@@ -142,7 +142,10 @@ export class OpenRouterProvider extends BaseLlmProvider {
       stream: false,
     };
 
-    if (request.responseFormat?.kind === 'json' || request.responseFormat?.kind === 'json_schema') {
+    if (request.responseFormat?.kind === 'json_schema') {
+      if (request.responseFormat.schema === undefined) throw new Error('OpenRouter json_schema request requires schema');
+      body.response_format = { type: 'json_schema', json_schema: { name: 'amf_structured_output', strict: true, schema: request.responseFormat.schema } };
+    } else if (request.responseFormat?.kind === 'json') {
       body.response_format = { type: 'json_object' };
     }
 
@@ -252,7 +255,10 @@ export class OpenRouterProvider extends BaseLlmProvider {
       stream: true,
     };
 
-    if (request.responseFormat?.kind === 'json' || request.responseFormat?.kind === 'json_schema') {
+    if (request.responseFormat?.kind === 'json_schema') {
+      if (request.responseFormat.schema === undefined) throw new Error('OpenRouter json_schema request requires schema');
+      body.response_format = { type: 'json_schema', json_schema: { name: 'amf_structured_output', strict: true, schema: request.responseFormat.schema } };
+    } else if (request.responseFormat?.kind === 'json') {
       body.response_format = { type: 'json_object' };
     }
 

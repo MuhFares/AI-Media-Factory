@@ -3,7 +3,7 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { Json, AgentId, WorkflowId, StepId, TurnId, MemoryId } from "../core/common";
+import type { Json, AgentId, WorkflowId, StepId, TurnId, MemoryId } from "../core/common.js";
 
 export interface RetrievalRules {
   /** Maximum memory records to retrieve per type. */

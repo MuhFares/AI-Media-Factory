@@ -123,15 +123,42 @@ export class OwnerAutonomyStore {
       automationPolicy: automationState.enabled === false && automationState.level === "L0_MANUAL"
         || (automation.rowCount ?? 0) > 0,
     };
+    const cycleBudgets=new Map(budgets.rows.filter((r:any)=>r.phase==="MORROWAY_PRODUCTION_CYCLE_01_PRE_MEDIA").map((r:any)=>[r.call_kind,r]));
+    const cycleBudgetReady=(kind:string,needed:number)=>{const r:any=cycleBudgets.get(kind);return r?.active===true&&Number(r.limit_count)-Number(r.reserved_count)-Number(r.consumed_count)>=needed&&Number(r.max_retries)===0};
+    const contentPremediaBudgetReady=cycleBudgetReady("research",4)&&cycleBudgetReady("text_agent",10)&&cycleBudgetReady("image_generation",1);
+    // Generic per-phase readiness over every Owner-authorized budget envelope
+    // present for the project (legacy phases plus explicit canary/cycle
+    // phases). Each phase is evaluated against the canonical pre-media
+    // minimums; this map is additive and never alters the legacy capability
+    // fields below.
+    const phaseNeeds:ReadonlyArray<readonly [string,number]>=[["research",4],["text_agent",10],["image_generation",1]];
+    const byPhase=new Map<string,any[]>();
+    for(const r of budgets.rows as any[]){const list=byPhase.get(r.phase)??[];list.push(r);byPhase.set(r.phase,list);}
+    const budgetPhaseReadiness=[...byPhase.entries()].map(([phase,rows])=>{
+      const byKind=new Map(rows.map((r:any)=>[r.call_kind,r]));
+      const reasons:string[]=[];
+      for(const [kind,needed] of phaseNeeds){
+        const r:any=byKind.get(kind);
+        if(!(r?.active===true&&Number(r.limit_count)-Number(r.reserved_count)-Number(r.consumed_count)>=needed&&Number(r.max_retries)===0))reasons.push(`BUDGET_${kind.toUpperCase()}_UNAVAILABLE`);
+      }
+      return { phase, ready:reasons.length===0, reasons };
+    }).sort((a,b)=>a.phase.localeCompare(b.phase));
+    const capabilityReadiness={
+      contentProduction:{ready:project.status==="ACTIVE"&&checks.routingActive&&contentPremediaBudgetReady,credentialRequired:false,budgetPhase:"MORROWAY_PRODUCTION_CYCLE_01_PRE_MEDIA",reasons:[...(project.status==="ACTIVE"?[]:["PROJECT_INACTIVE"]),...(checks.routingActive?[]:["ROUTING_UNAVAILABLE"]),...(contentPremediaBudgetReady?[]:["CYCLE_01_PREMEDIA_BUDGET_UNAVAILABLE"])]},
+      youtubePublication:{ready:checks.channelBinding&&checks.credentialBinding&&checks.credentialHealth,credentialRequired:true,reasons:checks.credentialHealth?[]:["YOUTUBE_CREDENTIAL_REFRESH_REQUIRED"]},
+      youtubeAnalytics:{ready:checks.channelBinding&&checks.credentialBinding&&checks.credentialHealth,credentialRequired:true,reasons:checks.credentialHealth?[]:["YOUTUBE_CREDENTIAL_REFRESH_REQUIRED"]},
+    };
     return {
       project: { projectId: project.project_id, displayName: project.display_name, status: project.status, metadata: json(project.metadata) },
       checks,
-      ready: Object.values(checks).every(Boolean),
-      failClosedReasons: Object.entries(checks).filter(([, ok]) => !ok).map(([key]) => key),
+      ready: capabilityReadiness.contentProduction.ready,
+      failClosedReasons: capabilityReadiness.contentProduction.reasons,
+      capabilityReadiness,
       channels: channels.rows.map((r: any) => ({ channelId: r.channel_id, platform: r.platform, externalChannelId: r.external_channel_id, status: r.status })),
       credentialBindings: bindings.rows.map((r: any) => { const h:any=freshHealth.get(r.binding_id);return { bindingId: r.binding_id, channelId: r.channel_id, provider: r.provider, status: r.status, healthState:h?.health_state??"UNKNOWN_REQUIRES_REFRESH",fresh:Boolean(h?.health_state==="VALID"&&Date.parse(h.fresh_until)>Date.now()) }; }),
       activeRoutingVersionId: routing.rows[0]?.routing_version_id ?? null,
       budgets: budgets.rows.map((r: any) => ({ phase: r.phase, callKind: r.call_kind, limit: Number(r.limit_count), used: Number(r.consumed_count), reserved: Number(r.reserved_count), remaining: Number(r.limit_count)-Number(r.consumed_count)-Number(r.reserved_count), maxRetries: Number(r.max_retries), active: r.active === true })),
+      budgetPhaseReadiness,
       automation: automationState,
     };
   }

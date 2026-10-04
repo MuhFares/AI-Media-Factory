@@ -16,16 +16,21 @@ export type Json =
   | { [key: string]: Json };
 
 /** The 11 section types in enforced assembly order. */
-export type SectionType =
-  | "system"
-  | "company_brain"
-  | "agent_brain"
-  | "workflow_context"
-  | "memory"
-  | "examples"
-  | "task"
-  | "output_schema"
-  | "safety";
+export enum SectionType {
+  System = "system",
+  CompanyBrain = "company_brain",
+  AgentBrain = "agent_brain",
+  WorkflowContext = "workflow_context",
+  Memory = "memory",
+  Examples = "examples",
+  Task = "task",
+  OutputSchema = "output_schema",
+  Safety = "safety",
+}
+
+export interface JsonSchema {
+  readonly [key: string]: Json;
+}
 
 /** Model context window size (tokens). */
 export type ContextWindow = number;

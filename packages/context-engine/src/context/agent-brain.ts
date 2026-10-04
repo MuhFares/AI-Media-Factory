@@ -3,7 +3,7 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { Json } from "../core/common";
+import type { Json } from "../core/common.js";
 
 export interface AgentBrainSection {
   agent: string;

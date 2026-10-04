@@ -35,6 +35,18 @@ export type {
 } from "./recovery-framework.js";
 export { ArtifactIntegrityRepairStore, artifactPayloadHash } from "./artifact-integrity-repair.js";
 export type { ResearchArtifactIntegrityRepairInput, ResearchArtifactIntegrityRepairResult } from "./artifact-integrity-repair.js";
+export {
+  ResearchTerminalReconciliationStore,
+  RESEARCH_TERMINAL_RECONCILIATION_MODE,
+  RESEARCH_TERMINAL_SEMANTIC_OUTCOME,
+  RESEARCH_TERMINAL_EVIDENCE_STATUS,
+  assertTerminalNonAdvancingSynthesis,
+} from "./research-terminal-reconciliation.js";
+export type {
+  ResearchTerminalReconciliationInput,
+  ResearchTerminalReconciliationResult,
+  ResearchRetrievalPersistenceState,
+} from "./research-terminal-reconciliation.js";
 export { TargetedVerificationDispatcher } from "./targeted-verification-dispatch.js";
 export type { TargetedVerificationAuthorizeInput, TargetedVerificationDispatchRecord } from "./targeted-verification-dispatch.js";
 export { TargetedVerificationReevaluationRecoveryDispatcher } from "./targeted-verification-reevaluation-recovery.js";
@@ -68,6 +80,13 @@ export {
 export type { Program04LineageMigrationPrecheck } from "./program-04-performance-lineage-migration.js";
 export type { PostgresConfig } from "./pg.js";
 export { SCHEMA_DDL } from "./schema.js";
+export { ARTIFACT_STORAGE_MIGRATION_ID, applyArtifactStorageMigration } from "./artifact-storage-migration.js";
+export {
+  REVIEW_RESUME_IDEMPOTENCY_MIGRATION_ID,
+  precheckReviewResumeIdempotencyMigration,
+  applyReviewResumeIdempotencyMigration,
+  probeReviewResumeIdempotencyConstraint,
+} from "./review-resume-idempotency-migration.js";
 export {
   AUDITED_VIDEO_OUTPUT_IMPORT_CONFIRMATION,
   AUDITED_VIDEO_RECOVERY_STATUS,
@@ -94,7 +113,22 @@ export type { RoutingSlot } from "./production-model-routing.js";
 export { evaluateLlmPreflight, estimatePromptTokens, retrievalPreflight, publicationPreflight, analyticsPreflight } from "./routing-preflight.js";
 export type { ModelAvailabilityState, StructuredOutputStrategy, CanonicalProtocol, CanonicalRouteResolution, ModelCatalogEvidence, LlmPreflightRequest, LlmPreflightResult, RetrievalPreflightInput, PublicationPreflightInput, AnalyticsPreflightInput } from "./routing-preflight.js";
 export { ProductionCallBudgetStore } from "./production-call-budget.js";
+export {
+  WORKER_DIAGNOSTIC_COMMAND,
+  WORKER_DIAGNOSTIC_REQUEST_CHANNEL,
+  WORKER_DIAGNOSTIC_RESULT_CHANNEL,
+  WORKER_DIAGNOSTIC_COOLDOWN_MS,
+  WorkerDiagnosticGuard,
+  PostgresWorkerDiagnosticClient,
+  PostgresWorkerDiagnosticListener,
+} from "./worker-diagnostic-channel.js";
+export type { WorkerDiagnosticResult } from "./worker-diagnostic-channel.js";
+export { evaluateCapabilityReadiness, YOUTUBE_CREDENTIAL_DEPENDENCY } from "./capability-readiness.js";
+export type { ProductionCapabilityStage, CapabilityReadinessInput } from "./capability-readiness.js";
 export type { ProductionCallKind, ProductionCallReservation, ProductionCallRepairResult, TransportOvercountRepairInput } from "./production-call-budget.js";
+export { WanSupervisedExecutionStore, WAN_SUPERVISED_STATES } from "./wan-supervised-execution.js";
+export type { WanSupervisedState, WanSupervisedExecutionRecord, AuthorizeWanSingleSceneInput } from "./wan-supervised-execution.js";
+export { WAN_SUPERVISED_EXECUTION_MIGRATION_ID, WAN_SUPERVISED_EXECUTION_DDL, applyWanSupervisedExecutionMigration } from "./wan-supervised-execution-migration.js";
 export { OwnerAutonomyStore, PROGRAM_05_NORMAL_OPERATIONS, PROGRAM_05_BREAK_GLASS_OPERATIONS } from "./owner-autonomy.js";
 export type { NextCycleOwnerDecision, CredentialHealthAction, CredentialHealthState, CredentialHealthTransportEvent, SafeCredentialHealthResult } from "./owner-autonomy.js";
 export type { BenchmarkAuthorization } from "./model-benchmark-runtime.js";

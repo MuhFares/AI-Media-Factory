@@ -5,8 +5,10 @@
  * The PromptCompiler uses this internally. Exposed for testing/customization.
  */
 
-import type { SectionType, Uuid } from "./common";
-import type { PromptSection, FinalPrompt, PromptVersion, CacheKey } from "./builder";
+import type { SectionType, Uuid } from "./common.js";
+import type { PromptSection, FinalPrompt } from "../sections/sections.js";
+import type { PromptVersion } from "./template.js";
+import type { TokenBudget, SectionAllocation } from "./context.js";
 
 export interface PromptBuilder {
   /** Start a new prompt assembly. */
@@ -26,18 +28,4 @@ export interface PromptBuilder {
 
   /** Build and validate the final prompt. */
   build(): Promise<FinalPrompt>;
-}
-
-export interface TokenBudget {
-  total: number;
-  reservedForCompletion: number;
-  maxPromptTokens: number;
-  allocations: SectionAllocation[];
-}
-
-export interface SectionAllocation {
-  section: SectionType;
-  maxTokens: number;
-  priority: number;
-  flexible: boolean;
 }

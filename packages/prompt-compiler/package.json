@@ -17,6 +17,10 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "node --test"
   },
+  "dependencies": {
+    "@ai-media-factory/memory-engine": "*",
+    "@ai-media-factory/shared": "*"
+  },
   "devDependencies": {
     "typescript": "^5.5.0"
   }

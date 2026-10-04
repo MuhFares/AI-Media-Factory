@@ -6,7 +6,7 @@
  * template version, context hash (memory/workflow/task), and schema hash.
  */
 
-import type { PromptVersion, FinalPrompt, CacheKey } from "../sections/sections";
+import type { FinalPrompt, CacheKey } from "../sections/sections.js";
 
 export interface PromptCache {
   get(key: CacheKey): Promise<FinalPrompt | null>;
@@ -17,13 +17,6 @@ export interface PromptCache {
   invalidateAgent(agent: string): Promise<void>;
   /** Cache statistics. */
   stats(): Promise<CacheStats>;
-}
-
-export interface CacheKey {
-  agent: string;
-  templateVersion: PromptVersion;
-  contextHash: string;      // hash of dynamic inputs (memory, workflow, task)
-  schemaHash: string;       // hash of output schema
 }
 
 export interface CacheStats {

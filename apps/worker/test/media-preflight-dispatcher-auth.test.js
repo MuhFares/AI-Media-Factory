@@ -15,12 +15,13 @@ import { createProductionAgentExecutor, WorkflowWorker } from "../dist/index.js"
 import { createCapabilityRegistry } from "../../../packages/tool-framework/dist/index.js";
 import { PROVIDER_CAPABILITIES, DEFAULT_PROVIDER_GRANTS } from "../../../packages/provider-adapters/dist/wiring/registry.js";
 import { truncateAll, TEST_DATABASE_URL, assertTestDatabaseIsolation } from "./helpers.js";
+import { canonicalResearchPayload, canonicalResearchResults, isResearchPrompt } from "./canonical-production-fixtures.js";
 
 assertTestDatabaseIsolation();
 
 const definition = directiveToWorkflowDefinition("produce");
 const reviewReport = {
-  reportId: "00000000-0000-4000-8000-0000000000m1", taskDescription: "Review", summary: "approved", status: "approved", findings: [], recommendations: [],
+  reportId: "00000000-0000-4000-8000-000000000001", taskDescription: "Review", summary: "approved", status: "approved", findings: [], recommendations: [],
   metadata: { createdAt: "2026-09-14T00:00:00.000Z", agentVersion: "1.0.0" },
 };
 
@@ -53,10 +54,15 @@ before(async () => {
   process.env.VOICETUT_TTS_ENDPOINT_ID = "present-not-used";
   process.env.IMAGE_PROVIDER = "self-hosted-image";
   process.env.RUNPOD_IMAGE_ENDPOINT_ID = "present-not-used";
-  globalThis.fetch = async () => new Response(
-    `data: ${JSON.stringify({ id: "gen-media", model: "dots-studio/dots-3-note-preview:free", choices: [{ delta: { content: JSON.stringify(reviewReport) }, finish_reason: "stop" }], usage: { prompt_tokens: 9, completion_tokens: 12, completion_tokens_details: { reasoning_tokens: 0 }, cost: 0 } })}\n\ndata: [DONE]\n\n`,
-    { status: 200, headers: { "x-request-id": "fixture" } },
-  );
+  globalThis.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    const prompt = String(body.messages?.[1]?.content ?? "");
+    const payload = isResearchPrompt(prompt) ? canonicalResearchPayload(prompt) : reviewReport;
+    return new Response(
+      `data: ${JSON.stringify({ id: "gen-media", model: body.model, choices: [{ delta: { content: JSON.stringify(payload) }, finish_reason: "stop" }], usage: { prompt_tokens: 9, completion_tokens: 12, completion_tokens_details: { reasoning_tokens: 0 }, cost: 0 } })}\n\ndata: [DONE]\n\n`,
+      { status: 200, headers: { "x-request-id": "fixture" } },
+    );
+  };
 });
 
 after(async () => {
@@ -95,7 +101,7 @@ async function setupIncident(label) {
         c[req.capabilityId] = (c[req.capabilityId] ?? 0) + 1;
         const f = failures[req.input?.sceneId ?? req.capabilityId];
         if (f) throw new Error(f);
-        if (req.capabilityId === "web.search") return { status: "success", resultId: req.requestId, capabilityId: req.capabilityId, output: { results: [{ title: "t", url: "https://example.test/x", snippet: "s" }] }, evidence: { evidenceId: "e", succeeded: true, providerInvoked: true } };
+        if (req.capabilityId === "web.search") return { status: "success", resultId: req.requestId, capabilityId: req.capabilityId, output: { results: canonicalResearchResults }, evidence: { evidenceId: `e-${req.requestId}`, succeeded: true, providerInvoked: true } };
         if (req.capabilityId === "tts.generate") return { status: "success", resultId: req.requestId, capabilityId: req.capabilityId, output: { audioUrl: `data:audio/wav;base64,${Buffer.from("RIFF****WAVE").toString("base64")}`, audioId: "a" }, evidence: { evidenceId: "e", succeeded: true, providerInvoked: true } };
         if (req.capabilityId === "timeline.plan") return { status: "success", resultId: req.requestId, capabilityId: req.capabilityId, output: { timelineId: "tl" }, evidence: { evidenceId: "e", succeeded: true, providerInvoked: false } };
         if (req.capabilityId === "image.generate") return { status: "success", resultId: req.requestId, capabilityId: req.capabilityId, output: { imageId: "i", url: "file:///x.png" }, evidence: { evidenceId: "e", succeeded: true, providerInvoked: true } };

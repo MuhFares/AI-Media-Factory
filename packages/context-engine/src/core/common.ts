@@ -3,7 +3,6 @@
  * ARCHITECTURE ONLY — type declarations, no logic.
  */
 
-export type AgentId = string;
 export type WorkflowId = string;
 export type StepId = string;
 export type TurnId = string;
@@ -54,17 +53,14 @@ export type AgentId =
   | "brand"
   | "orchestrator";
 
-/** Memory types for retrieval. */
-export type MemoryType =
-  | "session"
-  | "company"
-  | "agent"
-  | "analytics"
-  | "decision"
-  | "workflow"
-  | "lessons"
-  | "checkpoint"
-  | "knowledge";
-
-/** Durability class. */
-export type Durability = "ephemeral" | "rolling" | "durable" | "permanent";
+/** Canonical context-package sections. */
+export type SectionType =
+  | "company_brain"
+  | "agent_brain"
+  | "workflow_context"
+  | "session_context"
+  | "memory"
+  | "examples"
+  | "task"
+  | "output_schema"
+  | "safety";

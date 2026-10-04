@@ -3,7 +3,7 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { Timestamp, Json } from "../core/common";
+import type { Timestamp, Json } from "../core/common.js";
 
 /** Regression test definition. */
 export interface RegressionTest {

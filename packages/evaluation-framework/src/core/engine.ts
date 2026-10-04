@@ -4,14 +4,12 @@
  */
 
 import type {
-  EvaluationRequest,
-  EvaluationResult,
   EvaluationId,
   EvaluationStatus,
   Timestamp,
   Json
-} from "./common";
-import type { EvaluationConfig } from "./request";
+} from "./common.js";
+import type { EvaluationRequest, EvaluationResult } from "./request.js";
 
 export interface EvaluationEngine {
   /**

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createPersistentWorkerController } from "../persistent-worker-singleton.mjs";
+import { createPersistentWorkerController, windowsProcessProofMatches } from "../persistent-worker-singleton.mjs";
 
 const roots = [];
 afterEach(() => { while (roots.length) fs.rmSync(roots.pop(), { recursive: true, force: true }); });
@@ -57,6 +57,14 @@ test("A/B/G: one start creates one worker; repeat is ALREADY_RUNNING; status is 
   assert.equal((await f.controller.inspect()).state, "HEALTHY_SINGLETON");
 });
 
+test("Windows fallback accepts an inaccessible Node path only with matching start-time identity", () => {
+  const startedAt = "2026-10-01T22:40:23.933Z";
+  assert.equal(windowsProcessProofMatches({ kind: "process", name: "node", path: "", startedAt }, startedAt), true);
+  assert.equal(windowsProcessProofMatches({ kind: "process", name: "msedgewebview2", path: "", startedAt }, startedAt), false);
+  assert.equal(windowsProcessProofMatches({ kind: "process", name: "node", path: "", startedAt: "2026-10-01T22:42:23.933Z" }, startedAt), false);
+  assert.equal(windowsProcessProofMatches({ kind: "process", name: "node", path: "C:\\Windows\\not-node.exe", startedAt }, startedAt), false);
+});
+
 test("C: stale dead PID is cleaned before exactly one new start", async () => {
   const f = fixture();
   fs.mkdirSync(f.config.runtimeDir, { recursive: true });
@@ -77,6 +85,20 @@ test("D: live canonical heartbeat with no PID file refuses an orphan duplicate",
   assert.equal(result.outcome, "ALREADY_RUNNING");
   assert.equal(result.pid, 42001);
   assert.equal(f.spawnCount, 0);
+});
+
+test("D2: an exact live old-build worker is classified for safe handover, never PID reuse", async () => {
+  const f = fixture();
+  f.processes.add(42002);
+  f.workerProcesses.add(42002);
+  f.presence.push(liveRow(f.controller, 42002, { build_id: "old-build" }));
+  const status = await f.controller.inspect();
+  assert.equal(status.state, "STALE_BUILD");
+  assert.deepEqual(status.activePids, [42002]);
+  assert.equal((await f.controller.start()).outcome, "REFUSED_STALE_BUILD_REQUIRES_HANDOVER");
+  assert.equal(f.spawnCount, 0);
+  assert.equal((await f.controller.stop()).outcome, "STOPPED");
+  assert.equal(f.processes.has(42002), false);
 });
 
 test("E: simultaneous starts are serialized and spawn exactly one worker", async () => {

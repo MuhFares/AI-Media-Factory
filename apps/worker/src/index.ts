@@ -7,7 +7,8 @@ export type { WorkflowWorkerDeps } from "./worker.js";
 export { buildDefaultEngine, waitForTerminal } from "./engine.js";
 export type { BuildEngineDeps, WorkflowTerminalState } from "./engine.js";
 export { createDeterministicAgentExecutor } from "./executor.js";
-export { createProductionAgentExecutor, ProductionAgentExecutor, executeGovernedAgentRouterVisibleJson, executeGovernedVisibleJson, buildProviderBoundary, probeProductionOpenRouterTransport, sanitizedFailureMessage, researchCapabilityRequestId, classifySourceAuthority, sourceAuthorityRank, evaluateResearchEvidenceSufficiency, researchStatusForSufficiency, reclassifyResearchEvidence, normalizeResearchArtifactLineage, groundResearchReport, buildDiscoveryQueries, buildVerificationQuery, isGenericFactListQuery } from "./production-executor.js";
+export { createProductionAgentExecutor, ProductionAgentExecutor, executeGovernedAgentRouterVisibleJson, executeGovernedVisibleJson, buildProviderBoundary, probeProductionOpenRouterTransport, sanitizedFailureMessage, researchCapabilityRequestId, classifySourceAuthority, sourceAuthorityRank, evaluateResearchEvidenceSufficiency, researchStatusForSufficiency, reclassifyResearchEvidence, normalizeResearchArtifactLineage, groundResearchReport, buildDiscoveryQueries, buildVerificationQuery,
+isGenericFactListQuery, persistCapabilityResultDurably, modelRequiresReasoning, modelSupportsReasoningNone, withRoleReasoningPolicy } from "./production-executor.js";
 export { GovernedAgentRuntime } from "./governed-agent-runtime.js";
 export { resolveApprovedProjectContext, assertMorrowayHistoricalContext } from "./project-context.js";
 export type { GovernedAgentRequest, GovernedAgentResult, EffectiveRuntimeConfig, GovernedProvider, CommandExecutionStatus } from "./governed-agent-runtime.js";
@@ -36,6 +37,8 @@ export { startLiveValidation, bootstrapApprovedIdeaGate, approveBootstrappedIdea
 export type { ProductionAgentExecutorOptions } from "./production-executor.js";
 export { ProductionMediaChainBridge } from "./media-chain/production-media-chain.js";
 export type { MediaChainArtifactStore, MediaChainInput, MediaChainOutput } from "./media-chain/production-media-chain.js";
+export { SupervisedWanSingleSceneRunner } from "./supervised-wan-runtime.js";
+export type { SupervisedWanSourceResolver } from "./supervised-wan-runtime.js";
 export { artifactAttribution, configurationFingerprint, executionProvenance, modelPerformanceObservations, safeAttributionConfiguration } from "./model-performance-attribution.js";
 export * from "./naming-round2.js";
 export { persistPublicationIntegrationValidation } from "./publication-integration-validation.js";

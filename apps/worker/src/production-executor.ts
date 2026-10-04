@@ -274,6 +274,54 @@ export async function executeCapabilityWithTransportLifecycle(
   }
 }
 
+export async function persistCapabilityResultDurably(
+  persistence: PersistencePort,
+  scope: { workflowId: string; correlationId: string | null; agentId: string },
+  result: CapabilityResult,
+): Promise<void> {
+  const evidence = safeRecord((result as { evidence?: unknown }).evidence);
+  const evidenceId = typeof evidence.evidenceId === "string" && evidence.evidenceId.length > 0 ? evidence.evidenceId : null;
+  // Compare and persist the JSON lifecycle representation, not the in-memory
+  // capability object. Optional `undefined` members are not representable in
+  // JSONB and Research later emits the same result through a JSON round-trip.
+  // Using one representation keeps legitimate replay idempotent while still
+  // detecting a materially different payload under the same durable identity.
+  const durablePayload = JSON.parse(JSON.stringify(result)) as Record<string, unknown>;
+  await persistence.saveCapabilityExecution({
+    resultId: result.resultId,
+    workflowId: scope.workflowId,
+    correlationId: scope.correlationId,
+    capabilityId: result.capabilityId,
+    agentId: scope.agentId,
+    status: result.status,
+    evidenceId,
+    idempotencyKey: result.resultId,
+    executedAt: typeof evidence.executedAt === "string" ? evidence.executedAt : nowIso(),
+    payload: durablePayload,
+  });
+  if (evidenceId !== null) {
+    await persistence.saveExecutionEvidence({
+      evidenceId,
+      workflowId: scope.workflowId,
+      correlationId: scope.correlationId,
+      capabilityId: result.capabilityId,
+      agentId: scope.agentId,
+      executedAt: typeof evidence.executedAt === "string" ? evidence.executedAt : nowIso(),
+      succeeded: evidence.succeeded === true,
+      idempotencyKey: evidenceId,
+      payload: durablePayload,
+    });
+  }
+  if (persistence.listCapabilityExecutions !== undefined) {
+    const stored = (await persistence.listCapabilityExecutions(scope.workflowId))
+      .find((candidate) => candidate.resultId === result.resultId);
+    if (stored === undefined) throw new Error(`CAPABILITY_EVIDENCE_PERSISTENCE_FAILED:${result.capabilityId}`);
+    if (stored.evidenceId !== evidenceId || stableFingerprint(stored.payload as unknown as Json) !== stableFingerprint(durablePayload as unknown as Json)) {
+      throw new Error(`CAPABILITY_EVIDENCE_CONFLICT:${result.capabilityId}`);
+    }
+  }
+}
+
 /** Derive transport state only from events carrying this reservation's canonical identity. */
 export function deriveCallTransportState(
   reservation: Pick<ProductionCallReservation, "reservationId" | "idempotencyKey" | "status">,
@@ -732,7 +780,7 @@ interface AnyAgent {
 }
 
 export const PRE_MEDIA_ORCHESTRATOR_CONTRACT_VERSION = "amf-pre-media-orchestrator-v1";
-const PRE_MEDIA_ORCHESTRATOR_REQUIRED = ["planId", "stage", "objective", "topic", "audience", "platform", "researchQuestions", "researchObjectives", "desiredDeliverables", "tasks", "status", "summary"] as const;
+export const PRE_MEDIA_ORCHESTRATOR_REQUIRED = ["planId", "stage", "objective", "topic", "audience", "platform", "researchQuestions", "researchObjectives", "desiredDeliverables", "tasks", "status", "summary"] as const;
 const PRE_MEDIA_ORCHESTRATOR_ARRAY_FIELDS = ["researchQuestions", "researchObjectives", "desiredDeliverables", "tasks"] as const;
 const PRE_MEDIA_ORCHESTRATOR_STRING_FIELDS = ["planId", "stage", "objective", "topic", "audience", "platform", "status", "summary"] as const;
 const FORBIDDEN_ORCHESTRATOR_ACTION = /(?:grant|approve|authorize|execute|start)\s+(?:production|media|publication)|(?:publish|upload|generate\s+(?:image|video|voice))/i;
@@ -772,13 +820,37 @@ function createPreMediaRoutedAgent(agentId: string, model: string, execute: Exec
   const required = requiredByAgent[agentId] ?? ["status", "summary"];
   return {
     async execute(envelope, signal) {
+      const responseSchema = agentId === "orchestrator"
+        ? {
+            type: "object",
+            properties: {
+              planId: { type: "string" },
+              stage: { type: "string", enum: ["INITIAL_CONTENT_PLAN"] },
+              objective: { type: "string" },
+              topic: { type: "string" },
+              audience: { type: "string" },
+              platform: { type: "string" },
+              researchQuestions: { type: "array", items: {} },
+              researchObjectives: { type: "array", items: {} },
+              desiredDeliverables: { type: "array", items: {} },
+              tasks: { type: "array", items: {} },
+              status: { type: "string" },
+              summary: { type: "string" },
+              productionAuthority: { type: "string", enum: ["NOT_GRANTED", "OWNER_REQUIRED"] },
+              mediaAuthority: { type: "string", enum: ["NOT_GRANTED", "OWNER_REQUIRED"] },
+              publicationAuthority: { type: "string", enum: ["NOT_GRANTED", "OWNER_REQUIRED"] },
+            },
+            required,
+            additionalProperties: true,
+          }
+        : { type: "object", required, additionalProperties: true };
       const request: ExecutionRequest = {
         model,
         system: agentId === "orchestrator" ? preMediaOrchestratorSystemPrompt() : `You are the governed AMF ${agentId} agent. Return only JSON matching the required contract. Required fields: ${required.join(", ")}. Use only supplied evidence. Never invent provider results, authority, or factual claims.`,
         messages: [{ role: "user", content: JSON.stringify(envelope.input) }],
         temperature: agentId === "director" || agentId === "visual-director" ? 0.4 : 0.2,
         maxOutputTokens: 4096,
-        responseSchema: { type: "object", required, additionalProperties: true },
+        responseSchema,
       } as unknown as ExecutionRequest;
       const response = await execute(envelope.context, request, signal);
       const output = safeRecord(response.output);
@@ -853,6 +925,42 @@ function stableFingerprint(value: unknown): string {
     return item;
   };
   return createHash("sha256").update(JSON.stringify(canonicalize(value))).digest("hex");
+}
+
+function firstJsonDifference(left: unknown, right: unknown, path = "$"): string | null {
+  if (Object.is(left, right)) return null;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right)) return path;
+    if (left.length !== right.length) return `${path}.length`;
+    for (let index = 0; index < left.length; index += 1) {
+      const difference = firstJsonDifference(left[index], right[index], `${path}[${index}]`);
+      if (difference !== null) return difference;
+    }
+    return null;
+  }
+  if (left !== null && right !== null && typeof left === "object" && typeof right === "object") {
+    const leftRecord = left as Record<string, unknown>;
+    const rightRecord = right as Record<string, unknown>;
+    const keys = [...new Set([...Object.keys(leftRecord), ...Object.keys(rightRecord)])].sort();
+    for (const key of keys) {
+      if (!(key in leftRecord) || !(key in rightRecord)) return `${path}.${key}`;
+      const difference = firstJsonDifference(leftRecord[key], rightRecord[key], `${path}.${key}`);
+      if (difference !== null) return difference;
+    }
+    return null;
+  }
+  return path;
+}
+
+function capabilityProviderPayload(value: unknown): unknown {
+  const normalized = JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+  // Research adds deterministic local lifecycle annotations after the
+  // capability boundary returns. They belong to the Research artifact, not
+  // the provider result identity, and must not make the already-committed raw
+  // result appear to conflict with its later annotated projection.
+  delete normalized.lifecycle;
+  delete normalized.reasonCode;
+  return normalized;
 }
 
 function safeRecord(value: unknown): JsonRecord {
@@ -1243,7 +1351,7 @@ function agentLlm(input: Json): ExecuteFn {
       if (!process.env.OPENROUTER_API_KEY?.trim()) return unavailableTextProvider("openrouter");
       const ov = resolvedOpenRouterModel(agent, input);
       // Owner-authorized OpenRouter Writer canaries (Nemotron, Gemma) are explicitly allowed for strategy council
-      return (agent === "writer" || agent === "review") ? withReasoningDisabled(openRouterLlm(ov)) : openRouterLlm(ov);
+      return withRoleReasoningPolicy(agent, ov, openRouterLlm(ov));
     }
     return unavailableTextProvider("agentrouter (required for PRE_PUBLICATION_STRATEGY)");
   }
@@ -1254,8 +1362,9 @@ function agentLlm(input: Json): ExecuteFn {
     if (explicitProvider === "agentrouter") return agentRouterLlm(agent, resolvedAgentRouterModel(agent, input));
     if (explicitProvider === "openrouter") {
       if (process.env.OPENROUTER_API_KEY?.trim()) {
-        const execute = openRouterLlm(resolvedOpenRouterModel(agent, input));
-        return (agent === "writer" || agent === "review") ? withReasoningDisabled(execute) : execute;
+        const model = resolvedOpenRouterModel(agent, input);
+        const execute = openRouterLlm(model);
+        return withRoleReasoningPolicy(agent, model, execute);
       }
       return unavailableTextProvider("openrouter");
     }
@@ -1278,6 +1387,43 @@ function withReasoningDisabled(execute: ExecuteFn): ExecuteFn {
     ...request,
     reasoning: { effort: "none" },
   } as ExecutionRequest & { reasoning: { readonly effort: "none" } }, signal);
+}
+
+/**
+ * Per-model reasoning capability policy (review-400 remediation).
+ *
+ * Proven live: the openai/gpt-oss-20b route rejects reasoning:none with
+ * HTTP 400 ("Reasoning is mandatory for this endpoint and cannot be
+ * disabled"). Entries require live 400 evidence against the exact model
+ * route; never extend on speculation. OpenRouter variant suffixes
+ * (e.g. `:free`) match by base model id. Structured-output support is
+ * tracked separately by the provider model registry; this table covers
+ * only the reasoning-none incompatibility.
+ */
+const REASONING_MANDATORY_MODELS: ReadonlySet<string> = new Set([
+  "openai/gpt-oss-20b",
+]);
+export function modelRequiresReasoning(modelId: string): boolean {
+  const normalized = modelId.trim().toLowerCase();
+  if (REASONING_MANDATORY_MODELS.has(normalized)) return true;
+  const base = normalized.split(":")[0];
+  return base !== normalized && REASONING_MANDATORY_MODELS.has(base);
+}
+export function modelSupportsReasoningNone(modelId: string): boolean {
+  return !modelRequiresReasoning(modelId);
+}
+/**
+ * Role reasoning policy with per-model capability guard. Writer/review
+ * requests default to reasoning:none exactly as before, except on models
+ * proven to mandate reasoning — there the key is omitted so the
+ * provider/model default applies. No fallback model, no retry, no
+ * behavior change for any other role or model.
+ */
+export function withRoleReasoningPolicy(agent: string, model: string, execute: ExecuteFn): ExecuteFn {
+  if ((agent === "writer" || agent === "review") && modelSupportsReasoningNone(model)) {
+    return withReasoningDisabled(execute);
+  }
+  return execute;
 }
 
 /**
@@ -1328,7 +1474,7 @@ type OpenRouterResponseDiagnostics = {
   readonly userPromptBytes: number;
   readonly maxTokens: number;
   readonly reasoningEffort: "none" | null;
-  readonly responseFormat: "json_object";
+  readonly responseFormat: "json_object" | "json_schema";
   readonly responseBytes: number;
   readonly visibleContentBytes: number;
   readonly reasoningTokens: number | null;
@@ -1352,6 +1498,22 @@ function openRouterEndpoint(baseUrl: string, path: string): string {
   return `${baseUrl.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
 }
 
+/** Translate the runtime's provider-neutral schema request into OpenRouter's
+ * structured-output envelope. The runtime validator remains the final,
+ * fail-closed authority; strict is deliberately false until this exact model
+ * and contract have live compatibility evidence. */
+export function openRouterResponseFormat(responseSchema: ExecutionRequest["responseSchema"]): Record<string, unknown> {
+  if (responseSchema === undefined) return { type: "json_object" };
+  return {
+    type: "json_schema",
+    json_schema: {
+      name: "amf_structured_response",
+      strict: false,
+      schema: responseSchema,
+    },
+  };
+}
+
 /** Read-only transport/auth probe using the production worker's OpenRouter
  * endpoint and credential inheritance. It performs no model inference. */
 export async function probeProductionOpenRouterTransport(): Promise<{ httpStatus:number; latencyMs:number; providerReached:boolean; authValid:boolean|null }> {
@@ -1373,13 +1535,14 @@ function openRouterLlm(requestedModelOverride?: string): ExecuteFn {
     const system = sanitizeExternalText(request.messages.find((message) => message.role === "system")?.content ?? request.system);
     const allMessages = [{ role: "system" as const, content: system }, ...messages.map((m) => ({ role: m.role as "system"|"user"|"assistant", content: externalMessageText(m) }))];
     const reasoning = (request as ExecutionRequest & { reasoning?: { readonly effort: "none" } }).reasoning;
+    const responseFormat = openRouterResponseFormat(request.responseSchema);
     const requestBody = JSON.stringify({
       model: requestedModel,
       messages: allMessages.map((m) => ({ role: m.role, content: m.content })),
       temperature: request.temperature,
       max_tokens: request.maxOutputTokens,
       stream: true,
-      response_format: { type: "json_object" },
+      response_format: responseFormat,
       ...(reasoning ? { reasoning } : {}),
     });
     const requestDiagnostics = {
@@ -1390,7 +1553,7 @@ function openRouterLlm(requestedModelOverride?: string): ExecuteFn {
       userPromptBytes: messages.reduce((t, m) => t + Buffer.byteLength(externalMessageText(m), "utf8"), 0),
       maxTokens: request.maxOutputTokens,
       reasoningEffort: reasoning?.effort ?? null,
-      responseFormat: "json_object" as const,
+      responseFormat: String(responseFormat.type) as "json_object" | "json_schema",
       requestedModel,
     };
 
@@ -1424,10 +1587,21 @@ function openRouterLlm(requestedModelOverride?: string): ExecuteFn {
     });
 
     if (!response.ok) {
+      // Forensic retention for non-2xx provider responses (synthesis-400:
+      // the status-only evidence previously made the provider's stated
+      // reason unrecoverable). Bounded, secret-free by construction — error
+      // bodies carry provider diagnostics, never request credentials — and
+      // read-only: retry, budget, and message behavior are unchanged.
+      let providerErrorBody: string | null = null;
+      try {
+        const text = await response.text();
+        if (text) providerErrorBody = text.slice(0, 2000);
+      } catch { providerErrorBody = null; }
       throw new OpenRouterExecutionError(`OpenRouter request failed (${response.status})`, {
         httpStatus: response.status,
         model: requestedModel,
         providerRequestId: response.headers.get("x-request-id") ?? response.headers.get("request-id"),
+        providerErrorBody,
         ...requestDiagnostics,
       });
     }
@@ -2461,6 +2635,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
     if (this.productionCallBudget === undefined) throw new Error("PRODUCTION_CALL_BUDGET_STORE_UNAVAILABLE");
     const projectId = String(data.projectId ?? "");
     if (!projectId) throw new Error("PROJECT_CONTEXT_REQUIRED");
+    const budgetPhase=typeof data.budgetPhase==="string"&&data.budgetPhase.trim()?data.budgetPhase:"PRE_MEDIA_PHASE";
     // `withCanonicalModelRouting` stores the execution override and its
     // immutable routing evidence together.  The outer object is the provider
     // override; the nested object is the canonical route provenance.
@@ -2479,7 +2654,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
     let effectiveRetrievalEnvelope: number | null = null;
     let researchReservations: Array<{ callKind: "research"; keySuffix: string }>;
     if (researchV2) {
-      const budgets = await this.productionCallBudget.budgets(projectId, "PRE_MEDIA_PHASE");
+      const budgets = await this.productionCallBudget.budgets(projectId, budgetPhase);
       const researchBudget = budgets.find((b) => b.callKind === "research");
       const remainingCapacity = researchBudget !== undefined ? Math.max(0, researchBudget.remaining) : 0;
       effectiveRetrievalEnvelope = Math.min(
@@ -2496,19 +2671,20 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
     } else {
       researchReservations = [];
     }
+    const directionReuse = step.agent === "research" && safeRecord(data.researchDirectionReuse).mission !== undefined;
     const reservationSpecs: Array<{ callKind: "research" | "text_agent"; keySuffix: string }> = step.agent === "research"
-      ? [...researchReservations, { callKind: "text_agent", keySuffix: "" }, { callKind: "text_agent", keySuffix: ":synthesis" }]
+      ? [...researchReservations, ...(directionReuse ? [] : [{ callKind: "text_agent" as const, keySuffix: "" }]), { callKind: "text_agent", keySuffix: ":synthesis" }]
       : [{ callKind: "text_agent", keySuffix: "" }];
     const reservations: ProductionCallReservation[] = [];
     try {
       for (const spec of reservationSpecs) {
         reservations.push(await this.productionCallBudget.reserve({
-          projectId, workflowId: context.workflowId, phase: "PRE_MEDIA_PHASE", stage: step.id, role: step.agent, callKind: spec.callKind,
+          projectId, workflowId: context.workflowId, phase: budgetPhase, stage: step.id, role: step.agent, callKind: spec.callKind,
           idempotencyKey: `${context.workflowId}:${step.id}:${spec.callKind}:v1${recoverySuffix}${spec.keySuffix}`,
           routingVersionId: typeof route.routingVersionId === "string" ? route.routingVersionId : null,
           exactModelId: typeof safeRecord(safeRecord(data.controlAgentOverrides)[step.agent]).model === "string" ? String(safeRecord(safeRecord(data.controlAgentOverrides)[step.agent]).model) : null,
           priceSnapshotId,
-          provenance: { projectId, phase: "PRE_MEDIA_PHASE", authority: data.phaseAuthority ?? "UNKNOWN" },
+          provenance: { projectId, phase: budgetPhase, productionPhase:"PRE_MEDIA_PHASE", productionCycle:data.productionCycle??null, authority: data.phaseAuthority ?? "UNKNOWN" },
         }));
       }
       return { reservations, effectiveRetrievalEnvelope };
@@ -2559,9 +2735,11 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
         const events = await this.persistence.listExecutionLifecycleEvents(input.lifecycleExecutionId);
         const researchReservations = input.reservations.filter((reservation) => reservation.callKind === "research");
         const textReservations = input.reservations.filter((reservation) => reservation.callKind === "text_agent");
+        const planReservation = textReservations.find((reservation) => !reservation.idempotencyKey.endsWith(":synthesis"));
+        const synthesisReservation = textReservations.find((reservation) => reservation.idempotencyKey.endsWith(":synthesis"));
         const started = (reservation: ProductionCallReservation | undefined): boolean => reservation !== undefined && ["TRANSPORT_STARTED", "TRANSPORT_COMPLETED", "TRANSPORT_FAILED_AFTER_START"].includes(deriveCallTransportState(reservation, events));
-        planSubmitted = started(textReservations[0]);
-        synthesisSubmitted = started(textReservations[1]);
+        planSubmitted = started(planReservation);
+        synthesisSubmitted = started(synthesisReservation);
         for (const reservation of researchReservations) if (started(reservation)) lifecycleStartedRetrievals.add(reservation.reservationId);
         const responseUsage = (reservation: ProductionCallReservation | undefined): JsonRecord => {
           if (reservation === undefined) return {};
@@ -2571,8 +2749,8 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
           });
           return safeRecord(safeRecord(response?.metadata).usage);
         };
-        const planResponseUsage = responseUsage(textReservations[0]);
-        const synthesisResponseUsage = responseUsage(textReservations[1]);
+        const planResponseUsage = responseUsage(planReservation);
+        const synthesisResponseUsage = responseUsage(synthesisReservation);
         if (typeof planResponseUsage.cost === "number") planCost = planResponseUsage.cost as number;
         if (typeof synthesisResponseUsage.cost === "number") synthesisCost = synthesisResponseUsage.cost as number;
       } catch {
@@ -2581,6 +2759,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
       }
     }
     if (input.output === null && planSubmitted && planCost === undefined) planCost = input.failedCalculableCost;
+    if (input.output === null && !planSubmitted && synthesisSubmitted && synthesisCost === undefined) synthesisCost = input.failedCalculableCost;
     const researchReservations = input.reservations.filter((reservation) => reservation.callKind === "research");
     const textReservations = input.reservations.filter((reservation) => reservation.callKind === "text_agent");
     for (const [index, researchRes] of researchReservations.entries()) {
@@ -2591,7 +2770,8 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
         : executionStatus === "success" || executionStatus === "failed";
       await store.reconcile({ reservationId: researchRes.reservationId, providerSubmissionStarted: submitted, success: execution === null ? submitted && completed : executionStatus === "success", calculableCostUsd: undefined, providerBilledCostUsd: undefined, provenance });
     }
-    const [planRes, synthesisRes] = textReservations;
+    const planRes = textReservations.find((reservation) => !reservation.idempotencyKey.endsWith(":synthesis"));
+    const synthesisRes = textReservations.find((reservation) => reservation.idempotencyKey.endsWith(":synthesis"));
     if (planRes !== undefined) await store.reconcile({ reservationId: planRes.reservationId, providerSubmissionStarted: planSubmitted, success: planSubmitted && completed, calculableCostUsd: planCost, providerBilledCostUsd: undefined, provenance });
     if (synthesisRes !== undefined) await store.reconcile({ reservationId: synthesisRes.reservationId, providerSubmissionStarted: synthesisSubmitted, success: synthesisSubmitted && completed, calculableCostUsd: synthesisCost, providerBilledCostUsd: undefined, provenance });
   }
@@ -2942,6 +3122,12 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
             : { inputArtifacts: strategyInputArtifactIds.map((artifactId) => ({ artifactId })) }),
           ...(strategyEvidence === undefined ? {} : { strategyEvidence }),
           ...(requestedModelOverride.length === 0 ? strategyModelOverride : { agentRouterModelOverride: requestedModelOverride }),
+          ...(safeRecord(context.data).researchDirectionReuse === undefined
+            ? {}
+            : { reusedDirection: safeRecord(context.data).researchDirectionReuse as unknown as Json }),
+          ...(researchIntelligenceV2 && typeof safeRecord(safeRecord(context.data).recoveryExecution).recoveryExecutionId === "string"
+            ? { recoveryScopeId: String(safeRecord(safeRecord(context.data).recoveryExecution).recoveryExecutionId) }
+            : {}),
           capabilityRequests: strategyMode ? [] : [
             {
               requestId: researchCapabilityRequestId(workflowId, step.id, context.data),
@@ -3311,9 +3497,20 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
           capabilityRequestId: request.requestId,
           capabilityId: request.capabilityId,
         };
-        return executeCapabilityWithTransportLifecycle(capability, request, attribution, record);
+        const result = await executeCapabilityWithTransportLifecycle(capability, request, attribution, record);
+        // External success is its own durability boundary. Persist the result
+        // and evidence before Research can advance to another retrieval or to
+        // synthesis, so a later validator/artifact failure cannot erase valid
+        // provider evidence from this execution.
+        await this.persistResearchCapabilityResult(lifecycle, result);
+        return result;
       },
     };
+  }
+
+  private async persistResearchCapabilityResult(lifecycle: GovernedLlmLifecycle, result: CapabilityResult): Promise<void> {
+    if (this.persistence === undefined) throw new Error("RESEARCH_CAPABILITY_PERSISTENCE_REQUIRED");
+    await persistCapabilityResultDurably(this.persistence, lifecycle, result);
   }
 
   private buildAgent(agent: string, deps: { input: Json; execute: ExecuteFn }, capabilityOverride?: CapabilityExecutionPort): AnyAgent {
@@ -3515,8 +3712,15 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
         if (stored === undefined) {
           throw new Error(`CAPABILITY_EVIDENCE_PERSISTENCE_FAILED:${String(execution.capabilityId ?? "unknown")}`);
         }
-        if (stored.evidenceId !== evidenceId || stableFingerprint(stored.payload) !== stableFingerprint(execution)) {
-          throw new Error(`CAPABILITY_EVIDENCE_CONFLICT:${String(execution.capabilityId ?? "unknown")}`);
+        const evidenceIdentityMatches = stored.evidenceId === evidenceId;
+        const storedProviderPayload = capabilityProviderPayload(stored.payload);
+        const replayProviderPayload = capabilityProviderPayload(execution);
+        const storedPayloadFingerprint = stableFingerprint(storedProviderPayload);
+        const replayPayloadFingerprint = stableFingerprint(replayProviderPayload);
+        const payloadMatches = storedPayloadFingerprint === replayPayloadFingerprint;
+        if (!evidenceIdentityMatches || !payloadMatches) {
+          const differencePath = firstJsonDifference(storedProviderPayload, replayProviderPayload) ?? "UNKNOWN";
+          throw new Error(`CAPABILITY_EVIDENCE_CONFLICT:${String(execution.capabilityId ?? "unknown")}:${evidenceIdentityMatches ? `PAYLOAD:${differencePath}` : "EVIDENCE_ID"}`);
         }
       }
     }
@@ -3621,7 +3825,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
       transportCount += 1;
       const callLeg = request.callIdentity?.callLeg ?? (transportCount === 1 ? "PRIMARY" : `CALL_${transportCount}`);
       const textReservations = reservations.filter((reservation) => reservation.callKind === "text_agent");
-      const reservation = callLeg === "FINAL_SYNTHESIS" ? textReservations[1] : textReservations[0];
+      const reservation = callLeg === "FINAL_SYNTHESIS" ? textReservations.at(-1) : textReservations[0];
       const attribution = { callLeg, reservationId: reservation?.reservationId, idempotencyKey: reservation?.idempotencyKey };
       let claimed = await this.persistence.claimReadyExecutionProvenance(lifecycle.executionId, { maxTokens: request.maxOutputTokens, ...attribution });
       if (!claimed && transportCount > 1) {
@@ -4430,7 +4634,11 @@ export function normalizeResearchArtifactLineage(output: Json): Json {
       : [];
     if (sourceIds.some((id) => !sourceById.has(id))) throw new Error(`RESEARCH_ARTIFACT_CANDIDATE_SOURCE_UNRESOLVED:${candidateId}`);
     const candidateUrls = new Set(sourceIds.map((id) => canonicalResearchSourceUrl(sourceById.get(id)?.url)).filter((url): url is string => url !== null));
-    const marker = `verify-${candidateId.toLowerCase()}-`;
+    // Research invocation identities encode the verification lane as
+    // `verification-${candidateId}`. Match that canonical lane verbatim;
+    // the former `verify-...` alias could never match and incorrectly
+    // downgraded fully verified candidates to AGENT_OUTPUT_BLOCKED.
+    const marker = `verification-${candidateId.toLowerCase()}`;
     const verification = persisted.filter((entry) => {
       const identity = `${entry.resultId} ${entry.idempotencyKey}`.toLowerCase();
       return identity.includes(marker) && [...candidateUrls].some((url) => entry.urls.has(url));

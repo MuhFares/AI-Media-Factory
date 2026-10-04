@@ -6,6 +6,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   OpenRouterProvider,
+  AlibabaProvider,
   summarizeChatCompletionResponse,
   parseChatCompletionResponse,
   buildStructuredRequest,
@@ -23,6 +24,15 @@ function mockChatCompletion(doc, status = 200) {
     return new Response(JSON.stringify(doc), { status, headers: { "x-request-id": "req-fixture" } });
   };
   return () => calls;
+}
+
+function captureChatCompletion(doc, status = 200) {
+  const bodies = [];
+  globalThis.fetch = async (_url, init) => {
+    bodies.push(JSON.parse(String(init.body)));
+    return new Response(JSON.stringify(doc), { status, headers: { "x-request-id": "req-fixture" } });
+  };
+  return bodies;
 }
 
 const baseDoc = (overrides = {}) => ({
@@ -128,6 +138,36 @@ test("G: STRICT_JSON_OBJECT sends response_format json_object, non-streaming", (
   assert.deepEqual(built.request.responseFormat, { kind: "json" });
   assert.equal(built.request.stream, false);
   assert.ok(STRUCTURED_OUTPUT_MODES.includes("STRICT_JSON_OBJECT"));
+});
+
+test("G2: OpenRouter forwards json_schema instead of silently downgrading it", async () => {
+  const bodies = captureChatCompletion(baseDoc());
+  const provider = new OpenRouterProvider();
+  const schema = { type: "object", properties: { a: { type: "number" } }, required: ["a"] };
+  await provider.generate({ ...generateInput(), responseFormat: { kind: "json_schema", schema } }, AbortSignal.timeout(5000));
+  assert.equal(bodies.length, 1);
+  assert.equal(bodies[0].response_format.type, "json_schema");
+  assert.equal(bodies[0].response_format.json_schema.strict, true);
+  assert.deepEqual(bodies[0].response_format.json_schema.schema, schema);
+});
+
+test("G3: json_schema without a schema fails before transport", async () => {
+  const bodies = captureChatCompletion(baseDoc());
+  const provider = new OpenRouterProvider();
+  await assert.rejects(() => provider.generate({ ...generateInput(), responseFormat: { kind: "json_schema" } }, AbortSignal.timeout(5000)), /requires schema/);
+  assert.equal(bodies.length, 0);
+});
+
+test("G4: Alibaba rejects json_schema before transport instead of downgrading", async () => {
+  process.env.DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY ?? "test-key-not-used";
+  const bodies = captureChatCompletion(baseDoc());
+  const provider = new AlibabaProvider();
+  const schema = { type: "object", properties: { a: { type: "number" } }, required: ["a"] };
+  await assert.rejects(
+    () => provider.generate({ ...generateInput(), responseFormat: { kind: "json_schema", schema } }, AbortSignal.timeout(5000)),
+    /refusing silent schema downgrade/,
+  );
+  assert.equal(bodies.length, 0);
 });
 
 // H: visible-text mode excludes response_format entirely.

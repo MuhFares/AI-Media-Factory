@@ -10,9 +10,9 @@ import assert from "node:assert/strict";
 import { createPool, migrate, StrategicStore, ControlPlaneStore } from "@ai-media-factory/database";
 import { resolveApprovedProjectContext, resolveStrategicProjectContext, assertMorrowayHistoricalContext, resolveOperationalContext } from "../dist/project-context.js";
 import { GovernedAgentRuntime } from "../dist/governed-agent-runtime.js";
+import { TEST_DATABASE_URL, assertTestDatabaseIsolation } from "./helpers.js";
 
-const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL ?? "postgresql://postgres@127.0.0.1:5432/ai_media_factory_test";
-if (TEST_DATABASE_URL === process.env.DATABASE_URL) throw new Error("TEST_DATABASE_URL must not reference DATABASE_URL");
+assertTestDatabaseIsolation();
 
 let pool, strategic, control;
 before(async () => {

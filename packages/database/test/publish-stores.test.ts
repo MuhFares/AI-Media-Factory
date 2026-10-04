@@ -1,15 +1,15 @@
 /**
  * Postgres-backed PublishStore / PublishSessionStore tests.
  *
- * These run against a real local PostgreSQL (default
- * postgresql://postgres@127.0.0.1:5432/ai_media_factory, override with
- * DATABASE_URL). They verify idempotency semantics: completed is terminal and
+ * These run only against the canonical isolated TEST_DATABASE_URL resolved by
+ * the shared integration-test guard. They verify idempotency semantics: completed is terminal and
  * never downgraded, and resumable sessions persist across process restarts.
  */
 
 import { describe, it, before, after } from "node:test";
 import { strictEqual, ok } from "node:assert";
 import type pg from "pg";
+import { TEST_DATABASE_URL, assertTestDatabaseIsolation } from "./helpers.js";
 import {
   createPool,
   migrate,
@@ -17,8 +17,7 @@ import {
   PostgresPublishSessionStore,
 } from "@ai-media-factory/database";
 
-const connectionString =
-  process.env.TEST_DATABASE_URL ?? "postgresql://postgres@127.0.0.1:5432/ai_media_factory_test";
+const connectionString = TEST_DATABASE_URL;
 
 let pool: pg.Pool;
 let store: PostgresPublishStore;
@@ -26,9 +25,7 @@ let sessionStore: PostgresPublishSessionStore;
 
 describe("Postgres publish stores", () => {
   before(async () => {
-    if (connectionString === process.env.DATABASE_URL) {
-      throw new Error("TEST_DATABASE_URL must not reference DATABASE_URL");
-    }
+    assertTestDatabaseIsolation();
     pool = createPool({ connectionString });
     await migrate(pool);
     store = new PostgresPublishStore(pool);

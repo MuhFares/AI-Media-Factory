@@ -6,21 +6,8 @@
  * and handles trimming when over budget.
  */
 
-import type { SectionType } from "./common";
-
-export interface TokenBudget {
-  total: number;                    // Model context window (e.g. 128000)
-  reservedForCompletion: number;    // Min tokens reserved for model output (e.g. 25000)
-  maxPromptTokens: number;          // total - reservedForCompletion
-  allocations: SectionAllocation[];
-}
-
-export interface SectionAllocation {
-  section: SectionType;
-  maxTokens: number;                // Hard ceiling
-  priority: number;                 // Higher = protected from trimming
-  flexible: boolean;                // Can be trimmed if over budget
-}
+import type { SectionType } from "../core/common.js";
+import type { TokenBudget, SectionAllocation } from "../core/context.js";
 
 /** Allocates tokens to sections based on % allocations and priority. */
 export interface BudgetAllocator {

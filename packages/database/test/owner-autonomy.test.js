@@ -31,7 +31,7 @@ after(async()=>{
 });
 
 test("new branded project onboarding fails closed without route/budget/credential health",async()=>{
-  const x=await owner.onboarding(a);assert.equal(x.ready,false);assert.equal(x.checks.routingActive,false);assert.equal(x.checks.credentialBinding,true);assert.equal(x.checks.credentialHealth,false);assert.ok(x.failClosedReasons.includes("routingActive"));
+  const x=await owner.onboarding(a);assert.equal(x.ready,false);assert.equal(x.checks.routingActive,false);assert.equal(x.checks.credentialBinding,true);assert.equal(x.checks.credentialHealth,false);assert.ok(x.failClosedReasons.includes("ROUTING_UNAVAILABLE"));
 });
 
 test("bounded budget change is audited and never grants execution authority",async()=>{

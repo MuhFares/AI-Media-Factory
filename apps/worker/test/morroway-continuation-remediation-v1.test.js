@@ -46,18 +46,27 @@ const canonicalRouting = {
       qa: "openai/gpt-oss-20b",
     };
     if (!models[role]) throw new Error(`CANONICAL_ROUTE_REQUIRED:${role}`);
-    return { model: models[role], routingVersionId: ROUTING_VERSION, profile: "BALANCED", priceSnapshotId: `price-${role}` };
+    return {
+      model: models[role], requestedModel: models[role], resolvedModel: models[role],
+      provider: "openrouter", routingVersionId: ROUTING_VERSION, routingScope: "PROJECT",
+      projectId: input.projectId, role, slot: "primary", profile: "BALANCED",
+      priceSnapshotId: `price-${role}`, fallbackUsed: false, fallbackReason: null,
+    };
+  },
+  async preflight(role, input) {
+    const route = await this.resolve(role, input);
+    return {
+      ok: true, code: "READY", route, availabilityState: "AVAILABLE",
+      liveHealthState: "HEALTHY", configurationFingerprint: `fixture-${role}`,
+    };
   },
 };
 
 const ceoPayload = () => ({
-  status: "completed",
-  summary: "Provider-free CEO proof synthesis.",
-  recommendedTopic: "A verified factual candidate selected from governed evidence.",
+  decision: "ADVANCE",
   rationale: "Grounded only in supplied evidence; Owner authority remains required and no media action is granted.",
-  evidenceRefs: ["art-orchestrator", "art-research"],
-  risks: ["Evidence coverage is bounded in this fixture."],
-  authorityBoundary: "OWNER_REQUIRED",
+  eligibleCandidateIds: ["candidate-provider-free"],
+  warnings: ["Evidence coverage is bounded in this fixture."],
 });
 
 const sse = (model, payload) => {
@@ -68,6 +77,29 @@ const sse = (model, payload) => {
 
 test("CEO real path transports the exact canonical model despite legacy overrides", async () => {
   const store = new Store();
+  store.artifacts.set("art-research", {
+    artifactId: "art-research",
+    workflowId: "wf-ceo-proof",
+    kind: "research_report",
+    producerAgent: "research",
+    correlationId: "corr-ceo-proof",
+    status: "completed",
+    payload: {
+      summary: "Institutional evidence supports one bounded factual candidate.",
+      evidenceStatus: "USABLE",
+      candidateStories: [{
+        candidateId: "candidate-provider-free",
+        factualVerification: "STRONG",
+        recommendedForProduction: true,
+        supportingEvidenceIds: ["evidence-provider-free"],
+        evidenceLineageValidated: true,
+      }],
+      sources: [{ sourceId: "source-provider-free" }],
+    },
+    contentType: "application/json",
+    schemaVersion: "2",
+    createdAt: "2026-09-14T00:00:00.000Z",
+  });
   const reservations = [];
   const budget = {
     async reserve(input) { reservations.push(input); return { reservationId: "res-ceo-1", callKind: input.callKind }; },
@@ -103,7 +135,7 @@ test("CEO real path transports the exact canonical model despite legacy override
         },
       },
     });
-    assert.equal(outcome.status, "completed");
+    assert.equal(outcome.status, "completed", JSON.stringify(outcome));
     assert.equal(reservations.length, 1);
     assert.equal(reservations[0].exactModelId, CANONICAL_CEO);
     assert.equal(reservations[0].priceSnapshotId, "price-ceo");

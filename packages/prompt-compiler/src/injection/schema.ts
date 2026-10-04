@@ -6,7 +6,7 @@
  * knows the exact output format required.
  */
 
-import type { JsonSchema } from "../core/validation";
+import type { JsonSchema } from "../core/common.js";
 
 export interface OutputSchemaInjector {
   /** Inject the output schema into the prompt. */

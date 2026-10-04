@@ -72,6 +72,9 @@ test("E2E-P5-01/P5-06 complete onboarding uses product actions and reaches ready
   await pool.query(`INSERT INTO production_model_routing_entries(routing_version_id,role,primary_model_id,evidence) VALUES($1,'Writer','fixture-model','{"providerFree":true}')`,[route]);
   assert.equal((await post("/control/owner/routing/activate",{projectId:projectA,routingVersionId:route,reason:"Provider-free onboarding route"})).status,200);
   assert.equal((await post("/control/owner/budgets",{projectId:projectA,phase:"P5_ONBOARDING",callKind:"analytics",limit:1,maxRetries:0,reason:"Provider-free onboarding envelope"})).status,200);
+  for(const [callKind,limit] of [["research",4],["text_agent",10],["image_generation",1]]){
+    assert.equal((await post("/control/owner/budgets",{projectId:projectA,phase:"MORROWAY_PRODUCTION_CYCLE_01_PRE_MEDIA",callKind,limit,maxRetries:0,reason:"Provider-free Cycle-01 onboarding fixture"})).status,200);
+  }
   assert.equal((await post("/control/automation/policy",{projectId:projectA,enabled:false,level:"L0_MANUAL",allowedOps:[],humanGatedOps:[],providerPolicy:{mode:"DENY_ALL"},publicationPolicy:"OWNER_APPROVAL_REQUIRED",nextCyclePolicy:"OWNER_START_ONLY"})).status,200);
   const onboarding=await request(`/control/owner/onboarding?projectId=${projectA}`);assert.equal(onboarding.status,200);assert.equal(onboarding.body.ready,true);assert.ok(Object.values(onboarding.body.checks).every(Boolean));
   assert.equal((await post("/control/owner/budgets",{projectId:projectA,phase:"P5_ALERT",callKind:"video_generation",limit:0,maxRetries:0,reason:"Provider-free alert presentation fixture"})).status,200);

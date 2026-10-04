@@ -97,9 +97,9 @@ authorizes no cleanup. It groups the existing entries for safe future handoff:
 - COMPLETED: canonical stage/artifact contracts; DB routing authority;
   provider-free recovery/state/lineage framework; legacy media new-write
   guards; single Node mutation authority; AMF Control Owner paths; script-zero
-  and direct-DB-zero normal operation.
+  and direct-DB-zero normal operation; local operational backup/isolated restore.
 - DEFERRED: Google OAuth productionization; Wan deployment/receipt storage;
-  backup/restore; durable object storage and generated-output retention;
+  scheduled/off-host backup retention; durable object storage and generated-output retention;
   scaling; final voice/visual standards; public-publication lifecycle.
 - BREAK_GLASS_ONLY: guarded credential bootstrap/recovery tools, narrow
   production migration operators, and explicitly guarded engineering recovery
@@ -116,9 +116,97 @@ authorizes no cleanup. It groups the existing entries for safe future handoff:
   checks; Python read-model thinning; broader dead-code sweep; and lifecycle
   handling for generated outputs. No deletion is implied.
 
+### Wan deployment backlog disposition — 2026-10-01
+
+- CLASSIFICATION: `DEFERRED`; Owner explicitly deferred persistent RunPod
+  storage, handler deployment and live certification to avoid infrastructure
+  cost while no new Wan production generation is needed.
+- RETAIN: source checkpoint `0cfde0da42e196751e679950f20972f049af18e1`
+  and immutable image digest
+  `sha256:716e7b7fa7b0d80d7a1ca5dbc31c9e50301da921a6ac01b992d84462bc77a326`.
+- PENDING: compatible 50 GB minimum / 100 GB recommended volume, models and
+  receipts under `/runpod-volume`, endpoint digest parity, durable receipt
+  proof, deployed clientExecutionId/no-blind-retry proof, worker refresh and a
+  bounded live canary.
+- RESTRICTION: this backlog entry authorizes no provisioning, deployment,
+  generation or cleanup. `FUTURE_WAN_SUBMISSIONS_ALLOWED = NO`.
+
 ## Explicitly out of hygiene scope (never targets)
 
 Historical audits, proofs, incident files (e.g. `docs/platform/*-proof.md`,
 `*-audit*.md`, `docs/incidents/*`), benchmark price snapshots/catalog
 evidence, private validation publication record (`AfbPyQ-UFwM`), blind-review
 packets. Append-only forever.
+
+### Backup/restore operationalization disposition — 2026-10-01
+
+- COMPLETED: custom-format DB backup, secret-free manifest/checksum,
+  deterministic Program-4 critical-file allowlist, new-isolated-DB restore
+  verifier, lineage/governance checks, safety guards and temporary API read
+  validation.
+- EXTERNAL_OWNER_MANAGED: `.env`, DB password, OAuth files, RunPod key,
+  GitHub/GHCR credentials and all raw secrets; these require secure re-binding.
+- PRESERVE_FOR_EVIDENCE: backup
+  `amf-backup-2026-09-30T22-17-37-348Z` and restore DB
+  `ai_media_factory_restore_test_20261001_001737`; deletion is not authorized.
+- DEFERRED: scheduled retention, off-host replication, encryption/key custody,
+  durable object storage and broader generated-output lifecycle. Proposed
+  retention is 7 daily / 4 weekly / 12 monthly; it is not scheduled.
+
+### Durable output storage/retention design disposition — 2026-10-01
+
+- POLICY_DEFINED: `EPHEMERAL_WORK`, `REGENERABLE_CACHE`, `CANONICAL_DURABLE`,
+  `PUBLISHED_MEDIA` and `HISTORICAL_EVIDENCE` classes now have explicit
+  retention, restore and deletion rules.
+- PROVIDER_FREE_CERTIFIED: isolated local backend validates content addressing,
+  idempotent put, full hash reads, corruption detection and guarded exact-key
+  deletion. It is not a production provider.
+- NO_CLEANUP: existing `output/`, `artifacts/`, logs and historical proof media
+  were not deleted or migrated. Unknown files remain `UNKNOWN_DO_NOT_TOUCH`.
+- DEFERRED: provider selection, production storage schema migration, bounded
+  artifact promotion, scheduled integrity audits and actual lifecycle cleanup.
+
+### Temporary supervised Wan mode disposition — 2026-10-01
+
+- COMPLETED_PROVIDER_FREE: explicit ACK/generation timing policy, one-POST/no-
+  retry governance contract, Owner-supplied job-ID evidence classification,
+  audited-import zero-budget rule, UI warnings, and deterministic tests.
+- BREAK_GLASS_ONLY: `scripts/run-manual-external-wan-i2v-gate.mjs` remains an
+  engineering/historical operator, not an Owner normal-operation instruction;
+  its transport values are aligned to the hardened timeouts.
+- DEFERRED: durable per-scene Owner Generate mutation, persistent scene-level
+  execution ledger, worker refresh, hardened endpoint deployment, network
+  volume, persistent receipts and digest parity.
+- RESTRICTION: no provider call, RunPod mutation, video generation, batch
+  activation or cleanup is authorized by this entry. Runtime activation remains
+  fail-closed until every per-scene gate and build-parity check passes.
+
+### Single-scene supervised Wan path disposition — 2026-10-01
+
+- COMPLETED_PROVIDER_FREE: exact-one-scene request contract; Node Owner action;
+  durable execution/state ledger; DB advisory-lock and unique-index duplicate
+  protection; one POST intent; exactly-once video budget; Owner job-ID attach;
+  audited output-import handoff; Decision Center/UI actionability; supervised
+  batch fail-closed gate.
+- PENDING_NARROW_MIGRATION: apply only
+  `wan-supervised-single-scene-execution-v1`; it is deliberately excluded from
+  broad schema bootstrap and has not been applied to production.
+- PENDING_RUNTIME: refresh the production worker to source build
+  `585421a9b35f0ddd2486f9243f817c2cd9be0e238a727e251e2d7b12c982a3ed`,
+  then restore current Node API and AMF Control and recheck parity.
+- DO_NOT_TOUCH: do not enable autonomous/batch Wan, issue a provider POST, or
+  claim hardened endpoint/receipt/digest certification from this source-only
+  result.
+
+### Single-scene supervised Wan runtime activation — 2026-10-01
+
+- COMPLETED: narrow production migration, mode configuration, current-build
+  singleton worker, Node API, AMF Control, Owner auth/session/CSRF readiness,
+  read-only scene eligibility and zero-execution verification.
+- PRESERVED: the pre-migration certified backup and its manifest/checksum.
+- LOCAL_ONLY: `.env` contains the runtime mode selection and remains excluded
+  from Git; no credential value was copied into documentation or source.
+- STILL_DEFERRED: hardened endpoint/image parity, network volume, persistent
+  receipts and autonomous operation.
+- NEXT_OWNER_GATE: exactly one explicit scene action; this activation itself
+  grants no provider call and performed none.

@@ -1,0 +1,34 @@
+{
+  "phase": "VISUAL PRODUCTION ROUTING V1 — FINALIZED",
+  "status": "COMPLETE",
+  "routes": ["AUTOMATIC_LOW_COST", "PREMIUM_API", "MANUAL_EXTERNAL_GENERATION", "REAL_OR_LICENSED_MEDIA"],
+  "automaticProviders": ["runpod-zimage", "self-hosted-image"],
+  "benchmark": {
+    "id": "VISUAL_PROVIDER_ROUTING_BENCHMARK_V1",
+    "providers": ["runpod-zimage", "self-hosted-image"],
+    "cases": 6,
+    "maxCallsPerProvider": 6,
+    "actualCalls": 12,
+    "proposedFutureLiveCalls": 0,
+    "retries": 0,
+    "targetResolution": "1024x1024",
+    "promptPolicy": "same semantic prompt; no provider-specific optimization"
+  },
+  "providerInvocations": {"zImage": 0, "flux": 0, "qwenApi": 0, "gemini": 0, "gptImage": 0, "wan": 0, "voiceTuT": 0, "publishing": 0},
+  "evidencePolicy": {"unknown": "UNKNOWN_OR_UNBENCHMARKED", "automatedReviewUnavailable": "HUMAN_REVIEW_REQUIRED"},
+  "referenceAssetTransport": "BLOCKED_BY_MISSING_INFRASTRUCTURE",
+  "finalDecisions": {
+    "FLUX_24GB_PRO": "PRIMARY",
+    "STANDARD_24GB": "VALID_FALLBACK_AND_COST_OPTIMIZATION_CANDIDATE",
+    "Z_IMAGE_REALISTIC_PHOTOREALISTIC": "PREFERRED_CURRENT_SPECIALIZATION",
+    "FLUX_CARTOON_STYLIZED": "PREFERRED_CURRENT_SPECIALIZATION",
+    "QWEN_CHAT": "MANUAL_EXTERNAL_GENERATION"
+  },
+  "phaseClosure": {
+    "VISUAL_PROVIDER_ROUTING_BENCHMARK_V1": "COMPLETE",
+    "FLUX_GPU_RIGHT_SIZING_V1": "COMPLETE",
+    "nextMilestone": "MANUAL_EXTERNAL_GENERATION_V1_END_TO_END_INGESTION_GATE",
+    "round2Required": false
+  },
+  "openDecisions": ["provide approved object storage and scoped signed URL issuer for reference I2I"]
+}

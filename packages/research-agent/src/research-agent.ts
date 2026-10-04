@@ -117,6 +117,47 @@ function recoveryScopeSuffix(input: ResearchAgentInput): string {
   return typeof id === "string" && id.trim() !== "" ? `:recovery:${id.trim()}` : "";
 }
 
+export interface ResearchCapabilityInvocationIdentityInput {
+  readonly workflowId: string;
+  readonly executionScopeId?: string;
+  readonly taskId: string;
+  readonly capabilityId: string;
+  readonly role: "DISCOVERY" | "VERIFICATION";
+  readonly laneId: string;
+  readonly queryOrdinal: number;
+  readonly attemptOrdinal: number;
+}
+
+const identityPart = (value: string): string => encodeURIComponent(value.trim().toLowerCase());
+
+/**
+ * Deterministic durable identity for one logical Research capability call.
+ * Replaying the same logical invocation produces the same id; changing its
+ * workflow, execution, lane, query ordinal, attempt, role, or capability
+ * produces a different id. Provider response content is deliberately absent.
+ */
+export function researchCapabilityInvocationIdentity(input: ResearchCapabilityInvocationIdentityInput): string {
+  if (!input.workflowId.trim() || !input.taskId.trim() || !input.capabilityId.trim() || !input.laneId.trim()) {
+    throw new Error("RESEARCH_CAPABILITY_IDENTITY_COMPONENT_REQUIRED");
+  }
+  if (!Number.isSafeInteger(input.queryOrdinal) || input.queryOrdinal < 1
+    || !Number.isSafeInteger(input.attemptOrdinal) || input.attemptOrdinal < 1) {
+    throw new Error("RESEARCH_CAPABILITY_IDENTITY_ORDINAL_INVALID");
+  }
+  const execution = input.executionScopeId?.trim() || "initial";
+  return [
+    "research-capability-v2",
+    identityPart(input.workflowId),
+    identityPart(execution),
+    identityPart(input.taskId),
+    identityPart(input.capabilityId),
+    input.role.toLowerCase(),
+    identityPart(input.laneId),
+    `q${input.queryOrdinal}`,
+    `a${input.attemptOrdinal}`,
+  ].join(":");
+}
+
 /**
  * Deterministic lane-evidence zip: flatten successful retrieval results across
  * bounded discovery executions, preserving lane association. Empty/blocked/
@@ -271,6 +312,21 @@ export interface PackedWebSearchQuery {
 
 const containsAny = (value: string, patterns: readonly RegExp[]): boolean => patterns.some((pattern) => pattern.test(value));
 
+function normalizedSemanticWords(value: string): string[] {
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase("en-US")
+    .replace(/[^\p{L}\p{N}._-]+/gu, " ")
+    .split(/\s+/u)
+    .filter(Boolean);
+}
+
+function containsSemanticPhrase(value: string, phrase: string): boolean {
+  const haystack = new Set(normalizedSemanticWords(value));
+  const required = normalizedSemanticWords(phrase);
+  return required.length > 0 && required.every((word) => haystack.has(word));
+}
+
 /** Evaluate a discovery query against the structured mission and lane, not length alone. */
 export function evaluateDiscoveryQueryQuality(query: string, mission: ResearchMission, lane: Pick<ResearchMission["discoveryLanes"][number], "laneId" | "purpose">): DiscoveryQueryQuality {
   const value = query.toLowerCase();
@@ -278,7 +334,10 @@ export function evaluateDiscoveryQueryQuality(query: string, mission: ResearchMi
   const historical = mission.factualMode === "HISTORICAL_POV";
   const geographyRequired = geography !== null && geography.trim() !== "";
   const marketLanguageRequired = [mission.market, mission.language].some((item) => item !== null && item.trim() !== "");
-  const hasGeographyContext = !geographyRequired || value.includes(geography!.toLowerCase());
+  // Query packing intentionally removes search-box punctuation. Compare the
+  // normalized semantic words instead of requiring punctuation-identical text
+  // (for example, `Cairo, Egypt` must match the packed `Cairo Egypt`).
+  const hasGeographyContext = !geographyRequired || containsSemanticPhrase(query, geography!);
   const hasHistoricalIntent = !historical || containsAny(value, [/\bhistor(?:y|ic|ical)\b/, /\barchive\b/, /\bheritage\b/, /\banniversar(?:y|ies)\b/]);
   const hasConcreteCandidateIntent = historical
     ? containsAny(value, [/\bnamed\b/, /\bevents?\b/, /\bpeople\b/, /\bpersons?\b/, /\bobjects?\b/, /\bincidents?\b/, /\bfigures?\b/, /\bartifacts?\b/])
@@ -302,7 +361,7 @@ export function evaluateDiscoveryQueryQuality(query: string, mission: ResearchMi
         : historical ? hasHistoricalIntent && hasConcreteCandidateIntent : hasConcreteCandidateIntent;
   const hasMarketLanguageContext = !marketLanguageRequired || [mission.market, mission.language]
     .filter((item): item is string => item !== null && item.trim() !== "")
-    .every((item) => value.includes(item.toLowerCase()));
+    .every((item) => containsSemanticPhrase(query, item));
   const wordCount = value.split(/\s+/u).filter(Boolean).length;
   const providerSuitable = query.length <= WEB_SEARCH_MAX_QUERY_LENGTH && wordCount >= 4 && wordCount <= 30 && !/[\r\n]/u.test(query);
   const nonGeneric = historical
@@ -374,20 +433,34 @@ function compactLaneIntent(lane: Pick<ResearchMission["discoveryLanes"][number],
 
 function semanticRequirementsForWebSearch(
   mission: ResearchMission,
-  lane: Pick<ResearchMission["discoveryLanes"][number], "laneId" | "purpose">,
+  lane: Pick<ResearchMission["discoveryLanes"][number], "laneId" | "purpose" | "subjectTerms" | "locationTerms" | "periodTerms" | "factTargets" | "sourcePreferences">,
 ): { requirements: WebSearchSemanticRequirement[]; outside: RetainedQueryContext[] } {
   const historical = mission.factualMode === "HISTORICAL_POV";
   const geography = mission.geography ?? mission.market;
   const descriptor = `${lane.laneId} ${lane.purpose}`.toLowerCase();
   const currentLane = /current|relevance|signal|trend|season|calendar/u.test(descriptor);
+  // Structured retrieval intent (Direction-authored, never heuristically
+  // extracted): compact entity terms travel as first-class dimensions so
+  // query compaction cannot silently discard candidate specificity.
+  const termWords = (value: readonly string[] | undefined): string[] =>
+    Array.isArray(value) ? value.flatMap((term) => String(term).split(/\s+/u)).map((word) => word.trim()).filter(Boolean) : [];
+  const subjectWords = termWords(lane.subjectTerms).concat(termWords(lane.locationTerms));
+  const periodWords = termWords(lane.periodTerms);
+  const factWords = termWords(lane.factTargets);
+  const authorityWords = historical
+    ? [...new Set(["museum", "archive", "university", ...termWords(lane.sourcePreferences)])]
+    : [];
   const requirements: WebSearchSemanticRequirement[] = [
+    ...(subjectWords.length > 0 ? [{ dimension: "subject_entity", priority: "TIER_1_REQUIRED" as const, compactTerms: subjectWords, canonicalSource: "lane.subjectTerms + lane.locationTerms" }] : []),
     ...(geography ? [{ dimension: "geography", priority: "TIER_1_REQUIRED" as const, compactTerms: deduplicateQueryWords([geography]).split(/\s+/u), canonicalSource: "mission.geography|mission.market" }] : []),
     { dimension: "subject_domain", priority: "TIER_1_REQUIRED", compactTerms: historical ? ["history"] : ["fantasy"], canonicalSource: "mission.factualMode" },
     { dimension: "concrete_discovery_class", priority: "TIER_1_REQUIRED", compactTerms: historical ? ["events", "people", "artifacts", "places"] : ["concepts", "characters", "settings"], canonicalSource: "lane purpose + factual mode" },
     { dimension: "evidence_orientation", priority: "TIER_1_REQUIRED", compactTerms: historical ? ["sources", "evidence"] : ["references", "inspiration"], canonicalSource: "mission.verificationRequirements" },
-    ...(historical ? [{ dimension: "authority_preference", priority: "TIER_2_HIGH_VALUE" as const, compactTerms: ["museum", "archive", "university"], canonicalSource: "mission.verificationRequirements + lane.queryGuidance" }] : []),
+    ...(historical ? [{ dimension: "authority_preference", priority: "TIER_2_HIGH_VALUE" as const, compactTerms: authorityWords, canonicalSource: "mission.verificationRequirements + lane.queryGuidance + lane.sourcePreferences" }] : []),
     { dimension: "lane_purpose", priority: "TIER_2_HIGH_VALUE", compactTerms: compactLaneIntent(lane).split(/\s+/u), canonicalSource: "lane.laneId + lane.purpose" },
     ...(currentLane ? [{ dimension: "runtime_date", priority: "TIER_2_HIGH_VALUE" as const, compactTerms: [mission.currentDate], canonicalSource: "runtime currentDate" }] : []),
+    ...(periodWords.length > 0 ? [{ dimension: "historical_period", priority: "TIER_2_HIGH_VALUE" as const, compactTerms: periodWords, canonicalSource: "lane.periodTerms" }] : []),
+    ...(factWords.length > 0 ? [{ dimension: "fact_target", priority: "TIER_2_HIGH_VALUE" as const, compactTerms: factWords, canonicalSource: "lane.factTargets" }] : []),
   ];
   const outside: RetainedQueryContext[] = [
     ...(mission.language ? [{ dimension: "language", value: mission.language, reason: "Audience/language targeting remains in mission lineage; it is not essential lexical search-box semantics." }] : []),
@@ -402,7 +475,7 @@ function semanticRequirementsForWebSearch(
 export function packWebSearchQuery(
   compiledQuery: string,
   mission: ResearchMission,
-  lane: Pick<ResearchMission["discoveryLanes"][number], "laneId" | "purpose">,
+  lane: Pick<ResearchMission["discoveryLanes"][number], "laneId" | "purpose" | "subjectTerms" | "locationTerms" | "periodTerms" | "factTargets" | "sourcePreferences">,
   maxLength = WEB_SEARCH_MAX_QUERY_LENGTH,
 ): PackedWebSearchQuery {
   const normalized = compiledQuery.trim().replace(/\s+/gu, " ");
@@ -419,11 +492,24 @@ export function packWebSearchQuery(
   const highValue = requirements.filter((item) => item.priority === "TIER_2_HIGH_VALUE");
   const requiredQuery = deduplicateQueryWords(required.flatMap((item) => item.compactTerms));
   if (requiredQuery.length === 0 || requiredQuery.length > maxLength) {
-    throw new Error(`LOCAL_QUERY_COMPILATION_FAILED:${lane.laneId}:MANDATORY_SEMANTICS_DO_NOT_FIT`);
+    let packed = "";
+    let blockingDimension = required[0]?.dimension ?? "unknown";
+    for (const requirement of required) {
+      const candidate = deduplicateQueryWords([packed, ...requirement.compactTerms]);
+      if (candidate.length > maxLength) {
+        blockingDimension = requirement.dimension;
+        break;
+      }
+      packed = candidate;
+    }
+    throw new Error(`LOCAL_QUERY_COMPILATION_FAILED:${lane.laneId}:MANDATORY_SEMANTICS_DO_NOT_FIT:${blockingDimension}`);
   }
   let providerQuery = requiredQuery;
   const retained = required.map((item) => item.dimension);
   for (const requirement of highValue) {
+    // Empty term sets contribute nothing and are not recorded, so legacy
+    // missions without structured intent keep byte-identical traces.
+    if (requirement.compactTerms.length === 0) continue;
     const candidate = deduplicateQueryWords([providerQuery, ...requirement.compactTerms]);
     if (candidate.length <= maxLength) {
       providerQuery = candidate;
@@ -431,7 +517,8 @@ export function packWebSearchQuery(
     }
   }
   if (!evaluateDiscoveryQueryQuality(providerQuery, mission, lane).passes) {
-    throw new Error(`LOCAL_QUERY_COMPILATION_FAILED:${lane.laneId}:MANDATORY_SEMANTICS_DO_NOT_FIT`);
+    const missing = requirements.find((requirement) => !requirement.compactTerms.some((term) => containsSemanticPhrase(providerQuery, term)));
+    throw new Error(`LOCAL_QUERY_COMPILATION_FAILED:${lane.laneId}:MANDATORY_SEMANTICS_DO_NOT_FIT:${missing?.dimension ?? "quality_contract"}`);
   }
   return {
     providerQuery,
@@ -450,7 +537,7 @@ export function packWebSearchQuery(
 export function finalizeWebSearchQuery(
   compiledQuery: string,
   mission: ResearchMission,
-  lane: Pick<ResearchMission["discoveryLanes"][number], "laneId" | "purpose">,
+  lane: Pick<ResearchMission["discoveryLanes"][number], "laneId" | "purpose" | "subjectTerms" | "locationTerms" | "periodTerms" | "factTargets" | "sourcePreferences">,
   maxLength = WEB_SEARCH_MAX_QUERY_LENGTH,
 ): string {
   return packWebSearchQuery(compiledQuery, mission, lane, maxLength).providerQuery;
@@ -465,7 +552,7 @@ export function finalizeWebSearchQuery(
  */
 export function materializeDiscoveryRetrievalPlan(
   mission: ResearchMission,
-  scope: { workflowId: string; correlationId: string; taskId: string; recoverySuffix: string },
+  scope: { workflowId: string; correlationId: string; taskId: string; recoverySuffix?: string; executionScopeId?: string },
   maxTotal: number,
 ): ExecutableRetrievalPlanEntry[] {
   const cap = Math.max(0, Math.min(maxTotal, MAX_DISCOVERY_REQUESTS));
@@ -491,7 +578,19 @@ export function materializeDiscoveryRetrievalPlan(
     const finalizedQuery = packed.providerQuery;
     const accountingOrdinal = plan.length + 1;
     const retrievalId = `discovery-${lane.laneId}-${accountingOrdinal}`;
-    const requestId = `web-search-${scope.workflowId}:${scope.taskId}:lane-${lane.laneId}${scope.recoverySuffix}`;
+    const executionScopeId = scope.executionScopeId
+      ?? scope.recoverySuffix?.replace(/^:recovery:/u, "")
+      ?? "initial";
+    const requestId = researchCapabilityInvocationIdentity({
+      workflowId: scope.workflowId,
+      executionScopeId,
+      taskId: scope.taskId,
+      capabilityId: "web.search",
+      role: "DISCOVERY",
+      laneId: lane.laneId,
+      queryOrdinal: accountingOrdinal,
+      attemptOrdinal: 1,
+    });
     const request: MissionCapabilityRequest = {
       requestId,
       capabilityId: "web.search",
@@ -559,6 +658,102 @@ export interface RuntimeIdentityEcho {
   readonly field: string;
   readonly canonicalValue: unknown;
   readonly expected: string;
+}
+
+export const RESEARCH_DIRECTION_REQUIRED_FIELDS = [
+  "taskId", "stage", "missionId", "objective", "market", "geography", "language",
+  "platforms", "contentPillar", "factualMode", "audience", "trendMode", "timeHorizon",
+  "currentDate", "discoveryLanes", "desiredSourceTypes", "availableCapabilities",
+  "unavailableDesiredCapabilities", "searchPriorities", "verificationRequirements",
+  "stopConditions", "riskNotes",
+] as const;
+
+/** Provider-facing schema for amf-research-mission-v1. Direction is not a ResearchReport. */
+export function researchDirectionResponseSchema(): import("@ai-media-factory/runtime").JsonSchema {
+  const nullableString: Json = { type: ["string", "null"] };
+  const stringArray: Json = { type: "array", items: { type: "string" } };
+  const capability: Json = {
+    type: "object", additionalProperties: false,
+    properties: {
+      sourceType: { type: "string" },
+      status: { type: "string", enum: ["SUPPORTED", "PARTIALLY_SUPPORTED", "UNSUPPORTED"] },
+      via: stringArray,
+      limitations: stringArray,
+    },
+    required: ["sourceType", "status", "via", "limitations"],
+  };
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      taskId: { type: "string" },
+      stage: { type: "string", enum: ["research"] },
+      missionId: { type: "string" },
+      objective: { type: "string" },
+      market: nullableString,
+      geography: nullableString,
+      language: nullableString,
+      platforms: stringArray,
+      contentPillar: { type: "string" },
+      factualMode: { type: "string", enum: ["HISTORICAL_POV", "ORIGINAL_FANTASY"] },
+      audience: nullableString,
+      trendMode: { type: "string", enum: ["TREND_LED", "EVERGREEN", "HYBRID"] },
+      timeHorizon: {
+        type: "object", additionalProperties: false,
+        properties: { from: nullableString, to: nullableString },
+        required: ["from", "to"],
+      },
+      currentDate: { type: "string" },
+      discoveryLanes: {
+        type: "array", minItems: 1, maxItems: 5,
+        items: {
+          type: "object", additionalProperties: false,
+          properties: {
+            laneId: { type: "string" }, purpose: { type: "string" }, queryGuidance: { type: "string" },
+            desiredCapability: { type: "string" }, actualCapability: { type: "string" },
+            maxCalls: { type: "number", minimum: 1, maximum: 3 }, expectedOutput: { type: "string" },
+            subjectTerms: { type: "array", description: "Compact named entities / subject phrases for retrieval specificity; [] when exploratory.", items: { type: "string" } },
+            locationTerms: { type: "array", description: "Site-level geographical specificity beyond mission geography; [] when none.", items: { type: "string" } },
+            periodTerms: { type: "array", description: "Dynasty / century / date range / historical period phrases; [] when none.", items: { type: "string" } },
+            factTargets: { type: "array", description: "Claim-shaped phrases stating what needs corroboration; [] when none.", items: { type: "string" } },
+            sourcePreferences: { type: "array", description: "Archive / museum / university / government / academic preferences; [] defaults to canonical authority intent.", items: { type: "string" } },
+          },
+          required: ["laneId", "purpose", "queryGuidance", "desiredCapability", "actualCapability", "maxCalls", "expectedOutput", "subjectTerms", "locationTerms", "periodTerms", "factTargets", "sourcePreferences"],
+        },
+      },
+      desiredSourceTypes: stringArray,
+      availableCapabilities: { type: "array", items: capability },
+      unavailableDesiredCapabilities: {
+        type: "array",
+        items: {
+          type: "object", additionalProperties: false,
+          properties: { sourceType: { type: "string" }, reason: { type: "string" } },
+          required: ["sourceType", "reason"],
+        },
+      },
+      searchPriorities: stringArray,
+      verificationRequirements: stringArray,
+      stopConditions: stringArray,
+      riskNotes: stringArray,
+    },
+    required: [...RESEARCH_DIRECTION_REQUIRED_FIELDS],
+  };
+}
+
+/**
+ * Narrow provider-free repair primitive. It can only correct the known
+ * orchestration label when every mission field is already present at the
+ * canonical top level. The caller retains and fingerprints the raw response.
+ */
+export function normalizeResearchDirectionStageForRecovery(value: Json): JsonRecord {
+  if (!isJsonRecord(value)) throw new Error("RESEARCH_DIRECTION_RECOVERY_OBJECT_REQUIRED");
+  const missing = RESEARCH_DIRECTION_REQUIRED_FIELDS
+    .filter((field) => field !== "stage" && value[field] === undefined);
+  if (missing.length > 0) throw new Error(`RESEARCH_DIRECTION_RECOVERY_FIELDS_MISSING:${missing.join(",")}`);
+  if (value.stage !== "mission" && value.stage !== "research") {
+    throw new Error("RESEARCH_DIRECTION_RECOVERY_STAGE_NOT_NORMALIZABLE");
+  }
+  return { ...value, stage: "research" };
 }
 
 /**
@@ -976,13 +1171,34 @@ export class ResearchAgent extends BaseAgent {
       ? Math.min(researchInput.maxRetrievalCallsAvailable, architecturalMax)
       : architecturalMax;
     // PHASE 0 — direction LLM produces the validated research mission.
-    const direction = await this.createDirectionReport(researchInput, context, signal);
+    const reuse = researchInput.reusedDirection;
+    const productionContext = context as unknown as { workflowId?: string; correlationId?: string };
+    const runtimeWorkflowId = String(productionContext.workflowId ?? context.inputEvent?.workflow_id ?? `wf-${researchInput.task.id}`);
+    const runtimeCorrelationId = String(productionContext.correlationId ?? context.inputEvent?.correlation_id ?? context.inputEvent?.event_id ?? researchInput.task.id);
+    if (reuse !== undefined && (reuse.workflowId !== runtimeWorkflowId || reuse.correlationId !== runtimeCorrelationId
+      || !reuse.sourceExecutionId.trim() || !reuse.providerRequestId.trim() || !/^[0-9a-f]{64}$/u.test(reuse.parsedPayloadFingerprint))) {
+      throw new Error("RESEARCH_DIRECTION_REUSE_LINEAGE_INVALID");
+    }
+    const direction = reuse === undefined
+      ? await this.createDirectionReport(researchInput, context, signal)
+      : {
+          mission: this.parseDirectionResponse(reuse.mission as unknown as Json, researchInput, reuse.mission.currentDate),
+          response: {
+            output: reuse.mission as unknown as Json,
+            raw: JSON.stringify(reuse.mission),
+            usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+            model: "reused-direction",
+            provider: "durable-recovery",
+            latencyMs: 0,
+          },
+        };
     const planningUsage = toCallUsage(direction.response.usage);
     const scope = {
-      workflowId: String(context.inputEvent?.workflow_id ?? `wf-${researchInput.task.id}`),
-      correlationId: String(context.inputEvent?.correlation_id ?? context.inputEvent?.event_id ?? researchInput.task.id),
+      workflowId: runtimeWorkflowId,
+      correlationId: runtimeCorrelationId,
       taskId: researchInput.task.id,
       recoverySuffix: recoveryScopeSuffix(researchInput),
+      executionScopeId: researchInput.recoveryScopeId?.trim() || "initial",
     };
     // PHASE 1 — discovery execution across mission lanes (bounded to envelope).
     const discoveryBudget = Math.min(MAX_DISCOVERY_REQUESTS, effectiveEnvelope);
@@ -1057,7 +1273,7 @@ export class ResearchAgent extends BaseAgent {
     signal?.throwIfCancelled();
     const canonicalCurrentDate = this.now().toISOString().slice(0, 10);
     const prompt = this.buildDirectionPrompt(input, canonicalCurrentDate);
-    const request = this.buildExecutionRequest(prompt, "DIRECTION");
+    const request = this.buildExecutionRequest(prompt, "DIRECTION", "DIRECTION");
     const response = await this.runExecution(context, request, signal);
     return { mission: this.parseDirectionResponse(response.output, input, canonicalCurrentDate), response };
   }
@@ -1116,6 +1332,15 @@ export class ResearchAgent extends BaseAgent {
       if (!Number.isSafeInteger(entry.maxCalls) || (entry.maxCalls as number) < 1 || (entry.maxCalls as number) > 3) {
         fail(`discoveryLanes[${index}].maxCalls`, "invalid_enum", "integer 1..3");
       }
+      // Structured retrieval intent is optional per lane (absent = broad
+      // discovery) but must be string arrays when present. Terms are carried
+      // verbatim — never expanded, never filtered here.
+      for (const field of ["subjectTerms", "locationTerms", "periodTerms", "factTargets", "sourcePreferences"] as const) {
+        const terms = (entry as Record<string, unknown>)[field];
+        if (terms !== undefined && (!Array.isArray(terms) || terms.some((term) => typeof term !== "string"))) {
+          fail(`discoveryLanes[${index}].${field}`, "wrong_type", "array of strings");
+        }
+      }
     }
     const asStringArray = (value: unknown, path: string): string[] => {
       if (!Array.isArray(value)) fail(path, "wrong_type", "array");
@@ -1164,10 +1389,18 @@ export class ResearchAgent extends BaseAgent {
       currentDate: canonicalCurrentDate,
       discoveryLanes: (record.discoveryLanes as unknown[]).map((lane) => {
         const entry = lane as Record<string, unknown>;
+        const termList = (field: string): string[] => {
+          const value = entry[field];
+          if (value === undefined) return [];
+          return (value as unknown[]).filter((term): term is string => typeof term === "string" && term.trim().length > 0);
+        };
         return {
           laneId: String(entry.laneId), purpose: String(entry.purpose), queryGuidance: String(entry.queryGuidance),
           desiredCapability: String(entry.desiredCapability), actualCapability: typeof entry.actualCapability === "string" ? entry.actualCapability as string : String(entry.desiredCapability),
           maxCalls: Number(entry.maxCalls), expectedOutput: String(entry.expectedOutput),
+          subjectTerms: termList("subjectTerms"), locationTerms: termList("locationTerms"),
+          periodTerms: termList("periodTerms"), factTargets: termList("factTargets"),
+          sourcePreferences: termList("sourcePreferences"),
         };
       }),
       desiredSourceTypes,
@@ -1196,6 +1429,8 @@ export class ResearchAgent extends BaseAgent {
 
 Research Direction (contract amf-research-mission-v1) for research task ${task.id}.
 Echo TASK_ID exactly into taskId (byte-for-byte, never paraphrased): ${JSON.stringify(task.id)}
+Echo STAGE exactly into the top-level stage field (byte-for-byte): "research"
+The top-level stage is orchestration identity, not the research mission label. Mission content belongs in the top-level mission fields listed below. Do not use "mission" as the stage and do not wrap the mission under metadata.mission.
 Describe the requested objective in your own words into objective (do NOT copy verbatim; keep it clearly about the requested task): ${JSON.stringify(task.description)}
 RESEARCH OBJECTIVE (structured; market/geography null means unspecified — choose explicitly with rationale, never infer permanence):
 ${JSON.stringify(objective).slice(0, 2000)}
@@ -1204,7 +1439,8 @@ ${projectContext !== null ? JSON.stringify(projectContext).slice(0, 2000) : "non
 CAPABILITY INVENTORY (actual current capabilities — desired sources WITHOUT a SUPPORTED entry must be recorded under unavailableDesiredCapabilities with reasons; never claim INSTAGRAM_ANALYZED, viral, trending or popular without governed capability evidence):
 ${JSON.stringify(inventory).slice(0, 2000)}
 CANONICAL CURRENT DATE (runtime-owned; use this value for recency, seasonal and verification reasoning): ${JSON.stringify(canonicalCurrentDate)}
-Return one JSON mission with: missionId (string); objective (string); market (string|null); geography (string|null — null unless the objective specifies one); language (string|null); platforms (string[]); contentPillar (string); factualMode ("HISTORICAL_POV"|"ORIGINAL_FANTASY" — ORIGINAL_FANTASY only for explicitly fictional storytelling; fictional inspiration must never be framed as factual history); audience (string|null); trendMode ("TREND_LED"|"EVERGREEN"|"HYBRID" — TREND_LED only with a plan for temporal evidence); timeHorizon {from:string|null,to:string|null}; currentDate (string YYYY-MM-DD, use execution context date); discoveryLanes (1..5 entries {laneId, purpose, queryGuidance, desiredCapability, actualCapability, maxCalls 1..3, expectedOutput} — choose only relevant lanes); desiredSourceTypes (string[]); availableCapabilities (array echoing usable inventory entries); unavailableDesiredCapabilities (array {sourceType, reason}); searchPriorities (string[]); verificationRequirements (string[] — HISTORICAL_POV requires museum/archive/university/reputable-reference corroboration); stopConditions (string[]); riskNotes (string[]).
+  Return one JSON mission with: missionId (string); objective (string); market (string|null); geography (string|null — null unless the objective specifies one); language (string|null); platforms (string[]); contentPillar (string); factualMode ("HISTORICAL_POV"|"ORIGINAL_FANTASY" — ORIGINAL_FANTASY only for explicitly fictional storytelling; fictional inspiration must never be framed as factual history); audience (string|null); trendMode ("TREND_LED"|"EVERGREEN"|"HYBRID" — TREND_LED only with a plan for temporal evidence); timeHorizon {from:string|null,to:string|null}; currentDate (string YYYY-MM-DD, use execution context date); discoveryLanes (1..5 entries {laneId, purpose, queryGuidance, desiredCapability, actualCapability, maxCalls 1..3, expectedOutput, subjectTerms, locationTerms, periodTerms, factTargets, sourcePreferences} — choose only relevant lanes); desiredSourceTypes (string[]); availableCapabilities (array echoing usable inventory entries); unavailableDesiredCapabilities (array {sourceType, reason}); searchPriorities (string[]); verificationRequirements (string[] — HISTORICAL_POV requires museum/archive/university/reputable-reference corroboration); stopConditions (string[]); riskNotes (string[]).
+  For each discovery lane also emit compact structured retrieval intent: subjectTerms (named entities / subject phrases for this lane, e.g. a monument or person name), locationTerms (site-level geography beyond mission geography), periodTerms (dynasty / century / date range), factTargets (short phrases stating what needs corroboration), sourcePreferences (archive / museum / university / government / academic preferences where the lane requests them). Use [] for any collection with nothing specific — never invent entities, never pad with generic words, never restate exclusions as terms.
 Never claim media generation, publication, upload, or any production authority. Do not include explanatory text outside the JSON.`;
   }
 
@@ -1218,7 +1454,7 @@ Never claim media generation, publication, upload, or any production authority. 
    * Bounded (MAX_VERIFICATION_REQUESTS); per-candidate association travels in
    * the requestId so evidence never mixes across candidates accidentally.
    */
-  private verificationRequestsFor(plans: CandidateVerificationPlan[], scope: { workflowId: string; correlationId: string; taskId: string; recoverySuffix: string }, maxTotal?: number): MissionCapabilityRequest[] {
+  private verificationRequestsFor(plans: CandidateVerificationPlan[], scope: { workflowId: string; correlationId: string; taskId: string; recoverySuffix?: string; executionScopeId?: string }, maxTotal?: number): MissionCapabilityRequest[] {
     const cap = typeof maxTotal === "number" ? Math.min(maxTotal, MAX_VERIFICATION_REQUESTS) : MAX_VERIFICATION_REQUESTS;
     if (cap <= 0) return [];
     const requests: MissionCapabilityRequest[] = [];
@@ -1226,7 +1462,16 @@ Never claim media generation, publication, upload, or any production authority. 
       for (const [queryIndex, query] of plan.verificationQueries.entries()) {
         if (requests.length >= cap) break;
         requests.push({
-          requestId: `web-search-${scope.workflowId}:${scope.taskId}:verify-${plan.candidateId}-q${queryIndex + 1}${scope.recoverySuffix}`,
+          requestId: researchCapabilityInvocationIdentity({
+            workflowId: scope.workflowId,
+            executionScopeId: scope.executionScopeId ?? scope.recoverySuffix?.replace(/^:recovery:/u, "") ?? "initial",
+            taskId: scope.taskId,
+            capabilityId: "web.search",
+            role: "VERIFICATION",
+            laneId: `verification-${plan.candidateId}`,
+            queryOrdinal: queryIndex + 1,
+            attemptOrdinal: 1,
+          }),
           capabilityId: "web.search",
           agentId: "research",
           workflowId: scope.workflowId,
@@ -1511,7 +1756,11 @@ When visual grounding is needed, also include optional visual data with topic, v
 Every citation sourceId must refer to an item in sources. Do not invent sources, URLs, or citations.`;
   }
 
-  private buildExecutionRequest(prompt: string, callLeg: "DIRECTION" | "FINAL_SYNTHESIS" = "DIRECTION"): ExecutionRequest {
+  private buildExecutionRequest(
+    prompt: string,
+    callLeg: "DIRECTION" | "FINAL_SYNTHESIS" = "DIRECTION",
+    responseContract: "REPORT" | "DIRECTION" = "REPORT",
+  ): ExecutionRequest {
     const strategyMode = prompt.startsWith("PRE_PUBLICATION_STRATEGY.");
     return {
       model: this.researchConfig.model,
@@ -1522,31 +1771,111 @@ Every citation sourceId must refer to an item in sources. Do not invent sources,
       ],
       temperature: this.researchConfig.temperature,
       maxOutputTokens: this.researchConfig.maxOutputTokens,
-      responseSchema: this.getResearchResponseSchema(),
+      responseSchema: responseContract === "DIRECTION"
+        ? researchDirectionResponseSchema()
+        : this.getResearchResponseSchema(callLeg === "FINAL_SYNTHESIS"),
       callIdentity: { callLeg },
     };
   }
 
-  private getResearchResponseSchema(): import("@ai-media-factory/runtime").JsonSchema {
+  private getResearchResponseSchema(synthesis = false): import("@ai-media-factory/runtime").JsonSchema {
+    // Strict provider-facing shape (synthesis-400 remediation). The provider
+    // envelope is always sent with strict semantics (see the successful
+    // Direction contract), so the synthesis schema mirrors that profile:
+    // explicit objects with additionalProperties:false, enum instead of
+    // const/oneOf, no format annotations (UUID/URI syntax is enforced by the
+    // runtime synthesis validator instead). Status coupling that oneOf used
+    // to express (empty candidates iff insufficient_evidence) is enforced
+    // by parseSynthesisResponse, which remains the fail-closed authority and
+    // is intentionally untouched by provider-schema simplification.
+    const candidateItem = {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        candidateId: { type: "string" },
+        topic: { type: "string" },
+        factualAngle: { type: "string" },
+        keyClaims: { type: "array", items: { type: "string" } },
+        sourceIds: { type: "array", items: { type: "number" } },
+        supportingEvidenceIds: { type: "array", items: { type: "string" } },
+        sourceQualitySummary: { type: "string" },
+        visualPotential: { type: "string" },
+        shortFormPotential: { type: "string" },
+        fitNote: { type: "string" },
+        evidenceRisks: { type: "array", items: { type: "string" } },
+        verificationStatus: { type: "string" },
+        contentOpportunityAssessment: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            level: { type: "string", enum: ["HIGH", "MEDIUM", "LOW"] },
+            basis: { type: "string" },
+          },
+          required: ["level", "basis"],
+        },
+        factualVerification: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            status: { type: "string", enum: ["STRONG", "PARTIAL", "INCOMPLETE"] },
+            basis: { type: "string" },
+          },
+          required: ["status", "basis"],
+        },
+        trendEvidence: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              signal: { type: "string" },
+              observedAt: { type: ["string", "null"] },
+              source: { type: "string" },
+            },
+            required: ["signal", "source"],
+          },
+        },
+        evergreenEvidence: { type: "array", items: { type: "string" } },
+        marketRelevance: { type: ["string", "null"] },
+        recommendedForProduction: { type: "boolean" },
+      },
+      required: ["candidateId", "topic"],
+    };
+    const visualContract = {
+      type: ["object", "null"],
+      additionalProperties: false,
+      properties: {
+        topic: { type: "string" },
+        visualMode: { type: "string" },
+        referenceStrategy: { type: "string" },
+        imageRefs: { type: "array", items: { type: "object", additionalProperties: false, properties: { id: { type: "string" }, kind: { type: "string" }, uri: { type: "string" }, sourceUrl: { type: ["string", "null"] }, provenance: { type: "string" }, sha256: { type: ["string", "null"] }, observations: { type: "array", items: { type: "string" } }, relevance: { type: "string" } } } },
+        sourceRefs: { type: "array", items: { type: "object", additionalProperties: false, properties: { id: { type: "string" }, kind: { type: "string" }, uri: { type: "string" }, sourceUrl: { type: ["string", "null"] }, provenance: { type: "string" }, sha256: { type: ["string", "null"] }, observations: { type: "array", items: { type: "string" } }, relevance: { type: "string" } } } },
+        observations: { type: "array", items: { type: "string" } },
+        provenance: { type: "string", enum: ["none", "local", "web", "mixed"] },
+      },
+      required: ["topic", "visualMode", "referenceStrategy", "imageRefs", "sourceRefs", "observations", "provenance"],
+    };
     return {
       type: "object",
+      additionalProperties: false,
       properties: {
-        reportId: { type: "string", format: "uuid" },
+        reportId: { type: "string" },
         taskId: { type: "string" },
         stage: { type: "string" },
         taskDescription: { type: "string" },
         summary: { type: "string" },
         sources: {
           type: "array",
-          minItems: 1,
+          ...(synthesis ? {} : { minItems: 1 }),
           items: {
             type: "object",
+            additionalProperties: false,
             properties: {
               id: { type: "number" },
               title: { type: "string" },
-              url: { type: "string", format: "uri" },
+              url: { type: "string" },
               snippet: { type: "string" },
-              dateAccessed: { type: "string" },
+              dateAccessed: { type: ["string", "null"] },
             },
             required: ["id", "title", "url", "snippet"],
           },
@@ -1556,11 +1885,13 @@ Every citation sourceId must refer to an item in sources. Do not invent sources,
           type: "array",
           items: {
             type: "object",
+            additionalProperties: false,
             properties: {
               sourceId: { type: "number" },
               text: { type: "string" },
               location: {
-                type: "object",
+                type: ["object", "null"],
+                additionalProperties: false,
                 properties: {
                   start: { type: "number" },
                   end: { type: "number" },
@@ -1571,12 +1902,13 @@ Every citation sourceId must refer to an item in sources. Do not invent sources,
             required: ["sourceId", "text"],
           },
         },
-        visual: {
-          type: "object",
-          description: "Optional provider-agnostic visual research contract; validate in the agent parser.",
-        },
+        visual: visualContract,
+        candidateStories: { type: "array", items: candidateItem },
+        evidenceRisks: { type: "array", items: { type: "string" } },
+        status: { type: "string", enum: ["grounded", "insufficient_evidence"] },
         metadata: {
           type: "object",
+          additionalProperties: false,
           properties: {
             createdAt: { type: "string" },
             agentVersion: { type: "string" },
@@ -1585,20 +1917,23 @@ Every citation sourceId must refer to an item in sources. Do not invent sources,
         },
         strategyFindings: {
           type: "object",
+          additionalProperties: false,
           properties: {
-            referencePatterns: { type: "array", minItems: 1, maxItems: 5, items: { type: "object" } },
-            audienceOpportunities: { type: "array", minItems: 1, maxItems: 4, items: { type: "object" } },
-            contentTerritories: { type: "array", minItems: 1, maxItems: 5, items: { type: "object" } },
-            platformFindings: { type: "array", minItems: 3, maxItems: 3, items: { type: "object" } },
-            differentiationOpportunities: { type: "array", minItems: 1, maxItems: 4, items: { type: "object" } },
-            productionImplications: { type: "array", minItems: 1, maxItems: 4, items: { type: "object" } },
-            risks: { type: "array", minItems: 1, maxItems: 5, items: { type: "object" } },
-            assumptions: { type: "array", minItems: 1, maxItems: 5, items: { type: "object" } },
-            unknowns: { type: "array", minItems: 1, maxItems: 5, items: { type: "object" } },
+            referencePatterns: { type: "array", minItems: 1, maxItems: 5, items: { type: "object", additionalProperties: false } },
+            audienceOpportunities: { type: "array", minItems: 1, maxItems: 4, items: { type: "object", additionalProperties: false } },
+            contentTerritories: { type: "array", minItems: 1, maxItems: 5, items: { type: "object", additionalProperties: false } },
+            platformFindings: { type: "array", minItems: 3, maxItems: 3, items: { type: "object", additionalProperties: false } },
+            differentiationOpportunities: { type: "array", minItems: 1, maxItems: 4, items: { type: "object", additionalProperties: false } },
+            productionImplications: { type: "array", minItems: 1, maxItems: 4, items: { type: "object", additionalProperties: false } },
+            risks: { type: "array", minItems: 1, maxItems: 5, items: { type: "object", additionalProperties: false } },
+            assumptions: { type: "array", minItems: 1, maxItems: 5, items: { type: "object", additionalProperties: false } },
+            unknowns: { type: "array", minItems: 1, maxItems: 5, items: { type: "object", additionalProperties: false } },
           },
         },
       },
-      required: ["reportId", "taskDescription", "summary", "sources", "confidence", "citations", "metadata"],
+      required: synthesis
+        ? ["reportId", "taskDescription", "summary", "sources", "confidence", "citations", "candidateStories", "evidenceRisks", "status", "metadata"]
+        : ["reportId", "taskDescription", "summary", "sources", "confidence", "citations", "metadata"],
     };
   }
 
@@ -1617,7 +1952,10 @@ Every citation sourceId must refer to an item in sources. Do not invent sources,
 
     const sources = output.sources.map((source) => this.parseSource(source));
     const citations = output.citations.map((citation) => this.parseCitation(citation));
-    if (output.visual !== undefined && !isVisualResearchResult(output.visual)) {
+    // Canonical neutral visual for a negative outcome is absent or null. An
+    // empty-object placeholder is rejected for every outcome: it is neither a
+    // complete visual contract nor a legitimate neutral form.
+    if (output.visual !== undefined && output.visual !== null && !isVisualResearchResult(output.visual)) {
       throw new Error("Invalid research response: malformed visual research contract");
     }
     const sourceIds = new Set(sources.map((source) => source.id));
@@ -1644,7 +1982,9 @@ Every citation sourceId must refer to an item in sources. Do not invent sources,
       citations,
       ...(output.strategyFindings === undefined ? {} : { strategyFindings: output.strategyFindings as unknown as ResearchReport["strategyFindings"] }),
       ...(output.intelligence === undefined ? {} : { intelligence: output.intelligence as unknown as ResearchReport["intelligence"] }),
-      ...(output.visual === undefined ? {} : { visual: output.visual }),
+      ...(output.visual === undefined || output.visual === null
+        ? {}
+        : { visual: output.visual as unknown as ResearchReport["visual"] }),
       metadata: {
         createdAt: metadata.createdAt as string,
         agentVersion: metadata.agentVersion as string,
@@ -1657,7 +1997,7 @@ Every citation sourceId must refer to an item in sources. Do not invent sources,
       throw new Error("Invalid research response: invalid source");
     }
 
-    if (value.dateAccessed !== undefined && typeof value.dateAccessed !== "string") {
+    if (value.dateAccessed !== undefined && value.dateAccessed !== null && typeof value.dateAccessed !== "string") {
       throw new Error("Invalid research response: invalid source access date");
     }
 
@@ -1666,7 +2006,7 @@ Every citation sourceId must refer to an item in sources. Do not invent sources,
       title: value.title,
       url: value.url,
       snippet: value.snippet,
-      ...(value.dateAccessed === undefined ? {} : { dateAccessed: value.dateAccessed }),
+      ...(value.dateAccessed === undefined || value.dateAccessed === null ? {} : { dateAccessed: value.dateAccessed }),
     };
   }
 
@@ -1675,7 +2015,7 @@ Every citation sourceId must refer to an item in sources. Do not invent sources,
       throw new Error("Invalid research response: invalid citation");
     }
 
-    if (value.location === undefined) {
+    if (value.location === undefined || value.location === null) {
       return { sourceId: value.sourceId, text: value.text };
     }
 
@@ -1826,6 +2166,22 @@ Return one valid ResearchReport JSON with candidateStories, sources, citations, 
         diagnosticsTruncated: false,
       });
     }
+    if (record.status === "insufficient_evidence" && record.candidateStories.length !== 0) {
+      throw new ResearchStructuralValidationError({
+        validationKind: "STRUCTURAL",
+        issues: [{ path: "candidateStories", code: "value_mismatch", expected: "empty array for insufficient_evidence" }],
+        shape: { topLevelKeys: Object.keys(record), strategyFindingKeys: [], truncated: false },
+        diagnosticsTruncated: false,
+      });
+    }
+    if (record.status === "grounded" && record.candidateStories.length === 0) {
+      throw new ResearchStructuralValidationError({
+        validationKind: "STRUCTURAL",
+        issues: [{ path: "candidateStories", code: "value_mismatch", expected: "at least one candidate for grounded" }],
+        shape: { topLevelKeys: Object.keys(record), strategyFindingKeys: [], truncated: false },
+        diagnosticsTruncated: false,
+      });
+    }
     for (const [index, item] of (record.candidateStories as unknown[]).entries()) {
       if (item === null || typeof item !== "object" || Array.isArray(item)) {
         throw new ResearchStructuralValidationError({
@@ -1872,13 +2228,57 @@ Return one valid ResearchReport JSON with candidateStories, sources, citations, 
         diagnosticsTruncated: false,
       });
     }
-    if (typeof record.status !== "string" || record.status.trim().length === 0) {
+    if (record.status !== "grounded" && record.status !== "insufficient_evidence") {
       throw new ResearchStructuralValidationError({
         validationKind: "STRUCTURAL",
-        issues: [{ path: "status", code: "missing_required", expected: "string" }],
+        issues: [{ path: "status", code: "invalid_enum", expected: "grounded|insufficient_evidence" }],
         shape: { topLevelKeys: [], strategyFindingKeys: [], truncated: false },
         diagnosticsTruncated: false,
       });
+    }
+    // Synthesis-only semantic-syntax checks (provider `format` was removed
+    // from the wire schema, so the runtime carries UUID/URI enforcement).
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(report.reportId))) {
+      throw new ResearchStructuralValidationError({
+        validationKind: "STRUCTURAL",
+        issues: [{ path: "reportId", code: "value_mismatch", expected: "UUID string" }],
+        shape: { topLevelKeys: [], strategyFindingKeys: [], truncated: false },
+        diagnosticsTruncated: false,
+      });
+    }
+    for (const [index, source] of report.sources.entries()) {
+      let protocol = "";
+      try { protocol = new URL(source.url).protocol; } catch { protocol = ""; }
+      if (protocol !== "http:" && protocol !== "https:") {
+        throw new ResearchStructuralValidationError({
+          validationKind: "STRUCTURAL",
+          issues: [{ path: `sources[${index}].url`, code: "value_mismatch", expected: "http(s) URL" }],
+          shape: { topLevelKeys: [], strategyFindingKeys: [], truncated: false },
+          diagnosticsTruncated: false,
+        });
+      }
+    }
+    if (record.status === "grounded") {
+      // A production candidate must carry evidence-linked sources: unknown
+      // ids already fail above, and an empty link set carries no evidence.
+      const linkedSourceIds = new Set(report.sources.map((source) => source.id));
+      for (const [index, item] of (record.candidateStories as unknown[]).entries()) {
+        const candidate = item as Record<string, unknown>;
+        const linked = Array.isArray(candidate.sourceIds) ? candidate.sourceIds.filter((id): id is number => typeof id === "number" && linkedSourceIds.has(id)) : [];
+        if (linked.length === 0) {
+          throw new ResearchStructuralValidationError({
+            validationKind: "STRUCTURAL",
+            issues: [{ path: `candidateStories[${index}].sourceIds`, code: "value_mismatch", expected: "evidence-linked sourceIds for grounded" }],
+            shape: { topLevelKeys: [], strategyFindingKeys: [], truncated: false },
+            diagnosticsTruncated: false,
+          });
+        }
+      }
+      // Grounding answers whether the candidate is sufficiently supported by
+      // evidence; visual direction is constructed downstream (Visual Direction
+      // builds from the scene plan, never from research.visual). An explicit
+      // null visual is therefore the same canonical neutral as an absent key
+      // and is normalized away by parseResearchResponse above.
     }
     return {
       ...report,

@@ -24,6 +24,8 @@ export interface RecoveryDispatchInput {
    * of advancing. Generic mechanism; the engine reads it from context data.
    */
   readonly stopAfterStepId?: string;
+  /** Exact, pre-validated Research direction lineage for query-frontier recovery. */
+  readonly researchDirectionReuse?: Json;
 }
 
 export interface RecoveryDispatchResult {
@@ -112,7 +114,7 @@ export class PostgresRecoveryDispatcher {
       replayUpstreamStages: false,
       ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
     };
-    await this.persistence.saveWorkflow({ ...workflow, context: { ...workflow.context, data: { ...workflow.context.data, recoveryExecution, ...(input.controlAgentOverrides === undefined ? {} : { controlAgentOverrides: input.controlAgentOverrides }), ...(input.stopAfterStepId === undefined ? {} : { boundedExecution: { stopAfterStepId: input.stopAfterStepId, reason: input.recoveryReason, authorization: input.recoveryAuthorization, recoveryExecutionId } }) } }, updatedAt: now });
+    await this.persistence.saveWorkflow({ ...workflow, context: { ...workflow.context, data: { ...workflow.context.data, recoveryExecution, ...(input.controlAgentOverrides === undefined ? {} : { controlAgentOverrides: input.controlAgentOverrides }), ...(input.researchDirectionReuse === undefined ? {} : { researchDirectionReuse: input.researchDirectionReuse }), ...(input.stopAfterStepId === undefined ? {} : { boundedExecution: { stopAfterStepId: input.stopAfterStepId, reason: input.recoveryReason, authorization: input.recoveryAuthorization, recoveryExecutionId } }) } }, updatedAt: now });
     await this.persistence.saveExecutionProvenance({
       executionId: recoveryExecutionId, workflowId: input.workflowId, correlationId: workflow.context.correlationId ?? null,
       agentId: targetStep.agent, stage: input.targetStepId, capability: "agent.execute", provider: null,

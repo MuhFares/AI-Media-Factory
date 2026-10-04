@@ -2,6 +2,20 @@
 
 Bootstrap: `AMF_REMEDIATION_MASTER_REGISTRY_BOOTSTRAP_V1` (2026-09-27)
 
+## OP-STORAGE-01 — Durable artifact storage contract (operational backlog)
+
+- STATUS: `PASS_PROVIDER_FREE`; production durability is not claimed.
+- PROVIDER_MODE: PROVIDER_FREE. REAL_DB_REQUIRED: isolated test DB only.
+- EVIDENCE: `artifact-storage.test.js` and
+  `durable-publication-transport.test.js` passed 10/10; additive migration test
+  passed 2/2. Verified hash/bytes, content-addressed idempotency, corruption
+  detection, exact-key deletion guards, storage-root confinement, receipt-bound
+  publication resolution and isolated schema constraints.
+- SIDE_EFFECTS: cloud/provider calls 0; production DB mutations 0; files
+  migrated/deleted 0. LAST_RUN_ID:
+  `AMF_DURABLE_OBJECT_STORAGE_AND_OUTPUT_RETENTION_DESIGN_V1`.
+  LAST_RUN_DATE: 2026-10-01.
+
 Each entry tracks: SCENARIO / OWNER_PROGRAM / STATUS / REAL_DB_REQUIRED /
 REAL_WORKER_REQUIRED / PROVIDER_MODE / EXPECTED_ARTIFACTS / EXPECTED_STATE /
 EXPECTED_BUDGET_BEHAVIOR / EXIT_EVIDENCE / LAST_RUN_ID / LAST_RUN_DATE.
@@ -406,3 +420,18 @@ the standalone sandbox-safety scenario `E2E-17` remains `NOT_RUN`; its
 environment-classification debt does not reopen the certified Program 1–5
 exits. Program 5 additionally has E2E-P5-01..18 provider-free and bounded live
 Owner evidence.
+
+2026-10-01 supervised-Wan single-scene supplement: provider-free certification
+passed 43 focused assertions across the isolated PostgreSQL ledger, concurrent
+Owner idempotency, exact one-POST/budget accounting, worker runner, AMF Control,
+auth/CSRF/project scoping, timeout separation, no-retry ambiguity, manual
+reconciliation, Decision Center actionability and batch fail-closed behavior.
+Production schema/runtime activation was not performed; real video calls remain
+zero and `WAN_LIVE_GENERATION = PENDING_RUNTIME_ACTIVATION`.
+
+2026-10-01 supervised-Wan runtime supplement: production DB/backup prechecks,
+the narrow ledger migration, current-build singleton worker, Node API, AMF
+Control, Owner auth/session/CSRF boundary, mode projection and read-only scene
+eligibility passed. The ledger contains zero executions and the queue contains
+zero active work; no RunPod/video/provider call occurred. Runtime is ready for
+one separately authorized Owner action, not autonomous or batch generation.

@@ -169,3 +169,11 @@ E2E-03, E2E-06, E2E-07, E2E-12, E2E-18 (exit); E2E-13, E2E-14 exercised as invar
   dispatch/job/revision task across processes while preserving historical
   evidence. Program 3 passed 70/70 with zero failures/timeouts and status
   remains `PROVIDER_FREE_PASS`; no production schema was migrated.
+- 2026-10-01: Owner-authorized narrow production migration
+  `review-resume-idempotency-identity-v1` added only nullable
+  `idempotency_identity` and partial unique index
+  `uq_review_resume_idempotency_identity`. Row count remained 2, historical
+  rows remained unchanged, and a duplicate-identity transaction probe was
+  rejected and rolled back. The exact Program-3 suite passed 70/70. Program 3
+  remains `PROVIDER_FREE_PASS`; current worker/source parity must be restored
+  separately before a new production cycle.

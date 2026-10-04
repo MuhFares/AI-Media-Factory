@@ -22,10 +22,11 @@ async function runReads(read){
 test("Owner Operations full read set settles successfully without mutations",async()=>{
   const calls=[];
   const results=await runReads(async url=>{calls.push(url);return {url}});
-  assert.equal(results.length,8);
+  assert.equal(results.length,9);
   assert.ok(results.every(x=>x.status==="fulfilled"));
   assert.ok(calls.every(x=>x.startsWith("/api/runtime/")&&x.includes("project_id=morroway")));
   assert.ok(calls.includes("/api/runtime/owner-credential-health?project_id=morroway"));
+  assert.ok(calls.includes("/api/runtime/owner-wan-supervised?project_id=morroway"));
 });
 
 test("credential-health failure is isolated from worker and Wan reads",async()=>{
@@ -44,8 +45,15 @@ test("Owner Operations renders explicit partial-failure and Wan safety states",(
   assert.match(source,/Credential state: UNKNOWN \/ UNAVAILABLE/);
   assert.match(source,/Credential health.*unavailable/s);
   assert.match(source,/Worker, provider and Wan health/);
-  assert.match(source,/Wan future generation: BLOCKED/);
-  assert.match(source,/No Generate Video action is available/);
+  assert.match(source,/WAN MODE: TEMPORARY SUPERVISED/);
+  assert.match(source,/Each scene card independently reports whether all current generation gates pass/);
+  assert.match(source,/maximum one POST per logical scene/);
+  assert.match(source,/no batch or automatic retry/);
+  assert.match(source,/Video Generation — Supervised Wan/);
+  assert.match(source,/HISTORICAL CANARY/);
+  assert.match(source,/Wan eligibility/);
+  assert.match(source,/active execution/);
+  assert.match(source,/Generate is not offered because all current governance gates do not pass/);
   assert.match(source,/Promise\.allSettled/);
 });
 
@@ -53,4 +61,14 @@ test("Owner Operations page load performs read-only fetches only",()=>{
   const block=source.slice(source.indexOf("async function ownerOperations()"),source.indexOf("window.ownerActivateRoute"));
   assert.doesNotMatch(block,/method\s*:\s*['\"](?:POST|PUT|PATCH|DELETE)/i);
   assert.match(block,/Verify Health/);
+});
+
+test("historical scene from the old runtime is visible but fail-closed",()=>{
+  const start=source.indexOf("function supervisedWanSceneUiState");
+  const end=source.indexOf("async function ownerOperations()",start);
+  const context={};vm.createContext(context);vm.runInContext(`${source.slice(start,end)};globalThis.classify=supervisedWanSceneUiState`,context);
+  const state=context.classify({workflowId:"wf-p4-canary-2b0da0ba762b65477107",eligible:true});
+  assert.equal(state.historical,true);
+  assert.equal(state.eligible,false);
+  assert.equal(state.reason,"SOURCE_VISUAL_RUNTIME_REFERENCE_UNSUPPORTED");
 });

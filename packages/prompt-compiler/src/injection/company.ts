@@ -6,7 +6,7 @@
  * Reads from memory/company/ (README + key docs).
  */
 
-import type { AgentId } from "../core/common";
+import type { AgentId } from "../core/common.js";
 
 export interface CompanyBrainInjector {
   /** Inject the Company Brain into the prompt. */

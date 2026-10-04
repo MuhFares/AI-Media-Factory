@@ -3,7 +3,7 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { AgentId } from "../core/common";
+import type { AgentId } from "../core/common.js";
 
 export interface CompilerMetrics {
   /** Record a compilation attempt. */

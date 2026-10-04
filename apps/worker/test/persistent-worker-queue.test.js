@@ -55,15 +55,10 @@ async function waitFor(check, label, timeoutMs = 60000) {
   throw new Error(`timeout: ${label}`);
 }
 
-let pool;
-
 before(async () => {
   for (const k of PROVIDER_KEYS) delete process.env[k];
   process.env.TEXT_AGENT_PROVIDER = "deterministic";
   globalThis.fetch = async () => { throw new Error("NETWORK_FORBIDDEN_IN_QUEUE_FIXTURE"); };
-  pool = createPool({ connectionString: TEST_DATABASE_URL });
-  await migrate(pool);
-  await truncateAll(pool);
 });
 
 after(async () => {
@@ -72,10 +67,12 @@ after(async () => {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
-  await pool.end();
 });
 
 test("persistent worker starts, claims an allowed test job through the canonical path, and stops cleanly", async () => {
+  const pool = createPool({ connectionString: TEST_DATABASE_URL });
+  await migrate(pool);
+  await truncateAll(pool);
   const runtime = await createProductionWorker({
     pool,
     pollMs: 10,
@@ -123,17 +120,20 @@ test("persistent worker starts, claims an allowed test job through the canonical
     runtime.worker.stop();
     await Promise.race([loop, new Promise((r) => setTimeout(r, 5000))]);
   } finally {
-    // NOTE: runtime.close() would end the test-shared pool (the runtime owns
-    // its persistence/queue/control over the shared pool); stop the worker
-    // only — the pool closes once in after().
     runtime.worker.stop();
+    await runtime.close();
   }
 });
 
 test("restarted persistent worker gets a new instance id and claims the next job", async () => {
-  const first = await createProductionWorker({ pool, pollMs: 10, runtimeMode: "PERSISTENT_PRODUCTION_WORKER", launcher: "persistent-worker-queue-fixture" });
+  const firstPool = createPool({ connectionString: TEST_DATABASE_URL });
+  await migrate(firstPool);
+  await truncateAll(firstPool);
+  const first = await createProductionWorker({ pool: firstPool, pollMs: 10, runtimeMode: "PERSISTENT_PRODUCTION_WORKER", launcher: "persistent-worker-queue-fixture" });
   const firstId = first.identity.workerInstanceId;
   first.worker.stop();
+  await first.close();
+  const pool = createPool({ connectionString: TEST_DATABASE_URL });
   const second = await createProductionWorker({ pool, pollMs: 10, runtimeMode: "PERSISTENT_PRODUCTION_WORKER", launcher: "persistent-worker-queue-fixture" });
   try {
     assert.notEqual(second.identity.workerInstanceId, firstId);
@@ -155,5 +155,6 @@ test("restarted persistent worker gets a new instance id and claims the next job
     assert.equal(sub?.status, "completed");
   } finally {
     second.worker.stop();
+    await second.close();
   }
 });

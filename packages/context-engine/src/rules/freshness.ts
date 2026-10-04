@@ -4,7 +4,7 @@
  */
 
 export interface FreshnessRules {
-  maxAgeByType: Record<string, number>; // days
+  maxAgeByType: Record<string, number | null>; // days; null means never expires
   decayFunction: "linear" | "exponential" | "step";
   halfLifeDays: number;
   neverExpire: string[];

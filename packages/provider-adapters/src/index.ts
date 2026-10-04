@@ -65,6 +65,17 @@ export type { ReplicateVideoConfig } from "./adapters/video-generation.js";
 export { RunPodWanVideoAdapter } from "./adapters/runpod-video.js";
 export { runPodVideoAdapterFromEnv } from "./adapters/runpod-video.js";
 export type { RunPodVideoConfig } from "./adapters/runpod-video.js";
+export {
+  TEMPORARY_WAN_MODE,
+  TEMPORARY_WAN_ENDPOINT,
+  TEMPORARY_WAN_TIMING,
+  evaluateTemporaryWanGenerateGate,
+  classifySubmissionAck,
+  classifyGenerationWait,
+  ownerSuppliedWanJobEvidence,
+  AUDITED_OWNER_MP4_IMPORT_POLICY,
+} from "./wan-supervised-policy.js";
+export type { TemporaryWanExecutionState, TemporaryWanGenerateGate, TemporaryWanGateResult, OwnerSuppliedWanJobEvidence } from "./wan-supervised-policy.js";
 export { GroqTTSAdapter } from "./adapters/groq-tts.js";
 export { groqTTSAdapterFromEnv, chunkText } from "./adapters/groq-tts.js";
 export type { GroqTTSConfig } from "./adapters/groq-tts.js";

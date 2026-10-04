@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createProductionAgentExecutor, preMediaOrchestratorSystemPrompt, validatePreMediaOrchestratorPayload } from "../dist/production-executor.js";
+import { createProductionAgentExecutor, openRouterResponseFormat, PRE_MEDIA_ORCHESTRATOR_REQUIRED, preMediaOrchestratorSystemPrompt, validatePreMediaOrchestratorPayload } from "../dist/production-executor.js";
 
 class Store {
   artifacts = new Map();
@@ -41,27 +41,57 @@ test("pre-media Orchestrator contract is explicit, deterministic, and authority-
   assert.throws(()=>validatePreMediaOrchestratorPayload({...validOrchestratorPayload(),stage:"MEDIA_PHASE"}),e=>e.diagnostics.validationCode==="ORCHESTRATOR_STAGE_INVALID"&&e.diagnostics.issuePaths[0]==="$.stage");
   assert.throws(()=>validatePreMediaOrchestratorPayload({...validOrchestratorPayload(),productionAuthority:"GRANTED"}),e=>e.diagnostics.validationCode==="ORCHESTRATOR_AUTHORITY_VIOLATION"&&e.diagnostics.hardFailReason==="OWNER_AUTHORITY_BOUNDARY");
   assert.throws(()=>validatePreMediaOrchestratorPayload({...validOrchestratorPayload(),tasks:[{action:"publish now"}]}),e=>e.diagnostics.validationCode==="ORCHESTRATOR_AUTHORITY_VIOLATION");
+  for(const field of PRE_MEDIA_ORCHESTRATOR_REQUIRED){const payload=validOrchestratorPayload();delete payload[field];assert.throws(()=>validatePreMediaOrchestratorPayload(payload),e=>e.diagnostics.validationCode==="ORCHESTRATOR_REQUIRED_FIELD_MISSING"&&e.diagnostics.issuePaths.includes(`$.${field}`));}
 });
 
-test("HTTP-200 invalid Orchestrator output persists response, contract diagnostics, usage and cost without an artifact",async()=>{
+test("OpenRouter forwards the declared Orchestrator schema instead of degrading it to JSON mode",()=>{
+  const schema={type:"object",properties:{stage:{type:"string"}},required:["stage"],additionalProperties:true};
+  assert.deepEqual(openRouterResponseFormat(undefined),{type:"json_object"});
+  assert.deepEqual(openRouterResponseFormat(schema),{type:"json_schema",json_schema:{name:"amf_structured_response",strict:false,schema}});
+});
+
+test("HTTP-200 analysis-only Orchestrator output persists response, contract diagnostics, usage and cost without inventing an artifact",async()=>{
   const store=new Store(), reconciled=[];
-  const routing={resolve:async()=>({model:"openai/gpt-oss-20b",routingVersionId:"route-v1",profile:"BALANCED",priceSnapshotId:"price-v1"})};
+  const routing={resolve:async()=>({provider:"openrouter",model:"openai/gpt-oss-20b",requestedModel:"openai/gpt-oss-20b",resolvedModel:"openai/gpt-oss-20b",routingVersionId:"route-v1",routingScope:"PROJECT",projectId:"morroway",role:"orchestrator",profile:"BALANCED",priceSnapshotId:"price-v1",fallbackUsed:false,fallbackReason:null}),preflight:async()=>({availabilityState:"AVAILABLE",liveHealthState:"HEALTHY",configurationFingerprint:"fixture",code:"PASS"})};
   const budget={reserve:async(input)=>({reservationId:"reservation-1",callKind:input.callKind}),reconcile:async(input)=>reconciled.push(input)};
   process.env.OPENROUTER_API_KEY="test";process.env.OPENROUTER_BASE_URL="https://mock.invalid/api/v1";
-  global.fetch=async(_url,options)=>{const submitted=JSON.parse(options.body);assert.match(submitted.messages[0].content,/planId, stage, objective/);const visible=JSON.stringify({status:"planned",summary:"short"});const event=`data: ${JSON.stringify({id:"gen-fixture",model:"openai/gpt-oss-20b",provider:"fixture",choices:[{delta:{content:visible},finish_reason:"stop"}],usage:{prompt_tokens:7,completion_tokens:3,total_tokens:10,completion_tokens_details:{reasoning_tokens:1},cost:0.00001}})}\n\ndata: [DONE]\n\n`;return new Response(event,{status:200});};
+  global.fetch=async(_url,options)=>{const submitted=JSON.parse(options.body);assert.match(submitted.messages[0].content,/planId, stage, objective/);assert.equal(submitted.response_format.type,"json_schema");assert.deepEqual(submitted.response_format.json_schema.schema.required,PRE_MEDIA_ORCHESTRATOR_REQUIRED);const visible=JSON.stringify({analysis:"We need to produce JSON with required fields."});const event=`data: ${JSON.stringify({id:"gen-fixture",model:"openai/gpt-oss-20b",provider:"fixture",choices:[{delta:{content:visible},finish_reason:"stop"}],usage:{prompt_tokens:7,completion_tokens:3,total_tokens:10,completion_tokens_details:{reasoning_tokens:1},cost:0.00001}})}\n\ndata: [DONE]\n\n`;return new Response(event,{status:200});};
   try{
     const outcome=await createProductionAgentExecutor({persistence:store,modelRouting:routing,productionCallBudget:budget}).executeAgentStep({id:"orchestrator",agent:"orchestrator"},{workflowId:"wf-contract",correlationId:"corr-contract",data:{projectId:"morroway",productionPhase:"PRE_MEDIA_PHASE",mediaAuthority:"NOT_GRANTED"}});
     assert.equal(outcome.status,"failed");assert.equal(store.artifacts.size,0);
     const record=[...store.provenance.values()][0];
     assert.equal(record.errorClassification,"STRUCTURAL_VALIDATION_FAILED");
     assert.equal(record.configuration.providerFailure.validationCode,"ORCHESTRATOR_REQUIRED_FIELD_MISSING");
-    assert.equal(record.configuration.providerResponse.sanitizedVisibleResponse,JSON.stringify({status:"planned",summary:"short"}));
-    assert.deepEqual(record.configuration.providerResponse.parsedPayload,{status:"planned",summary:"short"});
+    assert.equal(record.configuration.providerResponse.sanitizedVisibleResponse,JSON.stringify({analysis:"We need to produce JSON with required fields."}));
+    assert.deepEqual(record.configuration.providerResponse.parsedPayload,{analysis:"We need to produce JSON with required fields."});
     assert.deepEqual(record.usage,{inputTokens:7,outputTokens:3,totalTokens:10,reasoningTokens:1});
     assert.equal(record.cost,0.00001);assert.equal(reconciled.at(-1).calculableCostUsd,0.00001);
     const terminal=store.lifecycleEvents.at(-1);assert.equal(terminal.metadata.validationCode,"ORCHESTRATOR_REQUIRED_FIELD_MISSING");
-    const restarted=structuredClone([...store.provenance.values()][0]);assert.equal(restarted.configuration.providerResponse.parsedPayload.status,"planned");
+    const restarted=structuredClone([...store.provenance.values()][0]);assert.deepEqual(Object.keys(restarted.configuration.providerResponse.parsedPayload),["analysis"]);
   }finally{global.fetch=originalFetch;delete process.env.OPENROUTER_API_KEY;delete process.env.OPENROUTER_BASE_URL;}
+});
+
+async function runOrchestratorStream({visible,reasoning,finishReason="stop"}){
+  const store=new Store();let submitted;
+  const routing={resolve:async()=>({provider:"openrouter",model:"openai/gpt-oss-20b",requestedModel:"openai/gpt-oss-20b",resolvedModel:"openai/gpt-oss-20b",routingVersionId:"route-v1",routingScope:"PROJECT",projectId:"morroway",role:"orchestrator",profile:"BALANCED",priceSnapshotId:"price-v1",fallbackUsed:false,fallbackReason:null}),preflight:async()=>({availabilityState:"AVAILABLE",liveHealthState:"HEALTHY",configurationFingerprint:"fixture",code:"PASS"})};
+  const budget={reserve:async(input)=>({reservationId:`reservation-${input.callKind}`,callKind:input.callKind,idempotencyKey:input.idempotencyKey}),reconcile:async()=>{}};
+  process.env.OPENROUTER_API_KEY="test";process.env.OPENROUTER_BASE_URL="https://mock.invalid/api/v1";
+  global.fetch=async(_url,options)=>{submitted=JSON.parse(options.body);const delta={...(reasoning===undefined?{}:{reasoning_content:reasoning}),...(visible===undefined?{}:{content:visible})};const event=`data: ${JSON.stringify({id:"gen-structured",model:"openai/gpt-oss-20b",provider:"fixture",choices:[{delta,finish_reason:finishReason}],usage:{prompt_tokens:4,completion_tokens:6,total_tokens:10,cost:0}})}\n\ndata: [DONE]\n\n`;return new Response(event,{status:200});};
+  try{const outcome=await createProductionAgentExecutor({persistence:store,modelRouting:routing,productionCallBudget:budget}).executeAgentStep({id:"orchestrator",agent:"orchestrator"},{workflowId:`wf-${Math.random()}`,correlationId:"corr-structured",data:{projectId:"morroway",productionPhase:"PRE_MEDIA_PHASE",mediaAuthority:"NOT_GRANTED"}});return{outcome,store,submitted};}
+  finally{global.fetch=originalFetch;delete process.env.OPENROUTER_API_KEY;delete process.env.OPENROUTER_BASE_URL;}
+}
+
+test("reasoning plus a valid final Orchestrator payload selects only final content",async()=>{
+  const {outcome,store,submitted}=await runOrchestratorStream({reasoning:"private chain material",visible:JSON.stringify(validOrchestratorPayload())});
+  assert.equal(outcome.status,"completed",outcome.error?.message);assert.equal(outcome.artifact.kind,"execution_plan");
+  assert.equal(submitted.response_format.type,"json_schema");assert.equal(submitted.response_format.json_schema.schema.properties.stage.enum[0],"INITIAL_CONTENT_PLAN");
+  assert.equal(JSON.stringify(outcome.artifact).includes("private chain material"),false);
+  const record=[...store.provenance.values()][0];assert.equal(record.configuration.providerResponse.reasoningFieldPresent,true);assert.equal(record.configuration.providerResponse.parsedPayload.planId,"plan-1");
+});
+
+test("malformed and truncated Orchestrator responses fail closed without artifacts",async()=>{
+  const malformed=await runOrchestratorStream({visible:"{not-json"});assert.equal(malformed.outcome.status,"failed");assert.equal(malformed.store.artifacts.size,0);
+  const truncated=await runOrchestratorStream({visible:JSON.stringify(validOrchestratorPayload()),finishReason:"length"});assert.equal(truncated.outcome.status,"failed");assert.equal(truncated.store.artifacts.size,0);assert.match(truncated.outcome.error.message,/incomplete response/);
 });
 
 function context() {
@@ -96,11 +126,12 @@ async function seedInitial(store) {
 }
 
 async function seedWriterBrief(store) {
-  await store.saveArtifact({ artifactId: "brief", kind: "evidence_backed_content_brief", workflowId: "wf-writer-lifecycle", correlationId: "corr-writer-lifecycle", producerAgent: "planner", status: "completed", createdAt: new Date().toISOString(), payload: { stage: "POST_RESEARCH_SYNTHESIS", status: "completed", claims: [], researchSources: [] } });
+  await store.saveArtifact({ artifactId: "research", kind: "research_report", workflowId: "wf-writer-lifecycle", correlationId: "corr-writer-lifecycle", producerAgent: "research", status: "completed", createdAt: new Date().toISOString(), payload: { researchStatus: "USABLE", candidateStories: [], sources: [], evidenceQuality: { ceoEligible: true } } });
+  await store.saveArtifact({ artifactId: "brief", kind: "evidence_backed_content_brief", workflowId: "wf-writer-lifecycle", correlationId: "corr-writer-lifecycle", producerAgent: "planner", status: "completed", createdAt: new Date().toISOString(), parentArtifact: { artifactId: "research", kind: "research_report" }, payload: { stage: "POST_RESEARCH_SYNTHESIS", status: "completed", objective: "MW-HIS-001", finalAngle: "A concise evidence-bound angle", hookDirection: "Open on the central supported fact", claims: [], evidenceRefs: [], writerInstructions: [], researchSources: [] } });
 }
 
 function writerContext() {
-  return { workflowId: "wf-writer-lifecycle", correlationId: "corr-writer-lifecycle", data: { directive: "produce", contentTopic: "MW-HIS-001" } };
+  return { workflowId: "wf-writer-lifecycle", correlationId: "corr-writer-lifecycle", data: { directive: "produce", contentTopic: "MW-HIS-001", previousArtifact: { artifactId: "brief", kind: "evidence_backed_content_brief" } } };
 }
 
 test("response then validation failure becomes a durable terminal lifecycle record", async () => {

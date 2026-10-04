@@ -20,13 +20,6 @@ export type ReportId = string;
 export type LeaderboardId = string;
 export type Timestamp = string; // ISO-8601 UTC
 
-export type Json =
-  | null
-  | boolean
-  | number
-  | string
-  | Json[]
-  | { [key: string]: Json };
 
 /** Types of entities that can be evaluated. */
 export type EvaluationTargetType =

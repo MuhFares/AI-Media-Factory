@@ -6,8 +6,8 @@
  */
 
 import { createServer } from "node:http";
-import { createPool, migrate, PostgresPersistence, PostgresQueue, ControlPlaneStore, PostgresRevisionDispatcher, PostgresReviewResumeDispatcher, PostgresMediaResumeDispatcher, StrategicStore, LifecycleStore, ApprovalActionabilityStore, LearningLoopStore, ContentStore, SubjectStore, ChannelStore, AutomationStore, ModelIntelligenceStore, ModelBenchmarkRuntimeStore, ProductionCallBudgetStore, ProductionModelRoutingStore, OwnerAutonomyStore } from "@ai-media-factory/database";
-import { buildProviderBoundary } from "@ai-media-factory/worker";
+import { createPool, migrate, PostgresPersistence, PostgresQueue, ControlPlaneStore, PostgresRevisionDispatcher, PostgresReviewResumeDispatcher, PostgresMediaResumeDispatcher, StrategicStore, LifecycleStore, ApprovalActionabilityStore, LearningLoopStore, ContentStore, SubjectStore, ChannelStore, AutomationStore, ModelIntelligenceStore, ModelBenchmarkRuntimeStore, ProductionCallBudgetStore, ProductionModelRoutingStore, OwnerAutonomyStore, WanSupervisedExecutionStore, PostgresWorkerDiagnosticClient } from "@ai-media-factory/database";
+import { buildProviderBoundary, computeMediaBuildId } from "@ai-media-factory/worker";
 import { createWorkflowApiHandler } from "./handler.js";
 import { ProductionCredentialHealthVerifier } from "./credential-health-verifier.js";
 
@@ -38,6 +38,9 @@ export async function startServer(opts: { host?: string; port?: number } = {}): 
     productionModelRouting: new ProductionModelRoutingStore(pool),
     productionCallBudgets: new ProductionCallBudgetStore(pool),
     ownerAutonomy: new OwnerAutonomyStore(pool),
+    workerDiagnostics: new PostgresWorkerDiagnosticClient(pool),
+    wanSupervised: new WanSupervisedExecutionStore(pool),
+    sourceBuildId: computeMediaBuildId().buildId,
     credentialHealthVerifier: new ProductionCredentialHealthVerifier(),
     revisions: new PostgresRevisionDispatcher(pool, persistence),
     reviewResumes: new PostgresReviewResumeDispatcher(pool, persistence),

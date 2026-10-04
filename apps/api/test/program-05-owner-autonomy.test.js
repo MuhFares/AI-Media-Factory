@@ -85,5 +85,5 @@ test("canonical architecture: Node mutates, Python proxies, apps\/web is not a s
   assert.match(facade,/Proxy business requests to the existing Node runtime API/);assert.match(handler,/ownerAutonomy/);assert.ok(!ui.includes("direct SQL"));
 });
 test("future Wan generation blocker is preserved",()=>{
-  assert.match(ownerApi,/futureSubmissionsAllowed:false/);assert.match(ui,/Wan future generation: BLOCKED/);
+  assert.match(ownerApi,/futureSubmissionsAllowed:false/);assert.match(ownerApi,/TEMPORARY_GOVERNED_LEGACY_ENDPOINT/);assert.match(ui,/WAN MODE: TEMPORARY SUPERVISED/);
 });

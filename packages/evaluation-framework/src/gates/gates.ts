@@ -3,7 +3,7 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { Timestamp, Json } from "./common";
+import type { Timestamp, Json } from "../core/common.js";
 
 /** Quality gate definition. */
 export interface QualityGate {
@@ -56,7 +56,7 @@ export const STANDARD_QUALITY_GATES: Record<string, QualityGate> = {
     name: "Minimum Agent Success Rate",
     description: "Agent must maintain minimum task success rate",
     metricIds: ["agent.task_success_rate"],
-    thresholds: { passThreshold: 0.95, warnThreshold: 0.97, failThreshold: 0.90, onFail: "fail", required: true },
+    thresholds: { passThreshold: 0.95, warnThreshold: 0.97, failThreshold: 0.90 },
     onFail: "fail",
     required: true,
     tags: ["agent", "reliability"]
@@ -66,7 +66,7 @@ export const STANDARD_QUALITY_GATES: Record<string, QualityGate> = {
     name: "Maximum Agent Retry Rate",
     description: "Agent retry rate must not exceed threshold",
     metricIds: ["agent.retry_rate"],
-    thresholds: { passThreshold: 0.95, warnThreshold: 0.93, failThreshold: 0.90, onFail: "warn", required: true },
+    thresholds: { passThreshold: 0.95, warnThreshold: 0.93, failThreshold: 0.90 },
     onFail: "warn",
     required: true,
     tags: ["agent", "stability"]
@@ -76,7 +76,7 @@ export const STANDARD_QUALITY_GATES: Record<string, QualityGate> = {
     name: "Maximum Agent Latency",
     description: "Agent average latency must not exceed threshold",
     metricIds: ["agent.avg_latency_ms"],
-    thresholds: { passThreshold: 0.9, warnThreshold: 0.85, failThreshold: 0.8, onFail: "warn", required: false },
+    thresholds: { passThreshold: 0.9, warnThreshold: 0.85, failThreshold: 0.8 },
     onFail: "warn",
     required: false,
     tags: ["agent", "performance"]
@@ -88,7 +88,7 @@ export const STANDARD_QUALITY_GATES: Record<string, QualityGate> = {
     name: "Minimum Provider Availability",
     description: "Provider must maintain minimum uptime",
     metricIds: ["provider.availability"],
-    thresholds: { passThreshold: 0.999, warnThreshold: 0.9995, failThreshold: 0.995, onFail: "fail", required: true },
+    thresholds: { passThreshold: 0.999, warnThreshold: 0.9995, failThreshold: 0.995 },
     onFail: "fail",
     required: true,
     tags: ["provider", "reliability"]
@@ -98,7 +98,7 @@ export const STANDARD_QUALITY_GATES: Record<string, QualityGate> = {
     name: "Maximum Provider Error Rate",
     description: "Provider error rate must not exceed threshold",
     metricIds: ["provider.error_rate"],
-    thresholds: { passThreshold: 0.99, warnThreshold: 0.995, failThreshold: 0.98, onFail: "warn", required: true },
+    thresholds: { passThreshold: 0.99, warnThreshold: 0.995, failThreshold: 0.98 },
     onFail: "warn",
     required: true,
     tags: ["provider", "reliability"]
@@ -108,7 +108,7 @@ export const STANDARD_QUALITY_GATES: Record<string, QualityGate> = {
     name: "Maximum Provider Cost",
     description: "Provider cost per 1K tokens must not exceed threshold",
     metricIds: ["provider.cost_per_1k_tokens"],
-    thresholds: { passThreshold: 0.9, warnThreshold: 0.8, failThreshold: 0.7, onFail: "warn", required: false },
+    thresholds: { passThreshold: 0.9, warnThreshold: 0.8, failThreshold: 0.7 },
     onFail: "warn",
     required: false,
     tags: ["provider", "cost"]
@@ -120,7 +120,7 @@ export const STANDARD_QUALITY_GATES: Record<string, QualityGate> = {
     name: "Minimum Workflow Success Rate",
     description: "Workflow must maintain minimum success rate",
     metricIds: ["workflow.success_rate"],
-    thresholds: { passThreshold: 0.95, warnThreshold: 0.97, failThreshold: 0.90, onFail: "fail", required: true },
+    thresholds: { passThreshold: 0.95, warnThreshold: 0.97, failThreshold: 0.90 },
     onFail: "fail",
     required: true,
     tags: ["workflow", "reliability"]
@@ -130,7 +130,7 @@ export const STANDARD_QUALITY_GATES: Record<string, QualityGate> = {
     name: "Maximum Workflow Rework Rate",
     description: "Rework rate must not exceed threshold",
     metricIds: ["workflow.rework_rate"],
-    thresholds: { passThreshold: 0.95, warnThreshold: 0.9, failThreshold: 0.8, onFail: "warn", required: true },
+    thresholds: { passThreshold: 0.95, warnThreshold: 0.9, failThreshold: 0.8 },
     onFail: "warn",
     required: true,
     tags: ["workflow", "quality"]
@@ -140,7 +140,7 @@ export const STANDARD_QUALITY_GATES: Record<string, QualityGate> = {
     name: "Minimum Workflow Autonomy",
     description: "Workflow must maintain minimum autonomy rate",
     metricIds: ["workflow.autonomy_rate"],
-    thresholds: { passThreshold: 0.9, warnThreshold: 0.95, failThreshold: 0.85, onFail: "warn", required: true },
+    thresholds: { passThreshold: 0.9, warnThreshold: 0.95, failThreshold: 0.85 },
     onFail: "warn",
     required: true,
     tags: ["workflow", "autonomy"]
@@ -152,7 +152,7 @@ export const STANDARD_QUALITY_GATES: Record<string, QualityGate> = {
     name: "Minimum Schema Compliance",
     description: "Prompt outputs must comply with schema",
     metricIds: ["prompt.schema_compliance"],
-    thresholds: { passThreshold: 0.99, warnThreshold: 0.995, failThreshold: 0.95, onFail: "fail", required: true },
+    thresholds: { passThreshold: 0.99, warnThreshold: 0.995, failThreshold: 0.95 },
     onFail: "fail",
     required: true,
     tags: ["prompt", "compliance"]
@@ -162,7 +162,7 @@ export const STANDARD_QUALITY_GATES: Record<string, QualityGate> = {
     name: "Minimum Token Efficiency",
     description: "Prompts must be token efficient",
     metricIds: ["prompt.token_efficiency"],
-    thresholds: { passThreshold: 0.7, warnThreshold: 0.8, failThreshold: 0.6, onFail: "warn", required: false },
+    thresholds: { passThreshold: 0.7, warnThreshold: 0.8, failThreshold: 0.6 },
     onFail: "warn",
     required: false,
     tags: ["prompt", "efficiency"]
@@ -174,7 +174,7 @@ export const STANDARD_QUALITY_GATES: Record<string, QualityGate> = {
     name: "Minimum Retrieval Precision",
     description: "Memory retrieval precision must meet threshold",
     metricIds: ["memory.retrieval_precision"],
-    thresholds: { passThreshold: 0.85, warnThreshold: 0.9, failThreshold: 0.8, onFail: "warn", required: true },
+    thresholds: { passThreshold: 0.85, warnThreshold: 0.9, failThreshold: 0.8 },
     onFail: "warn",
     required: true,
     tags: ["memory", "accuracy"]
@@ -184,7 +184,7 @@ export const STANDARD_QUALITY_GATES: Record<string, QualityGate> = {
     name: "Maximum Memory Conflict Rate",
     description: "Memory conflicts must stay below threshold",
     metricIds: ["memory.conflict_rate"],
-    thresholds: { passThreshold: 0.95, warnThreshold: 0.9, failThreshold: 0.85, onFail: "warn", required: true },
+    thresholds: { passThreshold: 0.95, warnThreshold: 0.9, failThreshold: 0.85 },
     onFail: "warn",
     required: true,
     tags: ["memory", "consistency"]
@@ -196,7 +196,7 @@ export const STANDARD_QUALITY_GATES: Record<string, QualityGate> = {
     name: "Minimum Tool Success Rate",
     description: "Tools must maintain minimum success rate",
     metricIds: ["tool.success_rate"],
-    thresholds: { passThreshold: 0.99, warnThreshold: 0.995, failThreshold: 0.98, onFail: "fail", required: true },
+    thresholds: { passThreshold: 0.99, warnThreshold: 0.995, failThreshold: 0.98 },
     onFail: "fail",
     required: true,
     tags: ["tool", "reliability"]
@@ -206,7 +206,7 @@ export const STANDARD_QUALITY_GATES: Record<string, QualityGate> = {
     name: "Maximum Tool Cost",
     description: "Tool cost per call must not exceed threshold",
     metricIds: ["tool.cost_per_call"],
-    thresholds: { passThreshold: 0.8, warnThreshold: 0.7, failThreshold: 0.6, onFail: "warn", required: false },
+    thresholds: { passThreshold: 0.8, warnThreshold: 0.7, failThreshold: 0.6 },
     onFail: "warn",
     required: false,
     tags: ["tool", "cost"]
@@ -218,7 +218,7 @@ export const STANDARD_QUALITY_GATES: Record<string, QualityGate> = {
     name: "Minimum Output Quality",
     description: "Generated outputs must meet quality threshold",
     metricIds: ["output.quality_score"],
-    thresholds: { passThreshold: 0.8, warnThreshold: 0.85, failThreshold: 0.7, onFail: "fail", required: true },
+    thresholds: { passThreshold: 0.8, warnThreshold: 0.85, failThreshold: 0.7 },
     onFail: "fail",
     required: true,
     tags: ["output", "quality"]
@@ -228,7 +228,7 @@ export const STANDARD_QUALITY_GATES: Record<string, QualityGate> = {
     name: "Minimum Schema Compliance",
     description: "Outputs must comply with schema",
     metricIds: ["output.schema_compliance"],
-    thresholds: { passThreshold: 0.99, warnThreshold: 0.995, failThreshold: 0.95, onFail: "fail", required: true },
+    thresholds: { passThreshold: 0.99, warnThreshold: 0.995, failThreshold: 0.95 },
     onFail: "fail",
     required: true,
     tags: ["output", "compliance"]
@@ -238,7 +238,7 @@ export const STANDARD_QUALITY_GATES: Record<string, QualityGate> = {
     name: "Minimum Brand Safety",
     description: "All outputs must pass brand safety checks",
     metricIds: ["output.brand_safety"],
-    thresholds: { passThreshold: 0.99, warnThreshold: 0.995, failThreshold: 0.98, onFail: "block", required: true },
+    thresholds: { passThreshold: 0.99, warnThreshold: 0.995, failThreshold: 0.98 },
     onFail: "block",
     required: true,
     tags: ["output", "safety", "brand"]

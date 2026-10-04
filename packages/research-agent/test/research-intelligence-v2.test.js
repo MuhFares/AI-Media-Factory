@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import { deepStrictEqual, ok, rejects, strictEqual, throws } from "node:assert";
-import { buildVerificationQueryFor, compileDiscoveryQuery, createResearchAgent, evaluateDiscoveryQueryQuality, finalizeWebSearchQuery, materializeDiscoveryRetrievalPlan, normalizeRuntimeIdentityEchoes, packWebSearchQuery } from "../dist/index.js";
+import { buildVerificationQueryFor, compileDiscoveryQuery, createResearchAgent, evaluateDiscoveryQueryQuality, finalizeWebSearchQuery, materializeDiscoveryRetrievalPlan, normalizeResearchDirectionStageForRecovery, normalizeRuntimeIdentityEchoes, packWebSearchQuery, researchCapabilityInvocationIdentity, researchDirectionResponseSchema } from "../dist/index.js";
 import { WEB_SEARCH_MAX_QUERY_LENGTH } from "@ai-media-factory/tool-framework";
 
 const signal = { isCancelled: false, onCancelled() {}, throwIfCancelled() {} };
@@ -63,6 +63,31 @@ function agentWithDirection(directionPayload, calls = [], capabilityCalls = [], 
 
 describe("Research Intelligence Direction Cycle V2", () => {
   const planScope = { workflowId: "wf-v2", correlationId: "corr-v2", taskId: task.id, recoverySuffix: ":recovery:test" };
+
+  it("capability identity A-F is deterministic for replay and unique across lane, query, attempt, and recovery", () => {
+    const base = { workflowId: "wf-1", executionScopeId: "recovery-1", taskId: "research", capabilityId: "web.search", role: "DISCOVERY", laneId: "historical", queryOrdinal: 1, attemptOrdinal: 1 };
+    const identity = researchCapabilityInvocationIdentity(base);
+    strictEqual(researchCapabilityInvocationIdentity({ ...base }), identity, "A/F same invocation replay");
+    ok(researchCapabilityInvocationIdentity({ ...base, laneId: "context" }) !== identity, "B different lane");
+    ok(researchCapabilityInvocationIdentity({ ...base, queryOrdinal: 2 }) !== identity, "C different query ordinal");
+    ok(researchCapabilityInvocationIdentity({ ...base, attemptOrdinal: 2 }) !== identity, "D different attempt");
+    ok(researchCapabilityInvocationIdentity({ ...base, executionScopeId: "recovery-2" }) !== identity, "E different recovery");
+  });
+
+  it("production top-level context and recovery scope produce workflow-local result/evidence identities", async () => {
+    const payload = mission();
+    payload.discoveryLanes = [
+      { ...payload.discoveryLanes[0], laneId: "historical" },
+      { ...payload.discoveryLanes[0], laneId: "context", purpose: "Find current context" },
+    ];
+    const capabilityCalls = [];
+    const productionContext = { workflowId: "wf-production", correlationId: "corr-production", inputEvent: {} };
+    const researchInput = { ...input(), reusedDirection: { mission: payload, workflowId: "wf-production", correlationId: "corr-production", sourceExecutionId: "source-direction", providerRequestId: "provider-direction", parsedPayloadFingerprint: "a".repeat(64) }, recoveryScopeId: "recovery-execution-1" };
+    await agentWithDirection(payload, [], capabilityCalls).execute({ context: productionContext, input: researchInput }, signal);
+    const ids = capabilityCalls.map((call) => call.requestId);
+    strictEqual(new Set(ids).size, ids.length, "G no duplicate durable identity");
+    ok(ids.every((id) => id.includes("wf-production") && id.includes("recovery-execution-1")), "H workflow/recovery lineage linked");
+  });
 
   it("planning A/G materializes supported WEB_SEARCH and binds the compiled query", () => {
     const payload = mission();
@@ -190,6 +215,111 @@ describe("Research Intelligence Direction Cycle V2", () => {
     strictEqual(result.output.researchPlan.stage, "research");
   });
 
+  it("direction remediation A/B/C accepts research, rejects mission, and keeps mission prose independent", async () => {
+    const valid = { ...mission(), metadata: { mission: "Human-readable mission prose is not orchestration identity." } };
+    const accepted = await agentWithDirection(valid).execute({ context, input: input() }, signal);
+    strictEqual(accepted.output.researchPlan.stage, "research", "A");
+    strictEqual(valid.metadata.mission.includes("mission prose"), true, "C");
+    await rejects(
+      agentWithDirection({ ...mission(), stage: "mission" }).execute({ context, input: input() }, signal),
+      /invalid report structure/,
+      "B",
+    );
+  });
+
+  it("direction remediation D schema constrains top-level stage and the complete mission contract", () => {
+    const schema = researchDirectionResponseSchema();
+    deepStrictEqual(schema.properties.stage.enum, ["research"]);
+    ok(schema.required.includes("missionId"));
+    ok(schema.required.includes("discoveryLanes"));
+    strictEqual(schema.additionalProperties, false);
+  });
+
+  it("direction remediation E prompt distinguishes orchestration stage from mission content", async () => {
+    const calls = [];
+    await agentFor(report({ factual: "STRONG" }), calls, []).execute({ context, input: input() }, signal);
+    const directionPrompt = calls.find((text) => text.includes("Research Direction"));
+    ok(directionPrompt.includes('top-level stage field'));
+    ok(directionPrompt.includes('Do not use "mission" as the stage'));
+    ok(directionPrompt.includes("do not wrap the mission under metadata.mission"));
+  });
+
+  it("direction remediation F/G/J normalizes only stage without mutating raw input or invoking a provider", () => {
+    let providerCalls = 0;
+    const raw = { ...mission(), stage: "mission" };
+    const before = structuredClone(raw);
+    const normalized = normalizeResearchDirectionStageForRecovery(raw);
+    providerCalls += 0;
+    strictEqual(normalized.stage, "research", "F");
+    deepStrictEqual({ ...normalized, stage: "mission" }, raw, "F only stage changes");
+    deepStrictEqual(raw, before, "G raw response immutable");
+    strictEqual(providerCalls, 0, "J");
+  });
+
+  it("direction remediation H normalized flat mission passes the full direction validator", async () => {
+    const normalized = normalizeResearchDirectionStageForRecovery({ ...mission(), stage: "mission" });
+    const result = await agentWithDirection(normalized).execute({ context, input: input() }, signal);
+    strictEqual(result.output.researchPlan.stage, "research");
+    strictEqual(result.output.researchPlan.objective, mission().objective);
+  });
+
+  it("direction remediation I missing semantic fields block zero-call normalization", () => {
+    const incomplete = { ...mission(), stage: "mission" };
+    delete incomplete.missionId;
+    throws(() => normalizeResearchDirectionStageForRecovery(incomplete), /RESEARCH_DIRECTION_RECOVERY_FIELDS_MISSING:missionId/);
+  });
+
+  it("direction recovery reuses exact durable mission and performs no new direction call", async () => {
+    const calls = [];
+    const capabilityCalls = [];
+    const recoveryInput = {
+      ...input(),
+      reusedDirection: {
+        mission: mission(), workflowId: "wf-v2", correlationId: "corr-v2",
+        sourceExecutionId: "c2b0d7e4-abdf-4da4-8f65-0298e73a97e8",
+        providerRequestId: "gen-test", parsedPayloadFingerprint: "a".repeat(64),
+      },
+    };
+    const result = await agentFor(report({ factual: "STRONG" }), calls, capabilityCalls).execute({ context, input: recoveryInput }, signal);
+    strictEqual(calls.filter((text) => text.includes("Research Direction")).length, 0);
+    strictEqual(calls.filter((text) => text.includes("Final research synthesis")).length, 1);
+    strictEqual(result.output.planningUsage.inputTokens, 0);
+    strictEqual(result.output.planningUsage.outputTokens, 0);
+    ok(capabilityCalls.length > 0);
+  });
+
+  it("direction recovery accepts the canonical production ExecutionContext identity", async () => {
+    const calls = [];
+    const capabilityCalls = [];
+    const productionContext = { workflowId: "wf-v2", stepId: "research", correlationId: "corr-v2", metadata: { source: "worker-production-executor" } };
+    const recoveryInput = {
+      ...input(),
+      reusedDirection: {
+        mission: mission(), workflowId: "wf-v2", correlationId: "corr-v2",
+        sourceExecutionId: "source", providerRequestId: "gen-test", parsedPayloadFingerprint: "a".repeat(64),
+      },
+    };
+    const result = await agentFor(report({ factual: "STRONG" }), calls, capabilityCalls).execute({ context: productionContext, input: recoveryInput }, signal);
+    strictEqual(calls.filter((text) => text.includes("Research Direction")).length, 0);
+    strictEqual(result.output.planningUsage.inputTokens, 0);
+    ok(capabilityCalls.length > 0);
+  });
+
+  it("direction recovery fails closed on workflow lineage mismatch before any call", async () => {
+    const calls = [];
+    const capabilityCalls = [];
+    const recoveryInput = {
+      ...input(),
+      reusedDirection: {
+        mission: mission(), workflowId: "wf-other", correlationId: "corr-v2",
+        sourceExecutionId: "source", providerRequestId: "gen-test", parsedPayloadFingerprint: "a".repeat(64),
+      },
+    };
+    await rejects(agentFor(report(), calls, capabilityCalls).execute({ context, input: recoveryInput }, signal), /RESEARCH_DIRECTION_REUSE_LINEAGE_INVALID/);
+    strictEqual(calls.length, 0);
+    strictEqual(capabilityCalls.length, 0);
+  });
+
   it("repairs both generic historical queries against all mission dimensions", () => {
     const historical = mission();
     const lane = historical.discoveryLanes[0];
@@ -284,7 +414,50 @@ describe("Research Intelligence Direction Cycle V2", () => {
 
   it("semantic packing J fails only when essential compact semantics genuinely cannot fit", () => {
     const payload = mission();
-    throws(() => packWebSearchQuery("verbose instructions", payload, payload.discoveryLanes[0], 12), /LOCAL_QUERY_COMPILATION_FAILED/);
+    throws(() => packWebSearchQuery("verbose instructions", payload, payload.discoveryLanes[0], 12), /LOCAL_QUERY_COMPILATION_FAILED:.*:subject_domain/);
+  });
+
+  it("Cycle-01 historical evidence query preserves punctuation-normalized geography and all mandatory concepts", () => {
+    const payload = mission();
+    payload.geography = "Cairo, Egypt";
+    payload.market = null;
+    payload.language = "en";
+    payload.discoveryLanes = [{
+      ...payload.discoveryLanes[0],
+      laneId: "historical-evidence",
+      purpose: "Verify Bab Zuweila’s historical setting and any details needed to sustain a dawn, first-person passage.",
+      queryGuidance: "Search for relevant museum, archive, university, and reputable-reference material. Check claims individually, prioritize primary or institutionally grounded sources, and distinguish documented facts from interpretation. Do not infer dawn conditions, sounds, activity, route details, or viewer sensations without evidence.",
+    }];
+    const lane = payload.discoveryLanes[0];
+    const compiled = compileDiscoveryQuery(lane.queryGuidance, payload, lane);
+    const packed = packWebSearchQuery(compiled, payload, lane);
+    strictEqual(packed.providerQuery, "Cairo Egypt history events people artifacts places sources evidence museum archive university discovery");
+    ok(packed.providerQuery.length <= WEB_SEARCH_MAX_QUERY_LENGTH);
+    strictEqual(evaluateDiscoveryQueryQuality(packed.providerQuery, payload, lane).passes, true);
+    deepStrictEqual(
+      packed.semanticRequirements.filter((item) => item.priority === "TIER_1_REQUIRED").map((item) => item.dimension),
+      ["geography", "subject_domain", "concrete_discovery_class", "evidence_orientation"],
+    );
+  });
+
+  it("semantic normalization collapses duplicated punctuation variants deterministically", () => {
+    const payload = mission();
+    payload.geography = "Cairo, Egypt";
+    const lane = payload.discoveryLanes[0];
+    const packed = packWebSearchQuery("Cairo, Egypt Cairo Egypt history events people artifacts places sources evidence", payload, lane);
+    strictEqual((packed.providerQuery.match(/\bCairo\b/gu) ?? []).length, 1);
+    strictEqual((packed.providerQuery.match(/\bEgypt\b/gu) ?? []).length, 1);
+  });
+
+  it("non-English geography survives concept-level packing without substring truncation", () => {
+    const payload = mission();
+    payload.geography = "القاهرة، مصر";
+    payload.market = null;
+    payload.language = "ar";
+    const lane = payload.discoveryLanes[0];
+    const packed = packWebSearchQuery(`${"تعليمات بحث تاريخي موثق ".repeat(30)}`, payload, lane);
+    ok(packed.providerQuery.includes("القاهرة") && packed.providerQuery.includes("مصر"));
+    strictEqual(evaluateDiscoveryQueryQuality(packed.providerQuery, payload, lane).passes, true);
   });
 
   it("provider-free scenario 3 gives two supported lanes purpose-specific bounded queries", () => {

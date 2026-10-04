@@ -6,19 +6,7 @@
  * sections in this exact order; the enum order IS the assembly order.
  */
 
-import type { SectionType } from "./common";
-
-export enum SectionType {
-  System = 1,
-  CompanyBrain = 2,
-  AgentBrain = 3,
-  WorkflowContext = 4,
-  Memory = 5,
-  Examples = 6,
-  Task = 7,
-  OutputSchema = 8,
-  Safety = 9,
-}
+import { SectionType } from "../core/common.js";
 
 /** Section metadata for ordering and budgeting. */
 export interface SectionMetadata {
@@ -65,7 +53,7 @@ export function getSectionMetadata(type: SectionType): {
   const req = [SectionType.System, SectionType.CompanyBrain, SectionType.AgentBrain,
                SectionType.WorkflowContext, SectionType.Memory, SectionType.Task,
                SectionType.OutputSchema, SectionType.Safety];
-  const key = SectionType[type].toLowerCase();
+  const key = type;
   const alloc = DEFAULT_ALLOCATIONS[key] ?? { maxPct: 0.1, priority: 50, flexible: true };
   return {
     required: req.includes(type),

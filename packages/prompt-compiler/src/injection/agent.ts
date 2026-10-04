@@ -6,7 +6,7 @@
  * Reads from packages/agents/{agent}/brain.md or synthesizes from system+instructions.
  */
 
-import type { AgentId } from "../core/common";
+import type { AgentId } from "../core/common.js";
 
 export interface AgentBrainInjector {
   /** Inject the agent's brain into the prompt. */

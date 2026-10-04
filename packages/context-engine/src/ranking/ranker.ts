@@ -3,7 +3,7 @@
  * ARCHITECTURE ONLY — declarations, no logic.
  */
 
-import type { MemoryRecord } from "../selection/selector";
+import type { MemoryRecord } from "../selection/selector.js";
 
 export interface RelevanceScore {
   score: number; // 0..1

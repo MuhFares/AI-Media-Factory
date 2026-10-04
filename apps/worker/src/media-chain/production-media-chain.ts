@@ -381,6 +381,9 @@ export class ProductionMediaChainBridge {
       return { status: "COMPLETED", output: { status: "completed", authorizations } };
     }
     if (stage === "video") {
+      if (process.env.WAN_OPERATION_MODE === "TEMPORARY_GOVERNED_LEGACY_ENDPOINT") {
+        return { status: "BLOCKED", output: { status: "blocked", reason: "BATCH_WAN_NOT_ALLOWED_IN_SUPERVISED_MODE" } };
+      }
       const auths = rows.filter((row) => row.kind === "wan_authorization");
       if (auths.length !== sceneIds.length) return { status: "BLOCKED", output: { status: "blocked", reason: "WAN_AUTHORIZATION_MISSING" } };
       const clips: Record<string, unknown>[] = [];

@@ -10,30 +10,30 @@
  */
 
 // core
-export * from "./core/common";
-export * from "./core/context";
-export * from "./core/compiler";
-export * from "./core/builder";
-export * from "./core/template";
+export * from "./core/common.js";
+export * from "./core/context.js";
+export * from "./core/compiler.js";
+export * from "./core/builder.js";
+export * from "./core/template.js";
 // sections
-export * from "./sections/sections";
-export * from "./sections/ordering";
+export * from "./sections/sections.js";
+export * from "./sections/ordering.js";
 // budget
-export * from "./budget/budget";
+export * from "./budget/budget.js";
 // injection
-export * from "./injection/memory";
-export * from "./injection/company";
-export * from "./injection/agent";
-export * from "./injection/workflow";
-export * from "./injection/schema";
-export * from "./injection/examples";
+export * from "./injection/memory.js";
+export * from "./injection/company.js";
+export * from "./injection/agent.js";
+export * from "./injection/workflow.js";
+export * from "./injection/schema.js";
+export * from "./injection/examples.js";
 // safety
-export * from "./safety/safety";
+export * from "./safety/safety.js";
 // validation
-export * from "./validation/validation";
+export * from "./validation/validation.js";
 // versioning
-export * from "./versioning/versioning";
+export { type VersionPolicy } from "./versioning/versioning.js";
 // caching
-export * from "./caching/cache";
+export * from "./caching/cache.js";
 // observability
-export * from "./observability/metrics";
+export * from "./observability/metrics.js";

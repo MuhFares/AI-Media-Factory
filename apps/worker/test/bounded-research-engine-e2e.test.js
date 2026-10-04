@@ -36,6 +36,18 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// This is a zero-network integration suite: all provider transports are
+// replaced below with deterministic in-process fixtures. The host Codex
+// marker describes the parent shell, not the simulated canonical runtime,
+// and would otherwise make production preflight reject the fixture before it
+// reaches those transport doubles.
+const originalSandboxNetworkMarker = process.env.CODEX_SANDBOX_NETWORK_DISABLED;
+delete process.env.CODEX_SANDBOX_NETWORK_DISABLED;
+test.after(() => {
+  if (originalSandboxNetworkMarker === undefined) delete process.env.CODEX_SANDBOX_NETWORK_DISABLED;
+  else process.env.CODEX_SANDBOX_NETWORK_DISABLED = originalSandboxNetworkMarker;
+});
+
 if (!process.env.DATABASE_URL) {
   try {
     const envText = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", ".env"), "utf8");
@@ -136,11 +148,17 @@ async function dropScratchDb(admin, pool, dbName) {
 }
 
 async function seedInfra(pool, researchLimit, textLimit) {
+  const now = new Date().toISOString();
   await pool.query(
     `INSERT INTO model_benchmark_runs (benchmark_run_id,dataset_version,catalog_snapshot_id,candidate_plan_version,status,created_by,provenance,hard_spend_cap_usd,created_at) VALUES ('e2e-bench-1','v1','snap-1','plan-1','COMPLETED','e2e','{}',1,'2026-09-25T00:00:00.000Z')`
   );
   await pool.query(
-    `INSERT INTO provider_model_catalog (provider,provider_model_id,canonical_name,architecture,source_url,retrieved_at,refresh_id,raw_metadata,content_hash,pricing_hash,capability_hash,description_hash,availability,current_price_snapshot_id) VALUES ('openrouter','openai/gpt-6-luna','GPT-6 Luna','{}','https://example.test','2026-09-25T00:00:00.000Z','r1','{}','c','p','c','d','AVAILABLE','e2e-price-research')`
+    `INSERT INTO provider_model_price_snapshots (price_snapshot_id,provider,provider_model_id,refresh_id,retrieved_at,pricing_raw,pricing_normalized,pricing_hash) VALUES ($1,'openrouter',$2,'r1',$3,'{}','{}','p')`,
+    [PRICE_SNAPSHOT, RESEARCH_MODEL, now]
+  );
+  await pool.query(
+    `INSERT INTO provider_model_catalog (provider,provider_model_id,canonical_name,context_length,architecture,input_modalities,output_modalities,supported_parameters,capabilities,source_url,retrieved_at,refresh_id,raw_metadata,content_hash,pricing_hash,capability_hash,description_hash,availability,current_price_snapshot_id) VALUES ('openrouter','openai/gpt-6-luna','GPT-6 Luna',32768,'{}','["text"]','["text"]','["response_format"]','{"structuredOutput":true}','https://example.test',$1,'r1','{"top_provider":{"max_completion_tokens":8192}}','c','p','c','d','AVAILABLE','e2e-price-research')`,
+    [now]
   );
   await pool.query(
     `INSERT INTO production_model_routing_versions (routing_version_id,profile,scope_type,project_id,benchmark_run_id,dataset_version,decision_source,owner_decision,active,activated_at,provenance) VALUES ('${ROUTING_VERSION}','BALANCED','PROJECT','${PROJECT}','e2e-bench-1','v1','BENCHMARK_EVIDENCE','APPROVED',TRUE,'2026-09-25T00:00:00.000Z','{}')`
@@ -148,7 +166,6 @@ async function seedInfra(pool, researchLimit, textLimit) {
   await pool.query(
     `INSERT INTO production_model_routing_entries (routing_version_id,role,primary_model_id,price_snapshot_ids,evidence) VALUES ('${ROUTING_VERSION}','research','openai/gpt-6-luna','{"openai/gpt-6-luna":"e2e-price-research"}','{}')`
   );
-  const now = new Date().toISOString();
   await pool.query(
     `UPDATE production_phase_call_budgets SET limit_count=$1, reserved_count=0, consumed_count=0, max_retries=0, active=TRUE, updated_at=$2 WHERE project_id='${PROJECT}' AND phase='PRE_MEDIA_PHASE' AND call_kind='research'`,
     [researchLimit, now]
@@ -301,8 +318,15 @@ function v2Grounded(stageId) {
   return { ...base, candidateStories: base.candidateStories.map((candidate) => ({ ...candidate, contentOpportunityAssessment: { level: "MEDIUM", basis: "Evergreen discovery evidence" }, factualVerification: { status: "STRONG", basis: "Institutional and reputable references" }, recommendedForProduction: true })) };
 }
 
-function v2Insufficient(stageId) {
-  return { ...synthesisGrounded(stageId), candidateStories: [], confidence: 0.3, evidenceRisks: ["No candidate met the verification rule"], status: "insufficient_evidence" };
+function v2Insufficient(stageId, includeRetrievedSources = true) {
+  return {
+    ...synthesisGrounded(stageId),
+    candidateStories: [],
+    ...(includeRetrievedSources ? {} : { sources: [], citations: [] }),
+    confidence: 0.3,
+    evidenceRisks: ["No candidate met the verification rule"],
+    status: "insufficient_evidence",
+  };
 }
 
 function makeBoundary(persistence, pool, searchResults = FACTUAL_RESULTS) {
@@ -331,6 +355,9 @@ async function waitForSubmission(queue, workflowId, want, timeoutMs = 90000) {
   while (Date.now() < deadline) {
     const submission = await queue.loadSubmissionByWorkflow(workflowId);
     if (submission && submission.status === want) return submission;
+    if (submission?.status === "failed") {
+      throw new Error(`Submission ${workflowId} reached failed while waiting for ${want}`);
+    }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   throw new Error(`Timed out waiting for submission ${workflowId} -> ${want}`);
@@ -382,7 +409,7 @@ test("USABLE research stops after research with artifact persisted and CEO at ze
       }
       throw new Error(`REAL_EGRESS_BLOCKED:${target.slice(0, 80)}`);
     };
-    const runtime = await createProductionWorker({ pool, providerBoundary: makeBoundary(persistence, pool), orphanStaleMs: Number.MAX_SAFE_INTEGER });
+    const runtime = await createProductionWorker({ pool, providerBoundary: makeBoundary(persistence, pool), orphanStaleMs: 2_000_000_000 });
     assert.equal(await runtime.worker.runOnce(), true);
     const submission = await waitForSubmission(queue, workflowId, "bounded_stop");
     assert.equal(submission.status, "bounded_stop");
@@ -441,12 +468,13 @@ test("USABLE research stops after research with artifact persisted and CEO at ze
   } catch (error) {
     const diagnostic = { scenario: "V1_USABLE_BOUNDED", exceptionType: error?.constructor?.name ?? typeof error, message: String(error?.message ?? error).slice(0, 1000), stack: String(error?.stack ?? "").slice(0, 4000) };
     try {
-      diagnostic.submissions = (await pool.query("SELECT workflow_id,status,error,updated_at FROM workflow_submissions ORDER BY updated_at DESC LIMIT 5")).rows;
+      diagnostic.submissions = (await pool.query("SELECT workflow_id,status,updated_at FROM workflow_submissions ORDER BY updated_at DESC LIMIT 5")).rows;
       diagnostic.workflows = (await pool.query("SELECT workflow_id,state,last_checkpoint_ref,context FROM workflow_instances ORDER BY updated_at DESC LIMIT 5")).rows;
-      diagnostic.steps = (await pool.query("SELECT workflow_id,step_id,status,attempts,error FROM workflow_steps ORDER BY workflow_id,step_id")).rows;
+      diagnostic.steps = (await pool.query("SELECT workflow_id,step_id,status,attempts,started_at,finished_at FROM workflow_steps ORDER BY workflow_id,step_id")).rows;
       diagnostic.artifacts = (await pool.query("SELECT artifact_id,kind,status,producer_agent,workflow_id FROM artifacts ORDER BY created_at")).rows;
       diagnostic.reservations = (await pool.query("SELECT role,call_kind,status,idempotency_key FROM production_call_reservations ORDER BY reserved_at")).rows;
-      diagnostic.jobs = (await pool.query("SELECT id,workflow_id,status,attempts,error FROM workflow_jobs ORDER BY id")).rows;
+      diagnostic.jobs = (await pool.query("SELECT job_id,workflow_id,status,attempts,error FROM workflow_jobs ORDER BY job_id")).rows;
+      diagnostic.executions = (await pool.query("SELECT execution_id,agent_id,stage,status,error_classification,configuration FROM execution_provenance ORDER BY started_at")).rows;
     } catch (diagnosticError) {
       diagnostic.diagnosticFailure = String(diagnosticError?.message ?? diagnosticError).slice(0, 1000);
     }
@@ -480,7 +508,7 @@ test("V2 insufficient evidence and unsupported social remain honest at bounded s
       const body = JSON.stringify(JSON.parse(options.body));
       return sse(RESEARCH_MODEL, body.includes("Research Direction") ? v2Mission(researchStep.id, true) : v2Insufficient(researchStep.id), PLAN_COST);
     };
-    const runtime = await createProductionWorker({ pool, providerBoundary: makeBoundary(persistence, pool), orphanStaleMs: Number.MAX_SAFE_INTEGER });
+    const runtime = await createProductionWorker({ pool, providerBoundary: makeBoundary(persistence, pool), orphanStaleMs: 2_000_000_000 });
     assert.equal(await runtime.worker.runOnce(), true);
     const terminal = await queue.loadSubmissionByWorkflow(workflowId);
     const debugWorkflow = await persistence.loadWorkflow(workflowId);
@@ -521,11 +549,14 @@ test("V2 unsupported-only lanes persist an honest empty artifact and stop for Ow
       if (!target.includes("openrouter")) throw new Error(`REAL_EGRESS_BLOCKED:${target.slice(0, 80)}`);
       if (target.includes("auth/key")) return new Response(JSON.stringify({ data: { label: "e2e" } }), { status: 200 });
       const body = JSON.stringify(JSON.parse(options.body));
-      return sse(RESEARCH_MODEL, body.includes("Research Direction") ? v2UnsupportedOnlyMission(researchStep.id) : v2Insufficient(researchStep.id), PLAN_COST);
+      return sse(RESEARCH_MODEL, body.includes("Research Direction") ? v2UnsupportedOnlyMission(researchStep.id) : v2Insufficient(researchStep.id, false), PLAN_COST);
     };
-    const runtime = await createProductionWorker({ pool, providerBoundary: makeBoundary(persistence, pool), orphanStaleMs: Number.MAX_SAFE_INTEGER });
+    const runtime = await createProductionWorker({ pool, providerBoundary: makeBoundary(persistence, pool), orphanStaleMs: 2_000_000_000 });
     assert.equal(await runtime.worker.runOnce(), true);
-    assert.equal((await queue.loadSubmissionByWorkflow(workflowId))?.status, "bounded_stop");
+    const noSupportedTerminal = await queue.loadSubmissionByWorkflow(workflowId);
+    const noSupportedJobs = (await pool.query("SELECT status,error FROM workflow_jobs WHERE workflow_id=$1 ORDER BY created_at", [workflowId])).rows;
+    const noSupportedExecutions = await persistence.listExecutionProvenance(workflowId);
+    assert.equal(noSupportedTerminal?.status, "bounded_stop", JSON.stringify({ jobs:noSupportedJobs, executions:noSupportedExecutions.map((entry)=>({ status:entry.status,errorClassification:entry.errorClassification,configuration:entry.configuration })) }));
     const instance = await persistence.loadWorkflow(workflowId);
     assert.equal(instance.state, "PAUSED");
     assert.equal(instance.steps.find((step) => step.stepId === researchStep.id).status, "completed");
@@ -565,11 +596,14 @@ test("V2 supported web retrieval returning zero results completes insufficient a
       if (!target.includes("openrouter")) throw new Error(`REAL_EGRESS_BLOCKED:${target.slice(0, 80)}`);
       if (target.includes("auth/key")) return new Response(JSON.stringify({ data: { label: "e2e" } }), { status: 200 });
       const body = JSON.stringify(JSON.parse(options.body));
-      return sse(RESEARCH_MODEL, body.includes("Research Direction") ? v2Mission(researchStep.id) : v2Insufficient(researchStep.id), PLAN_COST);
+      return sse(RESEARCH_MODEL, body.includes("Research Direction") ? v2Mission(researchStep.id) : v2Insufficient(researchStep.id, false), PLAN_COST);
     };
-    const runtime = await createProductionWorker({ pool, providerBoundary: makeBoundary(persistence, pool, []), orphanStaleMs: Number.MAX_SAFE_INTEGER });
+    const runtime = await createProductionWorker({ pool, providerBoundary: makeBoundary(persistence, pool, []), orphanStaleMs: 2_000_000_000 });
     assert.equal(await runtime.worker.runOnce(), true);
-    assert.equal((await queue.loadSubmissionByWorkflow(workflowId))?.status, "bounded_stop");
+    const zeroResultTerminal = await queue.loadSubmissionByWorkflow(workflowId);
+    const zeroResultJobs = (await pool.query("SELECT status,error FROM workflow_jobs WHERE workflow_id=$1 ORDER BY created_at", [workflowId])).rows;
+    const zeroResultExecutions = await persistence.listExecutionProvenance(workflowId);
+    assert.equal(zeroResultTerminal?.status, "bounded_stop", JSON.stringify({ jobs:zeroResultJobs, executions:zeroResultExecutions.map((entry)=>({ status:entry.status,errorClassification:entry.errorClassification,configuration:entry.configuration })) }));
     const report = (await persistence.listArtifacts(workflowId)).find((artifact) => artifact.kind === "research_report" && artifact.status === "completed");
     assert.ok(report);
     assert.equal(report.payload.researchStatus, "INSUFFICIENT_EVIDENCE");
@@ -609,9 +643,11 @@ test("V2 direction through verification reaches durable bounded stop with CEO at
       transports.push({ direction, final, model: submitted.model });
       return sse(RESEARCH_MODEL, direction ? v2Mission(researchStep.id) : v2Grounded(researchStep.id), direction ? PLAN_COST : SYNTHESIS_COST);
     };
-    const runtime = await createProductionWorker({ pool, providerBoundary: makeBoundary(persistence, pool), orphanStaleMs: Number.MAX_SAFE_INTEGER });
+    const runtime = await createProductionWorker({ pool, providerBoundary: makeBoundary(persistence, pool), orphanStaleMs: 2_000_000_000 });
     assert.equal(await runtime.worker.runOnce(), true);
-    await waitForSubmission(queue, workflowId, "bounded_stop");
+    const verificationTerminal = await queue.loadSubmissionByWorkflow(workflowId);
+    const verificationExecutions = await persistence.listExecutionProvenance(workflowId);
+    assert.equal(verificationTerminal?.status, "bounded_stop", JSON.stringify(verificationExecutions.map((entry)=>({status:entry.status,errorClassification:entry.errorClassification,configuration:entry.configuration}))));
     assert.equal(transports.filter((entry) => entry.direction).length, 1);
     assert.equal(transports.filter((entry) => entry.final).length, 1);
     const instance = await persistence.loadWorkflow(workflowId);
@@ -683,7 +719,7 @@ test("RETRY attempt B on the same workflow persists distinct evidence", async ()
         requiredArtifactsByStep: { [orchestratorStep.id]: { artifactKind: "execution_plan" } },
         stopAfterStepId: researchStep.id,
       });
-      const runtime = await createProductionWorker({ pool, providerBoundary: makeBoundary(persistence, pool), orphanStaleMs: Number.MAX_SAFE_INTEGER });
+      const runtime = await createProductionWorker({ pool, providerBoundary: makeBoundary(persistence, pool), orphanStaleMs: 2_000_000_000 });
       assert.equal(await runtime.worker.runOnce(), true);
       await waitForSubmission(queue, workflowId, "bounded_stop");
       return dispatched;
@@ -704,7 +740,7 @@ test("RETRY attempt B on the same workflow persists distinct evidence", async ()
     const reports = artifacts.filter((artifact) => artifact.kind === "research_report" && artifact.status === "completed");
     assert.equal(reports.length, 2);
     const latest = reports[reports.length - 1];
-    assert.equal(latest.payload.metadata.providerInfo.evidenceId, successes[1].evidence_id, "final artifact lineage identifies attempt B evidence");
+    assert.equal(latest.payload.metadata.providerInfo.evidenceIds.includes(successes[1].evidence_id), true, "final artifact lineage identifies attempt B evidence");
 
     const budgets = await pool.query("SELECT call_kind,consumed_count FROM production_phase_call_budgets WHERE project_id='morroway' AND phase='PRE_MEDIA_PHASE' ORDER BY call_kind");
     assert.deepEqual(budgets.rows.map((row) => [row.call_kind, Number(row.consumed_count)]), [["research", 2], ["text_agent", 4]]);
@@ -754,7 +790,7 @@ test("NEEDS research fails closed without CEO", async () => {
       }
       throw new Error(`REAL_EGRESS_BLOCKED:${target.slice(0, 80)}`);
     };
-    const runtime = await createProductionWorker({ pool, providerBoundary: makeBoundary(persistence, pool), orphanStaleMs: Number.MAX_SAFE_INTEGER });
+    const runtime = await createProductionWorker({ pool, providerBoundary: makeBoundary(persistence, pool), orphanStaleMs: 2_000_000_000 });
     assert.equal(await runtime.worker.runOnce(), true);
     await waitForSubmission(queue, workflowId, "failed");
     const artifacts = await persistence.listArtifacts(workflowId);

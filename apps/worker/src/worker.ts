@@ -95,6 +95,8 @@ export interface WorkflowWorkerDeps {
   readonly workerInstanceId?: string;
   readonly jobLeaseHeartbeatMs?: number;
   readonly pollMs?: number;
+  /** Temporary supervised Wan queue; one durable scene execution at a time. */
+  readonly supervisedWan?: { runOnce(): Promise<boolean> };
   readonly buildEngine?: (definition: WorkflowDefinition) => DefaultWorkflowEngine;
   readonly resolveCommandConfiguration?: (projectId: string) => Promise<Record<string, { provider: string | null; model: string | null; source: string; routingVersionId?: string; routingScope?: string; priceSnapshotId?: string }>>;
   /** Production wiring supplies the canonical route/catalog/context preflight. */
@@ -173,6 +175,7 @@ export class WorkflowWorker {
    * queue was empty. Used directly by tests; runLoop() drives it continuously.
    */
   async runOnce(): Promise<boolean> {
+    if(this.deps.supervisedWan&&await this.deps.supervisedWan.runOnce())return true;
     const job = await this.deps.queue.claimNextJob(this.deps.workerInstanceId);
     if (job === null) return false;
     const heartbeatMs = this.deps.jobLeaseHeartbeatMs ?? Math.max(1_000, Math.floor(this.staleMs / 3));

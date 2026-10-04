@@ -39,10 +39,16 @@ test("2: project isolation between content lists", async () => {
   await migrate(pool);
   try {
     const store = new ContentStore(pool);
-    const a = await store.createContent({ projectId: "proj-a", title: "A", objective: "oa" });
-    await store.createContent({ projectId: "proj-b", title: "B", objective: "ob" });
-    assert.deepEqual((await store.listContent("proj-a")).map((x) => x.contentId), [a.contentId]);
-    assert.equal((await store.listContent("proj-b")).length, 1);
+    // The isolated test database is intentionally durable across invocations so
+    // migration/idempotency tests can re-open it.  Use invocation-scoped project
+    // identities to keep this assertion repeatable without destructive cleanup.
+    const scope = `${process.pid}-${Date.now()}`;
+    const projectA = `proj-a-${scope}`;
+    const projectB = `proj-b-${scope}`;
+    const a = await store.createContent({ projectId: projectA, title: "A", objective: "oa" });
+    await store.createContent({ projectId: projectB, title: "B", objective: "ob" });
+    assert.deepEqual((await store.listContent(projectA)).map((x) => x.contentId), [a.contentId]);
+    assert.equal((await store.listContent(projectB)).length, 1);
   } finally { await pool.end(); }
 });
 

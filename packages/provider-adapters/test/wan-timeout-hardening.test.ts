@@ -79,8 +79,13 @@ describe("Wan submission timeout and cold-start hardening", () => {
   });
 
   it("J ambiguous acknowledgement never triggers an adapter retry", async (t) => {
-    const mock = await createRunPodVideoMock(); t.after(() => mock.close()); mock.state.ackDelayMs = 50;
-    await adapter(mock.url, { submissionAckTimeoutMs: 5 }).generate(request("ambiguous")).then(() => ok(false), (error) => ok((error as { reconciliationRequired?: boolean }).reconciliationRequired));
+    const mock = await createRunPodVideoMock(); t.after(() => mock.close()); mock.state.ackDelayMs = 150;
+    // Leave enough local scheduling time for the mock server to observe the
+    // request while still forcing an acknowledgement timeout.  A 5ms window was
+    // timing-sensitive under the full workspace matrix and could abort before
+    // the local server accepted the socket, testing scheduler contention rather
+    // than the one-POST ambiguity invariant.
+    await adapter(mock.url, { submissionAckTimeoutMs: 50 }).generate(request("ambiguous")).then(() => ok(false), (error) => ok((error as { reconciliationRequired?: boolean }).reconciliationRequired));
     strictEqual(mock.state.runRequests, 1);
   });
 

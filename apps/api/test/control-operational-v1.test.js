@@ -35,7 +35,7 @@ before(async () => {
 after(async () => { await new Promise((r) => server.close(r)); await persistence.close(); });
 
 test("projects + workflows list surfaces submissions", async () => {
-  const s = await req("/workflows", { method: "POST", body: JSON.stringify({ directive: "research", correlationId: "op-v1-c1", brandId: "morroway", idempotencyKey: "op-v1-idem-1" }) });
+  const s = await req("/workflows", { method: "POST", body: JSON.stringify({ directive: "produce-pre-media", correlationId: "op-v1-c1", brandId: "morroway", idempotencyKey: "op-v1-idem-1" }) });
   assert.equal(s.status, 201);
   const p = await req("/control/projects");
   assert.equal(p.status, 200);

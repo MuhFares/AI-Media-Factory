@@ -5,7 +5,7 @@
  * Defines the structure of each context section that goes into the final package.
  */
 
-import type { AgentId, Json, Timestamp, Uuid, WorkflowId, StepId, TurnId, BrandId, CorrelationId } from "./common";
+import type { AgentId, Json, Timestamp, Uuid, WorkflowId, StepId, TurnId, BrandId, CorrelationId } from "../core/common.js";
 
 /** Workflow Context Section — data from the current workflow. */
 export interface WorkflowContextSection {

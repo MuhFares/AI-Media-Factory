@@ -5,6 +5,7 @@
 
 import { describe, it } from "node:test";
 import { strictEqual, ok } from "node:assert";
+import { createHash } from "node:crypto";
 import type { CapabilityRequest, CapabilityResult } from "@ai-media-factory/tool-framework";
 import { createProviderCapabilityBoundary } from "@ai-media-factory/provider-adapters";
 import { BraveSearchAdapter } from "@ai-media-factory/provider-adapters";
@@ -173,7 +174,9 @@ describe("provider capability boundary", () => {
     });
 
     const request = makeRequest("publish.youtube", "publisher", {
-      assetId: `${media.url}/video.mp4`,
+      finalMediaArtifactId: "art-boundary-video",
+      finalMediaSha256: createHash("sha256").update(Buffer.alloc(4096, 0x42)).digest("hex"),
+      mediaTransportRef: { type: "HTTPS_URL", url: `${media.url}/video.mp4`, expectedSha256: createHash("sha256").update(Buffer.alloc(4096, 0x42)).digest("hex") },
       title: "Boundary video",
       options: { visibility: "unlisted" },
     });

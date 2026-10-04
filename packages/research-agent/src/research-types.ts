@@ -47,6 +47,21 @@ export interface ResearchAgentInput {
    */
   maxRetrievalCallsAvailable?: number;
   /**
+   * Durable execution scope for capability identities. The production worker
+   * supplies the current recovery execution id; an ordinary first execution
+   * may omit it and uses the stable `initial` scope.
+   */
+  recoveryScopeId?: string;
+  /** Durable, owner-authorized direction reuse for an exact-workflow recovery. */
+  reusedDirection?: {
+    mission: ResearchMission;
+    workflowId: string;
+    correlationId: string;
+    sourceExecutionId: string;
+    providerRequestId: string;
+    parsedPayloadFingerprint: string;
+  };
+  /**
    * Canonical project context supplied by the caller (brand/strategy facts with
    * provenance). The agent includes it in its prompt; it never improvises
    * brand strategy when this is absent (see PROJECT_CONTEXT_INCOMPLETE gate).
@@ -307,6 +322,22 @@ export interface DiscoveryLane {
   maxCalls: number;
   /** Expected output type. */
   expectedOutput: string;
+  /**
+   * Structured retrieval intent (optional; absent = broad discovery).
+   * Compact entity terms emitted by Direction so candidate/topic
+   * specificity survives query compilation and compaction. All
+   * collections are honest-empty when the lane is exploratory.
+   */
+  /** Named entities / subject phrases for this lane. */
+  subjectTerms?: string[];
+  /** Site-level geographical specificity (beyond mission geography). */
+  locationTerms?: string[];
+  /** Dynasty / century / date range / historical period phrases. */
+  periodTerms?: string[];
+  /** What needs corroboration (claim-shaped phrases). */
+  factTargets?: string[];
+  /** Archive / museum / university / government / academic preferences. */
+  sourcePreferences?: string[];
 }
 
 /** Capability support assessment for one desired source type. */

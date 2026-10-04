@@ -4,9 +4,11 @@ import { directiveToWorkflowDefinition } from "@ai-media-factory/orchestrator";
 import { buildDefaultEngine, createProductionAgentExecutor } from "../dist/index.js";
 import { readFile } from "node:fs/promises";
 import { withV2ContractFixture } from "./visual-v2-fixtures.js";
+import { canonicalResearchResults } from "./canonical-production-fixtures.js";
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const fixtureAudioUrl = `data:audio/wav;base64,${(await readFile(new URL("../../../output/tts-benchmark/voicetut-short.wav", import.meta.url))).toString("base64")}`;
+const fixtureVideoUrl = "data:video/mp4;base64,AAAA";
 class MemoryPersistence {
   workflows = new Map(); checkpoints = new Map(); artifacts = new Map(); caps = new Map(); evidence = new Map(); decisions = new Map(); provenance = new Map();
   async saveWorkflow(v) { this.workflows.set(v.workflowId, clone(v)); }
@@ -40,13 +42,19 @@ function boundary(counts, trace) { return { boundary: { executeCapability: async
   traceEvent(trace, { kind: "capability", phase: "ENTER", id: request.capabilityId, at: Date.now() });
   counts[request.capabilityId] = (counts[request.capabilityId] ?? 0) + 1; const i = request.input ?? {};
   let result;
-  if (request.capabilityId === "web.search") result = success(request, { results: [{ title: "Egypt travel", url: "https://example.test/egypt", snippet: "fixture" }] });
+  if (request.capabilityId === "web.search") result = success(request, { results: canonicalResearchResults });
   else if (request.capabilityId === "tts.generate") result = success(request, { audioUrl: fixtureAudioUrl, audioId: "narration-fixture", providerId: "mock-tts", durationMs: 12640, audioIntegrity: "VALID" });
   else if (request.capabilityId === "timeline.plan") result = success(request, { timelineId: "timeline-13740", narrationDurationMs: i.narrationDurationMs, sceneIds: ["scene-001", "scene-002", "scene-003"] });
   else if (request.capabilityId === "image.generate") result = success(request, { imageId: `image-${i.sceneId}`, url: `file:///${i.sceneId}.png`, providerId: "mock-image" });
-  else if (request.capabilityId === "video.generate") result = success(request, { videoId: `video-${i.sourceAssetIds?.[0] ?? counts[request.capabilityId]}`, url: `file:///clip-${counts[request.capabilityId]}.mp4`, providerId: "mock-wan", durationSeconds: 4 }, { videoStatus: "completed" });
-  else if (request.capabilityId === "media.compose") result = success(request, { mediaId: "final-media", output: { path: "file:///final.mp4", mimeType: "video/mp4", bytes: 1, sha256: "fixture" }, final: { durationMs: 13740, width: 1080, height: 1920, videoCodec: "h264", audioCodec: "aac" }, composition: { strategy: "shortest", videoCopied: false } });
-  else if (request.capabilityId === "publish.youtube") result = success(request, { publicationId: "mock-publication", url: "https://example.test/publication", publishedAt: new Date().toISOString(), providerId: "mock-publisher", idempotencyKey: "mock-publish-key" }, { platform: "youtube" });
+  else if (request.capabilityId === "video.generate") result = success(request, { videoId: `video-${i.sourceAssetIds?.[0] ?? counts[request.capabilityId]}`, url: fixtureVideoUrl, providerId: "mock-wan", durationSeconds: 1 }, { videoStatus: "completed" });
+  else if (request.capabilityId === "media.compose") result = success(request, { mediaId: "final-media", output: { path: fixtureVideoUrl, mimeType: "video/mp4", bytes: 3, sha256: "fixture" }, final: { durationMs: 12640, width: 1080, height: 1920, videoCodec: "h264", audioCodec: "aac" }, composition: { strategy: "shortest", videoCopied: false } });
+  else if (request.capabilityId === "publish.youtube") result = success(request, {
+    publicationId: "mock-publication", url: "https://example.test/publication",
+    publishedAt: new Date().toISOString(), providerId: "mock-publisher",
+    idempotencyKey: i.idempotencyKey, finalMediaArtifactId: i.finalMediaArtifactId,
+    finalMediaSha256: i.finalMediaSha256, mediaTransportType: i.mediaTransportRef?.type,
+    mediaTransportFingerprint: "fixture-media-transport",
+  }, { platform: "youtube" });
   else result = success(request, {});
   traceEvent(trace, { kind: "capability", phase: "EXIT", id: request.capabilityId, at: Date.now() });
   return result;
@@ -57,6 +65,11 @@ test("actual produce workflow reaches durable media closure before the separatel
   const definition = directiveToWorkflowDefinition("produce"); const store = new MemoryPersistence(); const counts = {}; const trace = []; const workflowId = "wf-produce-durable";
   process.env.TEXT_AGENT_PROVIDER = "deterministic";
   const originalFetch = globalThis.fetch;
+  const originalWanMode = process.env.WAN_OPERATION_MODE;
+  // This legacy full-chain fixture exercises the generic batch-capable
+  // workflow. Temporary supervised Wan is certified separately and must not
+  // turn this provider-free composition fixture into a mode-gating test.
+  delete process.env.WAN_OPERATION_MODE;
   globalThis.fetch = async () => { trace.push({ kind: "network", phase: "BLOCKED", id: "fetch", at: Date.now() }); throw new Error("TEST_NETWORK_TRIPWIRE"); };
   try {
   const first = makeRuntime(store, counts, definition, trace);
@@ -85,7 +98,12 @@ test("actual produce workflow reaches durable media closure before the separatel
   await second.engine.resume(workflowId);
   await waitFor(async () => (await store.loadWorkflow(workflowId))?.state === "AWAITING_APPROVAL", "reloaded visual human gate");
   await second.engine.signalApproval(workflowId, { workflowId, stepId: "visual-human-gate", outcome: "approved", approver: "human_operator", note: "fixture approval", decidedAt: new Date().toISOString(), sceneDecisions: { "scene-001": "APPROVED", "scene-002": "APPROVED", "scene-003": "APPROVED" } });
-  await waitFor(async () => { const workflow = await store.loadWorkflow(workflowId); return workflow?.state === "AWAITING_APPROVAL" && workflow.steps?.find((step) => step.stepId === "final-human-gate")?.status === "running"; }, "final human gate");
+  try {
+    await waitFor(async () => { const workflow = await store.loadWorkflow(workflowId); return workflow?.state === "AWAITING_APPROVAL" && workflow.steps?.find((step) => step.stepId === "final-human-gate")?.status === "running"; }, "final human gate");
+  } catch (error) {
+    const workflow = await store.loadWorkflow(workflowId);
+    throw new Error(`${error.message}; state=${workflow?.state}; failed=${workflow?.steps?.filter((step) => step.status === "failed").map((step) => step.stepId).join(",")}`);
+  }
   const finalGateArtifacts = await store.listArtifacts(workflowId); const finalMediaBeforeFinalGate = finalGateArtifacts.find((a) => a.kind === "final_media_artifact"); const technical = finalGateArtifacts.find((a) => a.kind === "final_technical_qa"); const product = finalGateArtifacts.find((a) => a.kind === "final_product_review"); assert.ok(finalMediaBeforeFinalGate && technical && product); assert.equal(finalMediaBeforeFinalGate.correlationId, "corr-produce");
   const finalRuntime = makeRuntime(store, counts, definition, trace); assert.notEqual(finalRuntime.engine, second.engine);
   await finalRuntime.engine.resume(workflowId); await waitFor(async () => { const workflow = await store.loadWorkflow(workflowId); return workflow?.state === "AWAITING_APPROVAL" && workflow.steps?.find((step) => step.stepId === "final-human-gate")?.status === "running"; }, "reloaded final gate");
@@ -104,5 +122,9 @@ test("actual produce workflow reaches durable media closure before the separatel
   for (const agent of ["director", "tts", "timeline", "scene-image", "video", "composer"]) assert.ok(provenance.some((row) => row.agentId === agent && row.capability === "agent.execute"), `agent attribution: ${agent}`);
   for (const capability of ["tts.generate", "image.generate", "video.generate", "media.compose"]) assert.ok(provenance.some((row) => row.capability === capability), `attribution: ${capability}`);
   for (const sceneId of ["scene-001", "scene-002", "scene-003"]) assert.ok(provenance.some((row) => row.capability === "image.generate" && row.artifactIds.includes(`art-${workflowId}-${sceneId}-visual`)), `image artifact linkage: ${sceneId}`);
-  } finally { globalThis.fetch = originalFetch; }
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalWanMode === undefined) delete process.env.WAN_OPERATION_MODE;
+    else process.env.WAN_OPERATION_MODE = originalWanMode;
+  }
 });

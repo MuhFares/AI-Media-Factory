@@ -60,3 +60,11 @@ temp/
 *.mp4
 *.wav
 *.png.tmp
+
+# ---------- Local operator state (never commit) ----------
+# Zero tracked files under each path (verified 2026-10-04); runtime state,
+# caches, vendored envs, and tool metadata only. Nothing deleted by ignoring.
+.pnpm-store/
+.tools/
+work/
+.kilo/
