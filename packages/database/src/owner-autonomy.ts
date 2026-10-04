@@ -197,10 +197,21 @@ export class OwnerAutonomyStore {
     } catch (e) { await c.query("ROLLBACK"); throw e; } finally { c.release(); }
   }
 
-  async setBudget(input: { projectId: string; phase: string; callKind: string; limit: number; maxRetries: number; actor: string; reason: string }) {
+  async setBudget(input: { projectId: string; phase: string; callKind: string; limit: number; maxRetries: number; actor: string; reason: string; allowedCallLegs?: string[] | null }) {
     if (!Number.isInteger(input.limit) || input.limit < 0) throw new Error("BUDGET_LIMIT_INVALID");
     if (!Number.isInteger(input.maxRetries) || input.maxRetries < 0) throw new Error("BUDGET_RETRIES_INVALID");
     if (!input.reason.trim()) throw new Error("OWNER_REASON_REQUIRED");
+    // Stage scope is set once at row creation and never widened by later
+    // limit maintenance: the conflict branch below preserves it.
+    let scope: string[] | null = null;
+    if (input.allowedCallLegs !== undefined && input.allowedCallLegs !== null) {
+      if (!Array.isArray(input.allowedCallLegs)) throw new Error("BUDGET_STAGE_SCOPE_INVALID");
+      const legs = [...new Set(input.allowedCallLegs)];
+      if (legs.length !== input.allowedCallLegs.length || legs.some((leg) => typeof leg !== "string" || !/^[A-Z][A-Z0-9_]{2,63}$/.test(leg))) {
+        throw new Error("BUDGET_STAGE_SCOPE_INVALID");
+      }
+      scope = legs;
+    }
     const c = await this.pool.connect();
     try {
       await c.query("BEGIN"); await this.project(input.projectId, c);
@@ -209,9 +220,9 @@ export class OwnerAutonomyStore {
       const reserved = Number(before?.reserved_count ?? 0), used = Number(before?.consumed_count ?? 0);
       if (reserved + used > input.limit) throw new Error("BUDGET_LIMIT_BELOW_CURRENT_EXPOSURE");
       const now = new Date().toISOString();
-      await c.query(`INSERT INTO production_phase_call_budgets(project_id,phase,call_kind,limit_count,reserved_count,consumed_count,max_retries,active,updated_at)
-        VALUES($1,$2,$3,$4,0,0,$5,TRUE,$6)
-        ON CONFLICT(project_id,phase,call_kind) DO UPDATE SET limit_count=$4,max_retries=$5,active=TRUE,updated_at=$6`, [input.projectId,input.phase,input.callKind,input.limit,input.maxRetries,now]);
+      await c.query(`INSERT INTO production_phase_call_budgets(project_id,phase,call_kind,limit_count,reserved_count,consumed_count,max_retries,active,updated_at,allowed_call_legs)
+        VALUES($1,$2,$3,$4,0,0,$5,TRUE,$6,$7)
+        ON CONFLICT(project_id,phase,call_kind) DO UPDATE SET limit_count=$4,max_retries=$5,active=TRUE,updated_at=$6`, [input.projectId,input.phase,input.callKind,input.limit,input.maxRetries,now,scope === null ? null : JSON.stringify(scope)]);
       const after = (await c.query(`SELECT * FROM production_phase_call_budgets WHERE project_id=$1 AND phase=$2 AND call_kind=$3`, [input.projectId,input.phase,input.callKind])).rows[0];
       const audit = await this.audit({ projectId: input.projectId, action: "BUDGET_SET", subjectType: "production_budget", subjectId: `${input.phase}:${input.callKind}`, actor: input.actor, reason: input.reason, before, after, metadata: { executionAuthorityGranted: false } }, c);
       await c.query("COMMIT");

@@ -7,7 +7,7 @@ export type { WorkflowWorkerDeps } from "./worker.js";
 export { buildDefaultEngine, waitForTerminal } from "./engine.js";
 export type { BuildEngineDeps, WorkflowTerminalState } from "./engine.js";
 export { createDeterministicAgentExecutor } from "./executor.js";
-export { createProductionAgentExecutor, ProductionAgentExecutor, executeGovernedAgentRouterVisibleJson, executeGovernedVisibleJson, buildProviderBoundary, probeProductionOpenRouterTransport, sanitizedFailureMessage, researchCapabilityRequestId, classifySourceAuthority, sourceAuthorityRank, evaluateResearchEvidenceSufficiency, researchStatusForSufficiency, reclassifyResearchEvidence, normalizeResearchArtifactLineage, groundResearchReport, buildDiscoveryQueries, buildVerificationQuery,
+  export { createProductionAgentExecutor, ProductionAgentExecutor, researchReservationCallLeg, executeGovernedAgentRouterVisibleJson, executeGovernedVisibleJson, buildProviderBoundary, probeProductionOpenRouterTransport, sanitizedFailureMessage, researchCapabilityRequestId, classifySourceAuthority, sourceAuthorityRank, evaluateResearchEvidenceSufficiency, researchStatusForSufficiency, reclassifyResearchEvidence, normalizeResearchArtifactLineage, groundResearchReport, buildDiscoveryQueries, buildVerificationQuery,
 isGenericFactListQuery, persistCapabilityResultDurably, modelRequiresReasoning, modelSupportsReasoningNone, withRoleReasoningPolicy } from "./production-executor.js";
 export { GovernedAgentRuntime } from "./governed-agent-runtime.js";
 export { resolveApprovedProjectContext, assertMorrowayHistoricalContext } from "./project-context.js";

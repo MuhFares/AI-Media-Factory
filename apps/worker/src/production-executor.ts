@@ -2249,6 +2249,20 @@ function synthesizeQa(input: JsonRecord): Json {
 // Production agent executor.
 // ---------------------------------------------------------------------------
 
+/**
+ * Canonical call-leg identity for research reservations. Mirrors the
+ * repair-time derivation (role + callKind + idempotency suffix) as a
+ * reserve-time input so stage-scoped budgets can authorize the exact leg.
+ * Only research legs have canonical values today; every other agent returns
+ * null and can spend unrestricted legacy capacity only. Never invent values
+ * for agents without a canonical leg.
+ */
+export function researchReservationCallLeg(agent: string, callKind: "research" | "text_agent", keySuffix: string): string | null {
+  if (agent !== "research") return null;
+  if (callKind === "research") return "RETRIEVAL";
+  return keySuffix === ":synthesis" ? "FINAL_SYNTHESIS" : "DIRECTION";
+}
+
 export class ProductionAgentExecutor implements AgentExecutorPort {
   private readonly persistence?: PersistencePort;
   private readonly boundary: ProviderCapabilityBoundary;
@@ -2680,6 +2694,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
       for (const spec of reservationSpecs) {
         reservations.push(await this.productionCallBudget.reserve({
           projectId, workflowId: context.workflowId, phase: budgetPhase, stage: step.id, role: step.agent, callKind: spec.callKind,
+          callLeg: researchReservationCallLeg(step.agent, spec.callKind, spec.keySuffix),
           idempotencyKey: `${context.workflowId}:${step.id}:${spec.callKind}:v1${recoverySuffix}${spec.keySuffix}`,
           routingVersionId: typeof route.routingVersionId === "string" ? route.routingVersionId : null,
           exactModelId: typeof safeRecord(safeRecord(data.controlAgentOverrides)[step.agent]).model === "string" ? String(safeRecord(safeRecord(data.controlAgentOverrides)[step.agent]).model) : null,

@@ -5,6 +5,33 @@ export type ProductionCallKind = "research" | "text_agent";
 export interface ProductionCallReservation {
   reservationId:string; idempotencyKey:string; projectId:string; workflowId:string;
   phase:string; stage:string; role:string; callKind:ProductionCallKind; status:string;
+  callLeg?:string|null;
+}
+
+/**
+ * Canonical call-leg identity for stage-scoped budget authorization. Stage
+ * alone is too coarse (the research step covers DIRECTION, synthesis, and
+ * retrieval legs), so scope is evaluated against the explicit leg the caller
+ * asserts at reserve time. This promotes the pre-existing repair-time
+ * vocabulary (repairCallLeg) to a first-class reserve-time input; no new
+ * namespace is invented. Callers without a canonical leg pass null and can
+ * only spend unrestricted legacy capacity.
+ */
+export const BUDGET_CALL_LEG_PATTERN = /^[A-Z][A-Z0-9_]{2,63}$/;
+
+/**
+ * Normalize a stored allowed_call_legs scope. NULL (legacy rows) means
+ * unrestricted; a JSON array means exactly those legs (empty = none).
+ * Anything else is misconfiguration and fails closed at reserve time.
+ */
+export function normalizeAllowedCallLegs(value: unknown): string[] | null {
+  if (value === null || value === undefined) return null;
+  if (!Array.isArray(value)) throw new Error("BUDGET_STAGE_SCOPE_INVALID");
+  const legs = [...new Set(value.filter((entry): entry is string => typeof entry === "string") )] ;
+  if (legs.length !== value.length || legs.some((leg) => !BUDGET_CALL_LEG_PATTERN.test(leg))) {
+    throw new Error("BUDGET_STAGE_SCOPE_INVALID");
+  }
+  return legs;
 }
 
 export interface ProductionCallRepairResult {
@@ -39,14 +66,13 @@ export class ProductionCallBudgetStore {
 
   async budgets(projectId:string,phase="PRE_MEDIA_PHASE") {
     const q=await this.pool.query(
-      `SELECT call_kind,limit_count,reserved_count,consumed_count,max_retries,active
-       FROM production_phase_call_budgets WHERE project_id=$1 AND phase=$2 ORDER BY call_kind`,
+      `SELECT call_kind,limit_count,reserved_count,consumed_count,max_retries,active,allowed_call_legs FROM production_phase_call_budgets WHERE project_id=$1 AND phase=$2 ORDER BY call_kind`,
       [projectId,phase],
     );
-    return q.rows.map((r:any)=>({callKind:String(r.call_kind),limit:Number(r.limit_count),reserved:Number(r.reserved_count),consumed:Number(r.consumed_count),remaining:Number(r.limit_count)-Number(r.reserved_count)-Number(r.consumed_count),maxRetries:Number(r.max_retries),active:r.active===true}));
+    return q.rows.map((r:any)=>({callKind:String(r.call_kind),limit:Number(r.limit_count),reserved:Number(r.reserved_count),consumed:Number(r.consumed_count),remaining:Number(r.limit_count)-Number(r.reserved_count)-Number(r.consumed_count),maxRetries:Number(r.max_retries),active:r.active===true,allowedCallLegs:Array.isArray(r.allowed_call_legs)?r.allowed_call_legs.filter((leg:unknown):leg is string=>typeof leg==="string"):null}));
   }
 
-  async reserve(input:{projectId:string;workflowId:string;phase:string;stage:string;role:string;callKind:ProductionCallKind;idempotencyKey:string;routingVersionId?:string|null;exactModelId?:string|null;priceSnapshotId?:string|null;estimatedCostUsd?:number|null;provenance?:Record<string,unknown>}):Promise<ProductionCallReservation>{
+  async reserve(input:{projectId:string;workflowId:string;phase:string;stage:string;role:string;callKind:ProductionCallKind;callLeg?:string|null;idempotencyKey:string;routingVersionId?:string|null;exactModelId?:string|null;priceSnapshotId?:string|null;estimatedCostUsd?:number|null;provenance?:Record<string,unknown>}):Promise<ProductionCallReservation>{
     const c=await this.pool.connect();
     try{
       await c.query("BEGIN");
@@ -56,15 +82,26 @@ export class ProductionCallBudgetStore {
         if(r.status==="RESERVED")throw new Error("PRODUCTION_CALL_RESERVATION_AMBIGUOUS");
         throw new Error("DUPLICATE_BILLABLE_EXECUTION_BLOCKED");
       }
-      const b=await c.query(`SELECT limit_count,reserved_count,consumed_count,active FROM production_phase_call_budgets WHERE project_id=$1 AND phase=$2 AND call_kind=$3 FOR UPDATE`,[input.projectId,input.phase,input.callKind]);
+      const b=await c.query(`SELECT limit_count,reserved_count,consumed_count,active,allowed_call_legs FROM production_phase_call_budgets WHERE project_id=$1 AND phase=$2 AND call_kind=$3 FOR UPDATE`,[input.projectId,input.phase,input.callKind]);
       if(!b.rowCount||b.rows[0].active!==true)throw new Error(`PRODUCTION_PHASE_BUDGET_UNAVAILABLE:${input.callKind}`);
+      // Stage-scoped authorization is evaluated BEFORE any capacity mutation:
+      // a rejected leg consumes zero capacity and creates no reservation.
+      // Legacy rows (NULL scope) skip this check exactly as before.
+      const scope=normalizeAllowedCallLegs(b.rows[0].allowed_call_legs);
+      if(scope!==null){
+        const leg=typeof input.callLeg==="string"?input.callLeg:null;
+        if(leg===null||!BUDGET_CALL_LEG_PATTERN.test(leg)||!scope.includes(leg)){
+          throw new Error(`BUDGET_STAGE_NOT_AUTHORIZED:${input.callKind}`);
+        }
+      }
       const limit=Number(b.rows[0].limit_count), exposure=Number(b.rows[0].reserved_count)+Number(b.rows[0].consumed_count);
       if(exposure+1>limit)throw new Error(`PRODUCTION_PHASE_HARD_CAP_STOP:${input.callKind}`);
       const reservationId=`production-call-${randomUUID()}`,now=new Date().toISOString();
+      const provenance={...input.provenance??{},...(typeof input.callLeg==="string"?{callLeg:input.callLeg}:{})};
       await c.query(`UPDATE production_phase_call_budgets SET reserved_count=reserved_count+1,updated_at=$4 WHERE project_id=$1 AND phase=$2 AND call_kind=$3`,[input.projectId,input.phase,input.callKind,now]);
-      await c.query(`INSERT INTO production_call_reservations(reservation_id,idempotency_key,project_id,workflow_id,phase,stage,role,call_kind,status,routing_version_id,exact_model_id,price_snapshot_id,estimated_cost_usd,reserved_at,provenance) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'RESERVED',$9,$10,$11,$12,$13,$14)`,[reservationId,input.idempotencyKey,input.projectId,input.workflowId,input.phase,input.stage,input.role,input.callKind,input.routingVersionId??null,input.exactModelId??null,input.priceSnapshotId??null,input.estimatedCostUsd??null,now,JSON.stringify(input.provenance??{})]);
+      await c.query(`INSERT INTO production_call_reservations(reservation_id,idempotency_key,project_id,workflow_id,phase,stage,role,call_kind,status,routing_version_id,exact_model_id,price_snapshot_id,estimated_cost_usd,reserved_at,provenance) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'RESERVED',$9,$10,$11,$12,$13,$14)`,[reservationId,input.idempotencyKey,input.projectId,input.workflowId,input.phase,input.stage,input.role,input.callKind,input.routingVersionId??null,input.exactModelId??null,input.priceSnapshotId??null,input.estimatedCostUsd??null,now,JSON.stringify(provenance)]);
       await c.query("COMMIT");
-      return{reservationId,idempotencyKey:input.idempotencyKey,projectId:input.projectId,workflowId:input.workflowId,phase:input.phase,stage:input.stage,role:input.role,callKind:input.callKind,status:"RESERVED"};
+      return{reservationId,idempotencyKey:input.idempotencyKey,projectId:input.projectId,workflowId:input.workflowId,phase:input.phase,stage:input.stage,role:input.role,callKind:input.callKind,callLeg:typeof input.callLeg==="string"?input.callLeg:null,status:"RESERVED"};
     }catch(e){await c.query("ROLLBACK");throw e;}finally{c.release();}
   }
 

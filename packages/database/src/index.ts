@@ -112,7 +112,7 @@ export { ProductionModelRoutingStore } from "./production-model-routing.js";
 export type { RoutingSlot } from "./production-model-routing.js";
 export { evaluateLlmPreflight, estimatePromptTokens, retrievalPreflight, publicationPreflight, analyticsPreflight } from "./routing-preflight.js";
 export type { ModelAvailabilityState, StructuredOutputStrategy, CanonicalProtocol, CanonicalRouteResolution, ModelCatalogEvidence, LlmPreflightRequest, LlmPreflightResult, RetrievalPreflightInput, PublicationPreflightInput, AnalyticsPreflightInput } from "./routing-preflight.js";
-export { ProductionCallBudgetStore } from "./production-call-budget.js";
+  export { ProductionCallBudgetStore, BUDGET_CALL_LEG_PATTERN, normalizeAllowedCallLegs } from "./production-call-budget.js";
 export {
   WORKER_DIAGNOSTIC_COMMAND,
   WORKER_DIAGNOSTIC_REQUEST_CHANNEL,

@@ -1427,4 +1427,10 @@ SELECT 'morroway','PRE_MEDIA_PHASE',v.call_kind,v.limit_count,0,0,0,TRUE,'2026-0
 FROM (VALUES ('research',1),('text_agent',10)) AS v(call_kind,limit_count)
 WHERE EXISTS (SELECT 1 FROM control_projects WHERE project_id='morroway')
 ON CONFLICT(project_id,phase,call_kind) DO NOTHING;
+-- Stage-scoped budget authority (additive): NULL allowed_call_legs preserves
+-- legacy unrestricted behavior for every pre-existing row. A JSON array value
+-- restricts the row to the listed canonical call legs; an empty array
+-- authorizes zero legs. Scope is set at row creation and never widened by
+-- limit/maintenance updates.
+ALTER TABLE production_phase_call_budgets ADD COLUMN IF NOT EXISTS allowed_call_legs JSONB;
 `;
