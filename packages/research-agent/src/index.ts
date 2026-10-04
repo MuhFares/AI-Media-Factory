@@ -74,6 +74,7 @@ export {
   researchDirectionResponseSchema,
   normalizeResearchDirectionStageForRecovery,
   RESEARCH_DIRECTION_REQUIRED_FIELDS,
+  RESEARCH_SYNTHESIS_SEMANTIC_CLAUSES,
   normalizeRuntimeIdentityEchoes,
 } from "./research-agent.js";
 export type {

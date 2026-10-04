@@ -986,6 +986,25 @@ function hasBoundedStrategyFindings(value: Json): boolean {
     && isJsonRecord(item) && ["Instagram Reels", "YouTube Shorts", "TikTok"].includes(String(item.platform)));
 }
 
+/**
+ * Canonical model-facing semantic clauses for Final Synthesis. Each clause
+ * restates one invariant the runtime validator already enforces; the prompt
+ * builder interpolates them verbatim so prompt, validator, and regression
+ * tests share a single definition (drift in any one place is caught by the
+ * prompt-contract regression suite). Prompt guidance only: validation,
+ * schema, thresholds, and budgets are unchanged by these sentences.
+ */
+export const RESEARCH_SYNTHESIS_SEMANTIC_CLAUSES = [
+  'Status/candidate coherence is mandatory: when status is "insufficient_evidence", candidateStories MUST be [].',
+  'When status is "grounded", candidateStories MUST contain at least one valid evidence-linked candidate.',
+  'Never return candidate stories with "insufficient_evidence".',
+  "Every candidate needs a non-empty candidateId and topic; every candidate sourceIds entry and every citation sourceId MUST equal a sources[].id from the retrieved evidence.",
+  "Every source needs an http(s) URL; reportId MUST be a UUID; confidence MUST be a number from 0 to 1; taskDescription MUST describe the requested task in relevant terms; metadata MUST carry createdAt and agentVersion strings.",
+  "Visual rule: if usable visual research is unavailable, omit visual or set it to null. Never return visual as an empty object {}. If visual is present as an object, it MUST satisfy the complete visual contract (topic, visualMode, referenceStrategy, imageRefs, sourceRefs, observations, provenance).",
+  "Recommendation rule: mark recommendedForProduction true only for STRONG-verified, evidence-linked candidates.",
+  "Authority rule: never claim or request production, media, publication, upload, or generation actions in any field.",
+] as const;
+
 export class ResearchAgent extends BaseAgent {
   readonly id: AgentId = "research";
   readonly name = "Research Agent";
@@ -2164,7 +2183,7 @@ ${projectContext === null ? "" : `PROJECT CONTEXT:\n${JSON.stringify(projectCont
 RETRIEVED EVIDENCE (the only sources you may cite):
 ${JSON.stringify(evidence).slice(0, 6000)}
 Return one valid ResearchReport JSON with candidateStories, sources, citations, evidenceRisks, status, and metadata. An empty candidateStories list is valid when evidence is insufficient. Never invent source metadata or authority.
-Status/candidate coherence is mandatory: when status is "insufficient_evidence", candidateStories MUST be []. When status is "grounded", candidateStories MUST contain at least one valid evidence-linked candidate. Never return candidate stories with "insufficient_evidence".`;
+${RESEARCH_SYNTHESIS_SEMANTIC_CLAUSES.join(" ")}`;
   }
 
   /**
