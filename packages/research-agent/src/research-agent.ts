@@ -254,6 +254,14 @@ export const MAX_DISCOVERY_REQUESTS = 3;
 export const MAX_VERIFICATION_REQUESTS = 3;
 /** Maximum candidates formed per V2 execution (bounded). */
 export const MAX_CANDIDATES = 6;
+/**
+ * Minimum output-token budget for the FINAL_SYNTHESIS leg. Proven by live
+ * incident: a 4096-capped synthesis exhausted exactly 4096/4096 completion
+ * tokens (2232 reasoning + visible JSON in flight) with finish_reason=length
+ * while the same-model Direction leg completed at 2113. The floor never
+ * lowers an explicitly larger configuration and changes no call counts.
+ */
+export const FINAL_SYNTHESIS_MIN_OUTPUT_TOKENS = 8192;
 
 /** Canonical discovery lane ids (missions should prefer these; custom ids allowed with purpose). */
 export const CANONICAL_DISCOVERY_LANES = [
@@ -1762,6 +1770,15 @@ Every citation sourceId must refer to an item in sources. Do not invent sources,
     responseContract: "REPORT" | "DIRECTION" = "REPORT",
   ): ExecutionRequest {
     const strategyMode = prompt.startsWith("PRE_PUBLICATION_STRATEGY.");
+    // Final synthesis carries the full evidence payload plus a reasoning-heavy
+    // model leg: reasoning tokens consume the same output budget as visible
+    // JSON. A live synthesis exhausted exactly 4096/4096 tokens with
+    // finish_reason=length while 8KB of valid partial JSON was still in
+    // flight, so the synthesis leg carries a floor the planning leg does not
+    // need. The floor never lowers an explicitly larger configuration.
+    const maxOutputTokens = callLeg === "FINAL_SYNTHESIS"
+      ? Math.max(this.researchConfig.maxOutputTokens, FINAL_SYNTHESIS_MIN_OUTPUT_TOKENS)
+      : this.researchConfig.maxOutputTokens;
     return {
       model: this.researchConfig.model,
       system: strategyMode ? STRATEGY_RESEARCH_SYSTEM_PROMPT : this.researchConfig.systemPrompt,
@@ -1770,7 +1787,7 @@ Every citation sourceId must refer to an item in sources. Do not invent sources,
         { role: "user", content: prompt },
       ],
       temperature: this.researchConfig.temperature,
-      maxOutputTokens: this.researchConfig.maxOutputTokens,
+      maxOutputTokens,
       responseSchema: responseContract === "DIRECTION"
         ? researchDirectionResponseSchema()
         : this.getResearchResponseSchema(callLeg === "FINAL_SYNTHESIS"),
