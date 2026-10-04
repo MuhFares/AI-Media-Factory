@@ -47,6 +47,8 @@ export type {
   ResearchCapabilityReasonCode,
   ResearchCapabilityLifecycleState,
   ResearchCapabilityOutcome,
+  SynthesisFailureFamily,
+  SynthesisFailureClassification,
 } from "./research-agent.js";
 export {
   ResearchAgent,
@@ -59,6 +61,7 @@ export {
   isRelevantResearchDescription,
   validateResearchContractIdentity,
   classifyResearchCapabilityError,
+  classifySynthesisFailure,
   buildVerificationQueryFor,
   MAX_DISCOVERY_REQUESTS,
   MAX_VERIFICATION_REQUESTS,

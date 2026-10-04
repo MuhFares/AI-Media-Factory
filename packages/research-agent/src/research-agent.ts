@@ -98,6 +98,91 @@ export interface ResearchCapabilityOutcome {
   readonly reasonCode: ResearchCapabilityReasonCode;
 }
 
+/**
+ * Canonical bounded failure taxonomy for Research Final Synthesis. Pure
+ * classifier over a thrown error's message plus its attached safe
+ * diagnostics (never raw provider bodies): production, probes, and tests
+ * share it so every synthesis failure carries the same durable family, code,
+ * and bounded issue paths. Validation behavior is unchanged.
+ */
+export type SynthesisFailureFamily =
+  | "PROVIDER_HTTP_ERROR"
+  | "PROVIDER_RESPONSE_INCOMPLETE"
+  | "OUTPUT_TOKEN_LIMIT_EXHAUSTION"
+  | "JSON_PARSE_FAILURE"
+  | "STRUCTURAL_SCHEMA_FAILURE"
+  | "STATUS_CANDIDATE_COHERENCE_FAILURE"
+  | "VISUAL_CONTRACT_FAILURE"
+  | "SOURCE_LINKAGE_FAILURE"
+  | "CITATION_LINKAGE_FAILURE"
+  | "IDENTITY_FAILURE"
+  | "CONFIDENCE_FAILURE"
+  | "CANDIDATE_SEMANTIC_FAILURE"
+  | "AUTHORITY_BOUNDARY_FAILURE"
+  | "UNKNOWN_VALIDATION_FAILURE";
+
+export interface SynthesisFailureClassification {
+  readonly family: SynthesisFailureFamily;
+  readonly code: string | null;
+  readonly paths: readonly string[];
+}
+
+export function classifySynthesisFailure(error: unknown): SynthesisFailureClassification {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const diagnostics = isJsonRecord(((error as { diagnostics?: unknown } | null)?.diagnostics ?? null) as Json)
+    ? ((error as { diagnostics?: unknown }).diagnostics as JsonRecord)
+    : {};
+  const rawIssues = Array.isArray(diagnostics.issues) ? diagnostics.issues : [];
+  const paths = rawIssues
+    .filter((issue): issue is JsonRecord => isJsonRecord(issue as Json) && typeof (issue as JsonRecord).path === "string")
+    .map((issue) => String((issue as JsonRecord).path).slice(0, 160))
+    .slice(0, 10);
+  const issue = isJsonRecord(rawIssues[0] as Json) ? (rawIssues[0] as JsonRecord) : null;
+  const issueCode = typeof issue?.code === "string" ? String(issue.code) : null;
+  const termination = typeof diagnostics.terminationReason === "string" ? String(diagnostics.terminationReason) : null;
+  if (diagnostics.incomplete === true) {
+    return termination === "length"
+      ? { family: "OUTPUT_TOKEN_LIMIT_EXHAUSTION", code: termination, paths }
+      : { family: "PROVIDER_RESPONSE_INCOMPLETE", code: termination, paths };
+  }
+  if (typeof diagnostics.httpStatus === "number" && diagnostics.httpStatus !== 200) {
+    return { family: "PROVIDER_HTTP_ERROR", code: `HTTP_${diagnostics.httpStatus}`, paths };
+  }
+  if (/unauthorized media\/publication action/.test(message)) {
+    return { family: "AUTHORITY_BOUNDARY_FAILURE", code: "OWNER_AUTHORITY_BOUNDARY", paths };
+  }
+  if (/malformed visual research contract/.test(message)) {
+    return { family: "VISUAL_CONTRACT_FAILURE", code: "value_mismatch", paths };
+  }
+  if (/citation references an unknown source/.test(message)) {
+    return { family: "CITATION_LINKAGE_FAILURE", code: "value_mismatch", paths };
+  }
+  if (/non-JSON output/.test(message) || diagnostics.validationStage === "parse") {
+    return { family: "JSON_PARSE_FAILURE", code: typeof diagnostics.validationCode === "string" ? String(diagnostics.validationCode) : "parse", paths };
+  }
+  if (/invalid report structure/.test(message)) {
+    const head = paths[0] ?? "";
+    if (head === "candidateStories" || head.startsWith("candidateStories[")) {
+      const expected = typeof issue?.expected === "string" ? String(issue.expected) : "";
+      if (/empty array for insufficient_evidence|at least one candidate for grounded/.test(expected)) {
+        return { family: "STATUS_CANDIDATE_COHERENCE_FAILURE", code: issueCode, paths };
+      }
+      if (head.startsWith("candidateStories[")) {
+        return { family: "CANDIDATE_SEMANTIC_FAILURE", code: issueCode, paths };
+      }
+      return { family: "STRUCTURAL_SCHEMA_FAILURE", code: issueCode, paths };
+    }
+    if (head.startsWith("sources")) return { family: "SOURCE_LINKAGE_FAILURE", code: issueCode, paths };
+    if (head.startsWith("citations")) return { family: "CITATION_LINKAGE_FAILURE", code: issueCode, paths };
+    if (head === "reportId" || head === "taskId" || head === "stage" || head === "taskDescription") {
+      return { family: "IDENTITY_FAILURE", code: issueCode, paths };
+    }
+    if (head === "confidence") return { family: "CONFIDENCE_FAILURE", code: issueCode, paths };
+    return { family: "STRUCTURAL_SCHEMA_FAILURE", code: issueCode, paths };
+  }
+  return { family: "UNKNOWN_VALIDATION_FAILURE", code: issueCode, paths };
+}
+
 /** Bounded per-call LLM usage for budget attribution (never negative/NaN). */
 function toCallUsage(usage: unknown): ResearchCallUsage {
   const record = (usage ?? {}) as unknown as Record<string, unknown>;

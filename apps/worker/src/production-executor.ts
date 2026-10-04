@@ -1526,7 +1526,14 @@ export async function probeProductionOpenRouterTransport(): Promise<{ httpStatus
   return { httpStatus:response.status, latencyMs:Date.now()-started, providerReached:true, authValid:response.status===200?true:response.status===401||response.status===403?false:null };
 }
 
-function openRouterLlm(requestedModelOverride?: string): ExecuteFn {
+/**
+ * Canonical production OpenRouter chat transport (streaming SSE, strict
+ * envelope from openRouterResponseFormat, bounded diagnostics, fail-closed
+ * incomplete/empty/model-mismatch classification, no retry, no fallback).
+ * Exported so diagnostic probes and regression tests invoke the SAME
+ * primitive production synthesis uses instead of transcribing it.
+ */
+export function openRouterLlm(requestedModelOverride?: string): ExecuteFn {
   const boundedTimeoutMs = resolveOpenRouterTimeoutMs();
   return async (_context: ExecutionContext, request: ExecutionRequest) => {
     const requestedModel = requestedModelOverride?.trim() ? requestedModelOverride.trim() : (request.model?.trim() ? request.model.trim() : (process.env.OPENROUTER_DEFAULT_MODEL ?? "openai/gpt-oss-20b:free"));
