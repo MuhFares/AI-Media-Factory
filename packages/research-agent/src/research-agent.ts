@@ -2163,7 +2163,8 @@ Planning summary: ${JSON.stringify(plan.summary).slice(0, 900)}
 ${projectContext === null ? "" : `PROJECT CONTEXT:\n${JSON.stringify(projectContext).slice(0, 2000)}\n`}
 RETRIEVED EVIDENCE (the only sources you may cite):
 ${JSON.stringify(evidence).slice(0, 6000)}
-Return one valid ResearchReport JSON with candidateStories, sources, citations, evidenceRisks, status, and metadata. An empty candidateStories list is valid when evidence is insufficient. Never invent source metadata or authority.`;
+Return one valid ResearchReport JSON with candidateStories, sources, citations, evidenceRisks, status, and metadata. An empty candidateStories list is valid when evidence is insufficient. Never invent source metadata or authority.
+Status/candidate coherence is mandatory: when status is "insufficient_evidence", candidateStories MUST be []. When status is "grounded", candidateStories MUST contain at least one valid evidence-linked candidate. Never return candidate stories with "insufficient_evidence".`;
   }
 
   /**
