@@ -18,6 +18,7 @@ import type {
   ResearchReport,
   ResearchSource,
   ResearchMission,
+  ResearchSynthesisLeg,
   CandidateOpportunity,
   CandidateVerificationPlan,
   ResearchCandidateStory,
@@ -1883,8 +1884,11 @@ Every citation sourceId must refer to an item in sources. Do not invent sources,
     const maxOutputTokens = callLeg === "FINAL_SYNTHESIS"
       ? Math.max(this.researchConfig.maxOutputTokens, FINAL_SYNTHESIS_MIN_OUTPUT_TOKENS)
       : this.researchConfig.maxOutputTokens;
+    const legModel = callLeg === "DIRECTION" || callLeg === "FINAL_SYNTHESIS"
+      ? this.researchConfig.modelForLeg?.[callLeg]
+      : undefined;
     return {
-      model: this.researchConfig.model,
+      model: (typeof legModel === "string" && legModel.trim() ? legModel : undefined) ?? this.researchConfig.model,
       system: strategyMode ? STRATEGY_RESEARCH_SYSTEM_PROMPT : this.researchConfig.systemPrompt,
       messages: [
         { role: "system", content: strategyMode ? STRATEGY_RESEARCH_SYSTEM_PROMPT : this.researchConfig.systemPrompt },

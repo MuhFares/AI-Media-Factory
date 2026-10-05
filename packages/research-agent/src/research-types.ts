@@ -248,10 +248,26 @@ export interface PlatformFinding extends StrategyFinding {
   platform: "Instagram Reels" | "YouTube Shorts" | "TikTok";
 }
 
+/**
+ * Canonical Research text-execution legs that may carry an independent model.
+ * Reuses the call-leg vocabulary already canonical in budget authority.
+ * RETRIEVAL is deliberately absent: retrieval planning is local and the
+ * retrieval boundary carries no agent LLM call, so there is nothing to route.
+ */
+export type ResearchSynthesisLeg = "DIRECTION" | "FINAL_SYNTHESIS";
+
 /** Research agent configuration. */
 export interface ResearchConfig {
   /** Model to use for research. */
   model: string;
+  /**
+   * Optional per-leg model override. Only legs carrying a canonical
+   * text-execution identity (DIRECTION planning, FINAL_SYNTHESIS) may be
+   * overridden; retrieval has no agent LLM call. Absent legs resolve to
+   * {@link ResearchConfig.model}. A leg listed here must also carry an
+   * entry in the agent's per-leg execute map, enforced at construction.
+   */
+  modelForLeg?: Partial<Record<ResearchSynthesisLeg, string>>;
   /** Temperature for research output. */
   temperature: number;
   /** Maximum tokens for research output. */

@@ -1433,4 +1433,18 @@ ON CONFLICT(project_id,phase,call_kind) DO NOTHING;
 -- authorizes zero legs. Scope is set at row creation and never widened by
 -- limit/maintenance updates.
 ALTER TABLE production_phase_call_budgets ADD COLUMN IF NOT EXISTS allowed_call_legs JSONB;
+-- Research Final Synthesis leg route (owner-authorized per-leg routing).
+-- A routing_entries row under the leg role key carries the independently
+-- governed synthesis model; worker resolution prefers it over the research
+-- role route, and legacy behavior holds wherever the row is absent. Seeded
+-- only when the active morroway routing version and a priced nemo catalog
+-- entry both exist; repeat-safe and never mutates existing rows.
+INSERT INTO production_model_routing_entries(routing_version_id,role,primary_model_id,fallback_model_id,economy_model_id,premium_escalation_model_id,price_snapshot_ids,evidence)
+SELECT v.routing_version_id,'research-synthesis','mistralai/mistral-nemo',NULL,NULL,NULL,
+  jsonb_build_object('mistralai/mistral-nemo',(SELECT current_price_snapshot_id FROM provider_model_catalog WHERE provider_model_id='mistralai/mistral-nemo')),
+  '{"source":"owner-task-AMF_RESEARCH_PER_LEG_MODEL_ROUTING_V1","phase":"Phase 7","model":"mistralai/mistral-nemo","qualification":"3/3 contract-valid","scope":"research FINAL_SYNTHESIS leg only"}'
+FROM production_model_routing_versions v
+WHERE v.active AND v.scope_type='PROJECT' AND v.project_id='morroway'
+  AND EXISTS (SELECT 1 FROM provider_model_catalog WHERE provider_model_id='mistralai/mistral-nemo' AND current_price_snapshot_id IS NOT NULL)
+ON CONFLICT(routing_version_id,role) DO NOTHING;
 `;

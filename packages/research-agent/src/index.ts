@@ -25,6 +25,7 @@ export type {
   ResearchCandidateStory,
   ResearchCallUsage,
   ResearchConfig,
+  ResearchSynthesisLeg,
   ResearchExecutionInput,
   ResearchExecutionOutput,
   ResearchObjective,

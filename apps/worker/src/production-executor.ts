@@ -2270,6 +2270,54 @@ export function researchReservationCallLeg(agent: string, callKind: "research" |
   return keySuffix === ":synthesis" ? "FINAL_SYNTHESIS" : "DIRECTION";
 }
 
+/**
+ * Canonical routing role for the Research Final Synthesis leg. A routing
+ * entries row under this role (same version lifecycle as role rows) carries
+ * the independently governed synthesis model; absence means legacy behavior
+ * (synthesis uses the research role route). This reuses the existing
+ * role-keyed routing system: no new table, no new namespace, no PK change.
+ */
+export const RESEARCH_SYNTHESIS_ROUTE_ROLE = "research-synthesis";
+
+export interface ResearchSynthesisRoute {
+  readonly model: string;
+  readonly routingVersionId: string;
+  readonly priceSnapshotId: string;
+}
+
+/**
+ * Extract a complete, usable synthesis leg route from a control-overrides
+ * map. Returns null unless the leg entry carries a non-empty model AND the
+ * routing identifiers the reservation path requires. Partial records fall
+ * back to legacy rather than silently downgrading the model or the price
+ * identity. Pure and provider-free; unit-tested.
+ */
+export function researchSynthesisRoute(overrides: unknown): ResearchSynthesisRoute | null {
+  const record = safeRecord(safeRecord(overrides)[RESEARCH_SYNTHESIS_ROUTE_ROLE]);
+  const model = typeof record.model === "string" ? record.model.trim() : "";
+  const routing = safeRecord(record.canonicalRouting);
+  const routingVersionId = typeof routing.routingVersionId === "string" ? routing.routingVersionId : "";
+  const priceSnapshotId = typeof routing.priceSnapshotId === "string" ? routing.priceSnapshotId : "";
+  if (!model || !routingVersionId || !priceSnapshotId) return null;
+  return { model, routingVersionId, priceSnapshotId };
+}
+
+/**
+ * Research leg transport dispatcher. Routes FINAL_SYNTHESIS requests to the
+ * governed leg transport and every other leg to the default (legacy) one.
+ * The caller wraps the returned closure with the canonical provider
+ * lifecycle, so claim attribution, concurrency guard, and diagnostics
+ * persistence behave exactly as the single-transport path. Pure over its
+ * inputs; unit-tested.
+ */
+export function researchLegDispatcher(defaultExecute: ExecuteFn, synthesisExecute: ExecuteFn | null): ExecuteFn {
+  if (synthesisExecute === null) return defaultExecute;
+  return (context, request, signal) => {
+    const leg = (request.callIdentity as { callLeg?: unknown } | undefined)?.callLeg;
+    return (leg === "FINAL_SYNTHESIS" ? synthesisExecute : defaultExecute)(context, request, signal);
+  };
+}
+
 export class ProductionAgentExecutor implements AgentExecutorPort {
   private readonly persistence?: PersistencePort;
   private readonly boundary: ProviderCapabilityBoundary;
@@ -2697,15 +2745,21 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
       ? [...researchReservations, ...(directionReuse ? [] : [{ callKind: "text_agent" as const, keySuffix: "" }]), { callKind: "text_agent", keySuffix: ":synthesis" }]
       : [{ callKind: "text_agent", keySuffix: "" }];
     const reservations: ProductionCallReservation[] = [];
+    // Per-leg synthesis accounting: the :synthesis reservation carries the
+    // leg route's model/price identity when a governed leg route exists, so
+    // budget lineage and model lineage cannot disagree. All other specs keep
+    // the legacy step-agent route identity byte-for-byte.
+    const synthesisRoute = step.agent === "research" ? researchSynthesisRoute(safeRecord(data.controlAgentOverrides)) : null;
     try {
       for (const spec of reservationSpecs) {
+        const isSynthesisLeg = synthesisRoute !== null && spec.callKind === "text_agent" && spec.keySuffix === ":synthesis";
         reservations.push(await this.productionCallBudget.reserve({
           projectId, workflowId: context.workflowId, phase: budgetPhase, stage: step.id, role: step.agent, callKind: spec.callKind,
           callLeg: researchReservationCallLeg(step.agent, spec.callKind, spec.keySuffix),
           idempotencyKey: `${context.workflowId}:${step.id}:${spec.callKind}:v1${recoverySuffix}${spec.keySuffix}`,
-          routingVersionId: typeof route.routingVersionId === "string" ? route.routingVersionId : null,
-          exactModelId: typeof safeRecord(safeRecord(data.controlAgentOverrides)[step.agent]).model === "string" ? String(safeRecord(safeRecord(data.controlAgentOverrides)[step.agent]).model) : null,
-          priceSnapshotId,
+          routingVersionId: isSynthesisLeg && synthesisRoute !== null ? synthesisRoute.routingVersionId : (typeof route.routingVersionId === "string" ? route.routingVersionId : null),
+          exactModelId: isSynthesisLeg && synthesisRoute !== null ? synthesisRoute.model : (typeof safeRecord(safeRecord(data.controlAgentOverrides)[step.agent]).model === "string" ? String(safeRecord(safeRecord(data.controlAgentOverrides)[step.agent]).model) : null),
+          priceSnapshotId: isSynthesisLeg && synthesisRoute !== null ? synthesisRoute.priceSnapshotId : priceSnapshotId,
           provenance: { projectId, phase: budgetPhase, productionPhase:"PRE_MEDIA_PHASE", productionCycle:data.productionCycle??null, authority: data.phaseAuthority ?? "UNKNOWN" },
         }));
       }
@@ -2811,7 +2865,24 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
     const resolved=await this.modelRouting.resolve(role,{projectId:project,slot,premiumAuthorized:data.premiumEscalationAuthorized===true,fallbackAuthorized:data.fallbackAuthorized===true,fallbackReason});
     this.routingResolutionObserver?.({project,agent:step.agent,...resolved});
     const overrides={...safeRecord(data.controlAgentOverrides),[step.agent]:{provider:resolved.provider,model:resolved.model,canonicalRouting:{routingVersionId:resolved.routingVersionId,routingScope:resolved.routingScope,projectId:resolved.projectId,role:resolved.role,profile:resolved.profile,slot,requestedModel:resolved.requestedModel,resolvedModel:resolved.resolvedModel,priceSnapshotId:resolved.priceSnapshotId,availabilityState:"CONFIGURED",fallbackUsed:resolved.fallbackUsed,fallbackReason:resolved.fallbackReason,premiumEscalation:slot==="premiumEscalation",resolutionReason:"ACTIVE_PROJECT_CANONICAL_ROUTING"}}};
-    return{...context,data:{...data,controlAgentOverrides:overrides,canonicalRouting:overrides[step.agent]}} as WorkflowContext;
+    // Research synthesis leg route: an independently governed model for the
+    // FINAL_SYNTHESIS leg lives under the leg routing role. Absence preserves
+    // legacy behavior (synthesis uses the research role route); only a
+    // missing leg row falls back — a present-but-broken row still throws via
+    // resolve(), mirroring existing governed failure semantics.
+    let legOverrides = overrides;
+    if (step.agent === "research" && this.modelRouting) {
+      let legResolved: Awaited<ReturnType<ProductionModelRoutingStore["resolve"]>> | null = null;
+      try {
+        legResolved = await this.modelRouting.resolve(RESEARCH_SYNTHESIS_ROUTE_ROLE, { projectId: project, slot, premiumAuthorized: data.premiumEscalationAuthorized === true, fallbackAuthorized: data.fallbackAuthorized === true, fallbackReason });
+      } catch (error) {
+        if (!(error instanceof Error) || !/ROLE_NOT_MODEL_ROUTED/.test(error.message)) throw error;
+      }
+      if (legResolved !== null) {
+        legOverrides = { ...overrides, [RESEARCH_SYNTHESIS_ROUTE_ROLE]: { provider: legResolved.provider, model: legResolved.model, canonicalRouting: { routingVersionId: legResolved.routingVersionId, routingScope: legResolved.routingScope, projectId: legResolved.projectId, role: legResolved.role, profile: legResolved.profile, slot, requestedModel: legResolved.requestedModel, resolvedModel: legResolved.resolvedModel, priceSnapshotId: legResolved.priceSnapshotId, availabilityState: "CONFIGURED", fallbackUsed: legResolved.fallbackUsed, fallbackReason: legResolved.fallbackReason, premiumEscalation: slot === "premiumEscalation", resolutionReason: "ACTIVE_PROJECT_LEG_ROUTING" } } };
+      }
+    }
+    return{...context,data:{...data,controlAgentOverrides:legOverrides,canonicalRouting:overrides[step.agent]}} as WorkflowContext;
   }
 
   /** Materialized-input LLM preflight. It runs after routing and before any budget reservation. */
@@ -3559,13 +3630,33 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
           execute: llm,
           config: { model, temperature: 0.2, maxOutputTokens: 4096, systemPrompt: "" },
         }) as unknown as AnyAgent;
-      case "research":
+      case "research": {
+        // Per-leg synthesis routing: when a governed leg route exists, the
+        // FINAL_SYNTHESIS leg runs on its own model/transport while Direction
+        // keeps the legacy research route. Absence preserves legacy behavior.
+        // Precedence is explicit and structural: a present leg key governs
+        // synthesis even when a generic role-wide research override exists
+        // (the generic override still governs Direction); no legacy override
+        // can silently erase the leg route, and no leg route is inferred.
+        // Both the model label (agent config) and the transport below derive
+        // from the same resolved leg route, so they cannot disagree.
+        const synthesisRoute = researchSynthesisRoute(safeRecord(safeRecord(deps.input).controlAgentOverrides));
+        const synthesisExecute = synthesisRoute === null
+          ? null
+          : agentLlm({ ...(deps.input as JsonRecord), __agent: RESEARCH_SYNTHESIS_ROUTE_ROLE });
         return createResearchAgent({
-          execute: llm,
+          execute: researchLegDispatcher(llm, synthesisExecute),
           capabilityExecution,
           sourceRouter: this.researchSourceRouter,
-          config: { model, temperature: 0.2, maxOutputTokens: model === "glm-5.3" ? 8192 : 4096, systemPrompt: "" },
+          config: {
+            model,
+            temperature: 0.2,
+            maxOutputTokens: model === "glm-5.3" ? 8192 : 4096,
+            systemPrompt: "",
+            ...(synthesisRoute === null ? {} : { modelForLeg: { FINAL_SYNTHESIS: synthesisRoute.model } }),
+          },
         }) as unknown as AnyAgent;
+      }
       case "writer":
         return createWriterAgent({
           execute: llm,
