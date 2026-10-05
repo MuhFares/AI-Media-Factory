@@ -727,7 +727,7 @@ export function safeValidationDiagnostics(error: unknown): Record<string, unknow
   for (let depth = 0; depth < 8 && current instanceof Error && !seen.has(current); depth++) {
     seen.add(current);
     const candidate = safeRecord((current as Error & { diagnostics?: unknown }).diagnostics);
-    if (["parse", "structural", "semantic"].includes(String(candidate.validationStage)) || candidate.validationKind === "STRUCTURAL" || candidate.reviewOutcomeCode === "REVIEW_OUTCOME_NOT_APPROVED") {
+    if (["parse", "structural", "semantic"].includes(String(candidate.validationStage)) || candidate.validationKind === "STRUCTURAL" || candidate.reviewOutcomeCode === "REVIEW_OUTCOME_NOT_APPROVED" || typeof safeRecord(candidate.researchBlocked).researchBlockReason === "string") {
       raw = candidate;
       break;
     }
@@ -747,6 +747,9 @@ export function safeValidationDiagnostics(error: unknown): Record<string, unknow
     ...(typeof raw.hardFailReason === "string" ? { hardFailReason: raw.hardFailReason.slice(0, 120) } : {}),
     ...(typeof raw.contractVersion === "string" ? { contractVersion: raw.contractVersion.slice(0, 120) } : {}),
   };
+  if (typeof safeRecord(raw.researchBlocked).researchBlockReason === "string") {
+    return { researchBlocked: boundResearchBlockedDiagnostics(raw.researchBlocked) };
+  }
   if (raw.validationKind !== "STRUCTURAL" || !Array.isArray(raw.issues)) return {};
   const issues = raw.issues.slice(0, 20).map((value) => {
     const issue = safeRecord(value);
@@ -2533,6 +2536,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
     let lifecycle: GovernedLlmLifecycle | null = null;
     let productionReservations: ProductionCallReservation[] = [];
     let productionSubmissionStarted = false;
+    let budgetReconciliationFailure: string | null = null;
     try {
       // PREPARING is explicitly pre-submission.  It gives failures in chain
       // loading/input assembly a durable identity without making restart
@@ -2561,7 +2565,10 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
           ? this.withResearchCapabilityLifecycle(this.boundary.boundary, lifecycle, researchReservations)
           : this.boundary.boundary
         : undefined;
-      const agent = this.buildAgent(step.agent, lifecycle === null ? input : { ...input, execute: this.withProviderSubmissionLifecycle(input.execute, lifecycle, productionReservations) }, capabilityExecution);
+      const governedLifecycle = lifecycle;
+      const agent = this.buildAgent(step.agent, input, capabilityExecution, governedLifecycle !== null
+        ? (raw: ExecuteFn): ExecuteFn => this.withProviderSubmissionLifecycle(raw, governedLifecycle, productionReservations)
+        : (raw: ExecuteFn): ExecuteFn => raw);
       productionSubmissionStarted = productionReservations.length > 0;
       const execution = await agent.execute(
         { context: this.buildExecutionContext(step, context), input: input.input },
@@ -2621,7 +2628,13 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
       if (status !== "completed") {
         // Only non-Review agents retain this legacy blocked-output behavior.
         // A valid Review is always a completed execution with a business verdict.
+        // Research blocked diagnostics are attached for durability (bounded
+        // evidence-gate verdict + counts, no raw evidence): the workflow still
+        // fails closed here; diagnostics never convert failure to success.
         const outcomeError = new Error(`AGENT_OUTPUT_${status.toUpperCase()}:${step.agent}`) as Error & { diagnostics?: Record<string, unknown> };
+        if (step.agent === "research") {
+          outcomeError.diagnostics = { researchBlocked: buildResearchBlockedDiagnostics(output, context.data, step.id) };
+        }
         throw outcomeError;
       }
       if (modelBReview) {
@@ -2680,10 +2693,16 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
             await this.reconcileProductionCalls(productionReservations, productionSubmissionStarted, false, failedCalculableCost, undefined);
           }
         }
-        catch (budgetError) { return { status: "failed", output: { stepId: step.id, agent: step.agent, error: message, budgetReconciliationFailure: budgetError instanceof Error ? budgetError.message : String(budgetError) }, error: { message, retryable: false } }; }
+        catch (budgetError) {
+          // A reconciliation reporter failure must not suppress the original
+          // provider/gate failure evidence. Preserve a bounded marker and
+          // continue through canonical terminal provenance persistence; the
+          // unresolved reservation remains fail-closed for audited recovery.
+          budgetReconciliationFailure = sanitizedFailureMessage(budgetError);
+        }
       }
       if (provenanceStartedAt !== null && (provenanceInput !== null || preparationInput !== null)) {
-        const persistenceFailure = await this.persistFailedAgentProvenance(step, context, provenanceInput ?? preparationInput!, provenanceStartedAt, Date.now() - provenanceStartedMs, error, lifecycle);
+        const persistenceFailure = await this.persistFailedAgentProvenance(step, context, provenanceInput ?? preparationInput!, provenanceStartedAt, Date.now() - provenanceStartedMs, error, lifecycle, budgetReconciliationFailure);
         if (persistenceFailure !== null) return {
           status: "failed",
           output: { stepId: step.id, agent: step.agent, error: message, persistenceFailure },
@@ -2692,7 +2711,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
       }
       return {
         status: "failed",
-        output: { stepId: step.id, agent: step.agent, error: message },
+        output: { stepId: step.id, agent: step.agent, error: message, ...(budgetReconciliationFailure === null ? {} : { budgetReconciliationFailure }) },
         error: { message, retryable: false },
       };
     }
@@ -3606,9 +3625,9 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
     await persistCapabilityResultDurably(this.persistence, lifecycle, result);
   }
 
-  private buildAgent(agent: string, deps: { input: Json; execute: ExecuteFn }, capabilityOverride?: CapabilityExecutionPort): AnyAgent {
+  private buildAgent(agent: string, deps: { input: Json; execute: ExecuteFn }, capabilityOverride?: CapabilityExecutionPort, wrapWithLifecycle: (raw: ExecuteFn) => ExecuteFn = (raw) => raw): AnyAgent {
     const capabilityExecution: CapabilityExecutionPort = capabilityOverride ?? this.boundary.boundary;
-    const llm = deps.execute;
+    const llm = wrapWithLifecycle(deps.execute);
     const scoped = safeRecord(safeRecord(deps.input).controlAgentOverrides)[agent]
       ?? safeRecord(safeRecord(deps.input).controlAgentOverrides)["*"];
     const configuredModel = typeof safeRecord(scoped).model === "string" && String(safeRecord(scoped).model).trim()
@@ -3641,11 +3660,21 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
         // Both the model label (agent config) and the transport below derive
         // from the same resolved leg route, so they cannot disagree.
         const synthesisRoute = researchSynthesisRoute(safeRecord(safeRecord(deps.input).controlAgentOverrides));
-        const synthesisExecute = synthesisRoute === null
+        const synthesisRaw = synthesisRoute === null
           ? null
           : agentLlm({ ...(deps.input as JsonRecord), __agent: RESEARCH_SYNTHESIS_ROUTE_ROLE });
+        // Canonical submission lifecycle for BOTH legs: the leg dispatcher
+        // selects the raw transport per callLeg (FINAL_SYNTHESIS -> the leg
+        // route transport, every other leg -> the default transport) and ONE
+        // governed wrapper provides claim attribution, the concurrency guard,
+        // and diagnostics for both. A single closure preserves the existing
+        // sequential multi-leg re-arm path; separate wrappers would race the
+        // single-execution provider claim (EXECUTION_PROVIDER_CLAIM_NOT_ACQUIRED).
+        const researchExecute = synthesisRaw === null
+          ? wrapWithLifecycle(deps.execute)
+          : wrapWithLifecycle(researchLegDispatcher(deps.execute, synthesisRaw));
         return createResearchAgent({
-          execute: researchLegDispatcher(llm, synthesisExecute),
+          execute: researchExecute,
           capabilityExecution,
           sourceRouter: this.researchSourceRouter,
           config: {
@@ -4029,7 +4058,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
   }
 
   /** Persist a secret-safe attempt record even when provider execution fails before an artifact exists. */
-  private async persistFailedAgentProvenance(step: AgentStep, context: WorkflowContext, configuration: Json, startedAt: string, observedLatencyMs: number, error: unknown, lifecycle: GovernedLlmLifecycle | null = null): Promise<string | null> {
+  private async persistFailedAgentProvenance(step: AgentStep, context: WorkflowContext, configuration: Json, startedAt: string, observedLatencyMs: number, error: unknown, lifecycle: GovernedLlmLifecycle | null = null, budgetReconciliationFailure: string | null = null): Promise<string | null> {
     if (this.persistence?.saveExecutionProvenance === undefined) return lifecycle === null ? null : "DURABLE_FAILURE_EVIDENCE_UNAVAILABLE";
     const details = { ...(error instanceof AgentRouterExecutionError || error instanceof OpenRouterExecutionError ? safeRecord((error as unknown as { diagnostics: unknown }).diagnostics) : safeValidationDiagnostics(error)) };
     const message = error instanceof Error ? error.message : String(error);
@@ -4106,7 +4135,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
         artifactIds: [], parentExecutionIds: recoveryParentExecutionIds(configuration), attemptNumber: 1,
         providerRequestId: typeof details.providerRequestId === "string" ? details.providerRequestId : null, providerJobId: null,
         errorClassification: lifecycleFailureState(details, message),
-        configuration: { ...safeRecord(configuration), ...(lifecycle === null || model === null ? {} : { lifecycleState: lifecycleFailureState(details, message), providerSubmissionStarted: true, protocol: protocolForFailed, requestedModel: model, resolvedTimeoutMs: timeoutForFailed, inputArtifactIds: referencedArtifactIds(configuration), requestFingerprint: stableFingerprint(configuration), providerResponse: lifecycle.lastProviderResponse ?? {} }), providerFailure: details, failureMessage: sanitizedFailureMessage(error) },
+        configuration: { ...safeRecord(configuration), ...(lifecycle === null || model === null ? {} : { lifecycleState: lifecycleFailureState(details, message), providerSubmissionStarted: true, protocol: protocolForFailed, requestedModel: model, resolvedTimeoutMs: timeoutForFailed, inputArtifactIds: referencedArtifactIds(configuration), requestFingerprint: stableFingerprint(configuration), providerResponse: lifecycle.lastProviderResponse ?? {} }), providerFailure: details, failureMessage: sanitizedFailureMessage(error), ...(budgetReconciliationFailure === null ? {} : { budgetReconciliationFailure }) },
       }));
     } catch (persistenceError) {
       // Preserve the business error, but make a diagnostic write failure visible
@@ -4220,7 +4249,164 @@ export function resolveProductionTtsVoice(value: unknown, workflowId?: string): 
     : (process.env.VOICETUT_DEFAULT_SPEAKER?.trim() || "Mohamed");
 }
 
-/** Derive the collaboration artifact status from the agent's report output. */
+/**
+ * Bounded canonical diagnostics for a blocked Research outcome
+ * (contract amf-research-blocked-diagnostics-v1).
+ *
+ * Retained when Research returns output that the evidence gate blocks
+ * (AGENT_OUTPUT_BLOCKED:research): the grounded report's evidenceQuality /
+ * sufficiency verdict plus counts only. Never retains raw evidence text,
+ * source URLs, snippets, provider bodies, or secrets. Diagnostics never
+ * change the blocked verdict: a blocked workflow remains blocked.
+ */
+export interface ResearchBlockedDiagnostics {
+  readonly researchBlockReason: string;
+  readonly evidenceQualityStatus: string | null;
+  readonly evidenceStatus: string | null;
+  readonly ceoEligible: boolean;
+  readonly sufficiencyReasons: readonly string[];
+  readonly insufficiencyReasons: readonly string[];
+  readonly failedGatePaths: readonly string[];
+  readonly retrievalCount: number;
+  readonly evidenceRecordCount: number;
+  readonly uniqueSourceUrlCount: number;
+  readonly authorityBreakdown: Record<string, number>;
+  readonly candidateCount: number;
+  readonly viableCandidateCount: number;
+  readonly synthesisEligibility: string;
+  readonly synthesisSubmitted: boolean;
+}
+
+const RESEARCH_BLOCKED_AUTHORITY_CLASSES: readonly string[] = [
+  "PRIMARY_OR_INSTITUTIONAL",
+  "REPUTABLE_SECONDARY",
+  "GENERAL_MEDIA",
+  "COMMUNITY",
+  "AGGREGATOR_OR_COMPILATION",
+  "UNKNOWN",
+];
+
+const RESEARCH_BLOCKED_MAX_REASONS = 20;
+const RESEARCH_BLOCKED_MAX_REASON_CHARS = 120;
+const RESEARCH_BLOCKED_MAX_PATHS = 8;
+
+function boundDiagnosticCode(value: unknown, fallback = "UNKNOWN"): string {
+  if (typeof value !== "string" || value.trim().length === 0) return fallback;
+  const bounded = value.trim().slice(0, RESEARCH_BLOCKED_MAX_REASON_CHARS);
+  return /^[A-Z][A-Z0-9_]*$/.test(bounded) ? bounded : fallback;
+}
+
+function boundDiagnosticCodes(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    .map((entry) => entry.trim().slice(0, RESEARCH_BLOCKED_MAX_REASON_CHARS))
+    .filter((entry) => /^[A-Z][A-Z0-9_]*$/.test(entry))
+    .slice(0, RESEARCH_BLOCKED_MAX_REASONS);
+}
+
+function boundDiagnosticPaths(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    .map((entry) => entry.trim().slice(0, 80))
+    .filter((entry) => /^[A-Za-z][A-Za-z0-9_.\[\]-]*$/.test(entry))
+    .slice(0, RESEARCH_BLOCKED_MAX_PATHS);
+}
+
+function boundDiagnosticCount(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+/**
+ * Defense-in-depth bound for researchBlocked diagnostics arriving on a thrown
+ * error: only the allowlisted shape survives, every string is sliced, every
+ * list is capped, counts are non-negative integers, and no raw evidence text
+ * (titles, URLs, snippets, provider bodies) is ever admitted.
+ */
+export function boundResearchBlockedDiagnostics(value: unknown): ResearchBlockedDiagnostics {
+  const record = safeRecord(value);
+  const authority = safeRecord(record.authorityBreakdown);
+  const authorityBreakdown: Record<string, number> = {};
+  for (const key of RESEARCH_BLOCKED_AUTHORITY_CLASSES) authorityBreakdown[key] = boundDiagnosticCount(authority[key]);
+  return {
+    researchBlockReason: boundDiagnosticCode(record.researchBlockReason, "RESEARCH_EVIDENCE_GATE_BLOCKED"),
+    evidenceQualityStatus: typeof record.evidenceQualityStatus === "string" && /^[A-Z][A-Z0-9_]{0,39}$/.test(record.evidenceQualityStatus) ? record.evidenceQualityStatus : null,
+    evidenceStatus: typeof record.evidenceStatus === "string" && /^[A-Z][A-Z0-9_]{0,39}$/.test(record.evidenceStatus) ? record.evidenceStatus : null,
+    ceoEligible: record.ceoEligible === true,
+    sufficiencyReasons: boundDiagnosticCodes(record.sufficiencyReasons),
+    insufficiencyReasons: boundDiagnosticCodes(record.insufficiencyReasons),
+    failedGatePaths: boundDiagnosticPaths(record.failedGatePaths),
+    retrievalCount: boundDiagnosticCount(record.retrievalCount),
+    evidenceRecordCount: boundDiagnosticCount(record.evidenceRecordCount),
+    uniqueSourceUrlCount: boundDiagnosticCount(record.uniqueSourceUrlCount),
+    authorityBreakdown,
+    candidateCount: boundDiagnosticCount(record.candidateCount),
+    viableCandidateCount: boundDiagnosticCount(record.viableCandidateCount),
+    synthesisEligibility: ["SUBMITTED", "NOT_SUBMITTED", "UNKNOWN"].includes(String(record.synthesisEligibility)) ? String(record.synthesisEligibility) : "UNKNOWN",
+    synthesisSubmitted: record.synthesisSubmitted === true,
+  };
+}
+
+/**
+ * Build bounded blocked diagnostics from a grounded Research output (the
+ * artifactStatusFor input). Pure and provider-free: reads only the already
+ * computed evidenceQuality / researchStatus / capabilityExecutions /
+ * synthesisUsage markers plus counts derived from the artifact-local source
+ * table (URL strings are counted via canonicalization, never retained).
+ */
+export function buildResearchBlockedDiagnostics(output: Json, contextData?: Readonly<Record<string, Json>>, stepId?: string): ResearchBlockedDiagnostics {
+  const record = safeRecord(output);
+  const gate = safeRecord(record.evidenceQuality);
+  const executions = Array.isArray(record.capabilityExecutions) ? record.capabilityExecutions : [];
+  const successfulSearches = executions.filter(
+    (item) => safeRecord(item).capabilityId === "web.search" && safeRecord(item).status === "success",
+  );
+  const hasSearch = executions.some((item) => safeRecord(item).capabilityId === "web.search");
+  const gateStatus = typeof gate.status === "string" ? gate.status : null;
+  const ceoEligible = gate.ceoEligible === true;
+  const researchStatus = typeof record.researchStatus === "string" ? record.researchStatus : null;
+  const candidateCount = boundDiagnosticCount(gate.candidateCount);
+  const researchBlockReason = !hasSearch
+    ? "RESEARCH_RETRIEVAL_ABSENT"
+    : gateStatus === "NEEDS_RESEARCH_RETRY"
+      ? "EVIDENCE_QUALITY_NEEDS_RESEARCH_RETRY"
+      : "EVIDENCE_GATE_NOT_CEO_ELIGIBLE";
+  const failedGatePaths: string[] = [];
+  if (!hasSearch) failedGatePaths.push("capabilityExecutions.web.search");
+  if (gateStatus === "NEEDS_RESEARCH_RETRY") failedGatePaths.push("evidenceQuality.status");
+  if (!ceoEligible) failedGatePaths.push("evidenceQuality.ceoEligible");
+  if (researchStatus === "INSUFFICIENT_EVIDENCE") failedGatePaths.push("researchStatus");
+  if (candidateCount === 0) failedGatePaths.push("candidateStories");
+  void contextData;
+  void stepId;
+  const synthesisSources = Array.isArray(record.sources) ? record.sources : [];
+  const canonicalUrls = new Set<string>();
+  for (const source of synthesisSources) {
+    const canonical = canonicalResearchSourceUrl(safeRecord(source).url);
+    if (canonical !== null) canonicalUrls.add(canonical);
+  }
+  const synthesisUsage = safeRecord(record.synthesisUsage);
+  const synthesisSubmitted = Object.keys(synthesisUsage).length > 0;
+  return boundResearchBlockedDiagnostics({
+    researchBlockReason,
+    evidenceQualityStatus: gateStatus,
+    evidenceStatus: typeof gate.evidenceStatus === "string" ? gate.evidenceStatus : researchStatus,
+    ceoEligible,
+    sufficiencyReasons: Array.isArray(gate.sufficiencyReasons) ? gate.sufficiencyReasons : [],
+    insufficiencyReasons: Array.isArray(gate.reasons) ? gate.reasons : (Array.isArray(gate.sufficiencyReasons) ? gate.sufficiencyReasons : []),
+    failedGatePaths,
+    retrievalCount: boundDiagnosticCount(gate.retrievalCount),
+    evidenceRecordCount: successfulSearches.length,
+    uniqueSourceUrlCount: canonicalUrls.size,
+    authorityBreakdown: safeRecord(gate.authorityBreakdown),
+    candidateCount,
+    viableCandidateCount: boundDiagnosticCount(gate.viableCandidates),
+    synthesisEligibility: synthesisSubmitted ? "SUBMITTED" : "NOT_SUBMITTED",
+    synthesisSubmitted,
+  });
+}
+
 function artifactStatusFor(agent: string, output: Json, contextData?: Readonly<Record<string, Json>>, stepId?: string): "completed" | "blocked" | "failed" {
   const record = safeRecord(output);
   const status = typeof record.status === "string" ? record.status : "";

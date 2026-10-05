@@ -6,6 +6,7 @@ import { directiveToWorkflowDefinition } from "@ai-media-factory/orchestrator";
 const expected = {
   orchestrator: "openai/gpt-oss-20b",
   research: "openai/gpt-6-luna",
+  "research-synthesis": "mistralai/mistral-nemo",
   ceo: "openai/gpt-6-luna",
   planner: "openai/gpt-oss-20b",
   hooks: "z-ai/glm-5.3-flash",

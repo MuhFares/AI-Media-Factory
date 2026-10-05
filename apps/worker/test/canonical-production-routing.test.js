@@ -3,15 +3,16 @@ import assert from "node:assert/strict";
 import { createProductionAgentExecutor } from "../dist/production-executor.js";
 
 const expected = { ceo:"model-ceo", orchestrator:"model-orchestrator", research:"model-research", planner:"model-planner", writer:"model-writer", director:"model-director", "visual-director":"model-visual", seo:"model-seo", brand:"model-brand", review:"model-review", qa:"model-qa", growth:"model-growth", finance:"model-finance" };
+const synthesisModel = "model-research-synthesis";
 const stageId = { ceo:"ceo-recommendation", planner:"planner-synthesis", director:"scenes", "visual-director":"visual-direction", qa:"phase1-qa" };
 const routing = { async resolve(role, options = {}) {
-  if (options.projectId !== "branded-project" || !expected[role]) throw new Error("NO_ACTIVE_ROUTING");
+  if (options.projectId !== "branded-project" || (!expected[role] && role !== "research-synthesis")) throw new Error("NO_ACTIVE_ROUTING");
   if (options.slot === "fallback") {
     if (!options.fallbackAuthorized || !options.fallbackReason) throw new Error("FALLBACK_NOT_AUTHORIZED");
     return { model:`fallback-${role}`,resolvedModel:`fallback-${role}`,requestedModel:`fallback-${role}`,provider:"openrouter",routingVersionId:"route-v1",routingScope:"PROJECT",projectId:options.projectId,profile:"test",role,slot:"fallback",priceSnapshotId:`price-fallback-${role}`,fallbackUsed:true,fallbackReason:options.fallbackReason };
   }
   if (options.slot === "premiumEscalation" && !options.premiumAuthorized) throw new Error("PREMIUM_ESCALATION_NOT_AUTHORIZED");
-  const model = options.slot === "premiumEscalation" ? `premium-${role}` : expected[role];
+  const model = options.slot === "premiumEscalation" ? `premium-${role}` : (role === "research-synthesis" ? synthesisModel : expected[role]);
   return { model,resolvedModel:model,requestedModel:model,provider:"openrouter",routingVersionId:"route-v1",routingScope:"PROJECT",projectId:options.projectId,profile:"test",role,slot:options.slot ?? "primary",priceSnapshotId:`price-${model}`,fallbackUsed:false,fallbackReason:null };
 } };
 
