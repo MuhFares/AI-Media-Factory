@@ -84,6 +84,16 @@ test("persistent worker starts, claims an allowed test job through the canonical
     assert.equal(runtime.identity.launcherClassification, "persistent-worker-queue-fixture");
     assert.equal(runtime.identity.executionEnvironment.status, "SUPPORTED");
     assert.equal(runtime.identity.nodeVersion, process.version);
+    const presence = await pool.query(
+      `SELECT execution_environment_status, execution_environment_reason_codes,
+              execution_environment_failed_checks, execution_environment_runtime_fingerprint
+         FROM amf_worker_presence WHERE worker_instance_id=$1`,
+      [runtime.identity.workerInstanceId],
+    );
+    assert.equal(presence.rows[0]?.execution_environment_status, "SUPPORTED");
+    assert.deepEqual(presence.rows[0]?.execution_environment_reason_codes, []);
+    assert.deepEqual(presence.rows[0]?.execution_environment_failed_checks, []);
+    assert.equal(presence.rows[0]?.execution_environment_runtime_fingerprint?.platform, process.platform);
 
     // Canonical preflight is wired on the same boundary the worker executes.
     const preflight = runtime.mediaResumes.preflight();

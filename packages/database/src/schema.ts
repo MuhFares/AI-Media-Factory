@@ -450,6 +450,10 @@ CREATE TABLE IF NOT EXISTS amf_worker_presence (
 ALTER TABLE amf_worker_presence ADD COLUMN IF NOT EXISTS process_id INTEGER;
 ALTER TABLE amf_worker_presence ADD COLUMN IF NOT EXISTS singleton_key TEXT;
 ALTER TABLE amf_worker_presence ADD COLUMN IF NOT EXISTS worker_role TEXT;
+ALTER TABLE amf_worker_presence ADD COLUMN IF NOT EXISTS execution_environment_status TEXT;
+ALTER TABLE amf_worker_presence ADD COLUMN IF NOT EXISTS execution_environment_reason_codes JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE amf_worker_presence ADD COLUMN IF NOT EXISTS execution_environment_failed_checks JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE amf_worker_presence ADD COLUMN IF NOT EXISTS execution_environment_runtime_fingerprint JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS control_configuration_events (
   event_id TEXT PRIMARY KEY,

@@ -54,6 +54,21 @@ the startup instance id with queue/claim timestamps — no inference.
 `SUPPORTED`. Unknown environments are NOT denied (no broadening without
 evidence). The check is zero-network and never claims provider reachability.
 
+The marker is an execution-ownership boundary, not an egress observation. A
+successful safe connectivity probe therefore does not override an
+`UNSUPPORTED` startup classification. The canonical Owner launch must start
+from a normal Owner PowerShell environment without the engineering sandbox
+denial marker; the launcher intentionally does not strip or reinterpret an
+inherited denial marker.
+
+Worker presence records the bounded classification diagnostics required for
+operations: status, reason-code list, failed check names, and a non-sensitive
+runtime fingerprint (`platform`, `arch`, `nodeMajor`). The startup log carries
+the same reason/check summary. No environment dump, provider response, URL,
+credential, or authorization value is persisted. Startup trust is immutable
+for the process lifetime; correcting a stale launch context requires a fresh
+canonical handover.
+
 Authorization (`PostgresMediaResumeDispatcher.authorizeAndDispatch`) runs the
 preflight inside the advisory-lock critical section BEFORE any resume row,
 job, rewind, or budget mutation. Already-queued media work throws

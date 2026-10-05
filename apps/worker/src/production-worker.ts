@@ -111,7 +111,7 @@ export async function createProductionWorker(options: ProductionWorkerOptions): 
   // Missing dist fails closed here — an uncertifiable worker must never start.
   const buildId = computeMediaBuildId().buildId;
   // eslint-disable-next-line no-console
-  console.log(`[amf-worker] ${identity.workerInstanceId} mode=${identity.runtimeMode} launcher=${identity.launcherClassification} env=${identity.executionEnvironment.status} node=${identity.nodeVersion} build=${buildId.slice(0, 12)}`);
+  console.log(`[amf-worker] ${identity.workerInstanceId} mode=${identity.runtimeMode} launcher=${identity.launcherClassification} env=${identity.executionEnvironment.status} reason=${identity.executionEnvironment.reasonCodes.join(",") || "NONE"} failed=${identity.executionEnvironment.failedCheckNames.join(",") || "NONE"} node=${identity.nodeVersion} build=${buildId.slice(0, 12)}`);
   // Persist startup presence for pre-authorization build-parity checks.
   // Best-effort: presence must never prevent worker startup (parity is
   // enforced at authorization time, where a missing row fails closed).
@@ -119,10 +119,10 @@ export async function createProductionWorker(options: ProductionWorkerOptions): 
   const recordPresence = async (heartbeat: boolean): Promise<void> => {
     try {
       await options.pool.query(
-        `INSERT INTO amf_worker_presence (worker_instance_id, build_id, runtime_mode, launcher, node_version, started_at, last_heartbeat_at, process_id, singleton_key, worker_role)
-         VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8,$9)
-         ON CONFLICT (worker_instance_id) DO UPDATE SET last_heartbeat_at=EXCLUDED.last_heartbeat_at,process_id=EXCLUDED.process_id,singleton_key=EXCLUDED.singleton_key,worker_role=EXCLUDED.worker_role`,
-        [identity.workerInstanceId, buildId, identity.runtimeMode, identity.launcherClassification, identity.nodeVersion, heartbeat ? new Date().toISOString() : startedAt, process.pid, process.env.AMF_WORKER_SINGLETON_KEY ?? null, process.env.AMF_WORKER_ROLE ?? null],
+        `INSERT INTO amf_worker_presence (worker_instance_id, build_id, runtime_mode, launcher, node_version, started_at, last_heartbeat_at, process_id, singleton_key, worker_role, execution_environment_status, execution_environment_reason_codes, execution_environment_failed_checks, execution_environment_runtime_fingerprint)
+         VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb)
+         ON CONFLICT (worker_instance_id) DO UPDATE SET last_heartbeat_at=EXCLUDED.last_heartbeat_at,process_id=EXCLUDED.process_id,singleton_key=EXCLUDED.singleton_key,worker_role=EXCLUDED.worker_role,execution_environment_status=EXCLUDED.execution_environment_status,execution_environment_reason_codes=EXCLUDED.execution_environment_reason_codes,execution_environment_failed_checks=EXCLUDED.execution_environment_failed_checks,execution_environment_runtime_fingerprint=EXCLUDED.execution_environment_runtime_fingerprint`,
+        [identity.workerInstanceId, buildId, identity.runtimeMode, identity.launcherClassification, identity.nodeVersion, heartbeat ? new Date().toISOString() : startedAt, process.pid, process.env.AMF_WORKER_SINGLETON_KEY ?? null, process.env.AMF_WORKER_ROLE ?? null, identity.executionEnvironment.status, JSON.stringify(identity.executionEnvironment.reasonCodes), JSON.stringify(identity.executionEnvironment.failedCheckNames), JSON.stringify(identity.executionEnvironment.runtimeFingerprint)],
       );
     } catch { /* best-effort only */ }
   };

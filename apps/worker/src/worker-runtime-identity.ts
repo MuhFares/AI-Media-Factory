@@ -75,7 +75,9 @@ export function workerRuntimeReport(identity: WorkerRuntimeIdentity): WorkerRunt
 
 /** Single safe startup line: classifications + instance id + node version. No secrets. */
 export function safeWorkerRuntimeSummary(identity: WorkerRuntimeIdentity): string {
+  const reason = identity.executionEnvironment.reasonCodes.join(",") || "NONE";
+  const failed = identity.executionEnvironment.failedCheckNames.join(",") || "NONE";
   return `worker: mode=${identity.runtimeMode} instance=${identity.workerInstanceId} ` +
     `launcher=${identity.launcherClassification} env=${identity.executionEnvironment.status} ` +
-    `node=${identity.nodeVersion}`;
+    `reason=${reason} failed=${failed} node=${identity.nodeVersion}`;
 }
