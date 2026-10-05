@@ -422,7 +422,11 @@ function containsSemanticPhrase(value: string, phrase: string): boolean {
 }
 
 /** Evaluate a discovery query against the structured mission and lane, not length alone. */
-export function evaluateDiscoveryQueryQuality(query: string, mission: ResearchMission, lane: Pick<ResearchMission["discoveryLanes"][number], "laneId" | "purpose">): DiscoveryQueryQuality {
+export function evaluateDiscoveryQueryQuality(
+  query: string,
+  mission: ResearchMission,
+  lane: Pick<ResearchMission["discoveryLanes"][number], "laneId" | "purpose"> & Partial<Pick<ResearchMission["discoveryLanes"][number], "subjectTerms" | "locationTerms">>,
+): DiscoveryQueryQuality {
   const value = query.toLowerCase();
   const geography = mission.geography ?? mission.market;
   const historical = mission.factualMode === "HISTORICAL_POV";
@@ -431,7 +435,8 @@ export function evaluateDiscoveryQueryQuality(query: string, mission: ResearchMi
   // Query packing intentionally removes search-box punctuation. Compare the
   // normalized semantic words instead of requiring punctuation-identical text
   // (for example, `Cairo, Egypt` must match the packed `Cairo Egypt`).
-  const hasGeographyContext = !geographyRequired || containsSemanticPhrase(query, geography!);
+  const hasGeographyContext = !geographyRequired || compactGeographyWords(geography!, lane)
+    .every((word) => containsSemanticPhrase(query, word));
   const hasHistoricalIntent = !historical || containsAny(value, [/\bhistor(?:y|ic|ical)\b/, /\barchive\b/, /\bheritage\b/, /\banniversar(?:y|ies)\b/]);
   const hasConcreteCandidateIntent = historical
     ? containsAny(value, [/\bnamed\b/, /\bevents?\b/, /\bpeople\b/, /\bpersons?\b/, /\bobjects?\b/, /\bincidents?\b/, /\bfigures?\b/, /\bartifacts?\b/])
@@ -519,10 +524,57 @@ function deduplicateQueryWords(parts: readonly string[]): string {
 }
 
 function compactLaneIntent(lane: Pick<ResearchMission["discoveryLanes"][number], "laneId" | "purpose">): string {
+  const canonical: Readonly<Record<string, string>> = {
+    TREND_SIGNAL: "current trend signals",
+    SOCIAL_CONTENT_SIGNAL: "current social content signals",
+    SEARCH_DEMAND: "current search demand signals",
+    COMPETITOR_PATTERN: "competitor patterns",
+    HISTORICAL_OPPORTUNITY: "historical opportunity discovery",
+    CURRENT_EVENT_CONNECTION: "current event connections",
+    SEASONAL_CALENDAR: "historical dates anniversaries calendar",
+    EVERGREEN_CURIOSITY: "evergreen curiosity discovery",
+    FACTUAL_ARCHIVE_DISCOVERY: "institutional archive primary sources",
+  };
+  if (canonical[lane.laneId] !== undefined) return canonical[lane.laneId]!;
   const descriptor = `${lane.laneId} ${lane.purpose}`.toLowerCase();
   if (/current|relevance|signal|trend|season|calendar/u.test(descriptor)) return "current relevance signals";
   if (/archive|source|evidence|verify|verification/u.test(descriptor)) return "archive evidence discovery";
   return "historical discovery opportunities";
+}
+
+const QUERY_SEMANTIC_FILLER_WORDS = new Set([
+  "a", "an", "and", "any", "at", "for", "from", "if", "in", "is", "of", "on", "or", "the", "to", "with",
+]);
+
+function compactGeographyWords(
+  value: string,
+  lane?: Partial<Pick<ResearchMission["discoveryLanes"][number], "subjectTerms" | "locationTerms">>,
+): string[] {
+  const words = deduplicateQueryWords([value]).split(/\s+/u)
+    .filter((word) => /[\p{L}\p{N}]/u.test(word) && !QUERY_SEMANTIC_FILLER_WORDS.has(word.toLocaleLowerCase("en-US")));
+  // A normal geography label is already compact. If a provider legally emits
+  // descriptive prose, retain its leading region plus place tokens that are
+  // independently present in structured subject/location fields. This keeps
+  // geographic identity without treating explanatory prose as query syntax.
+  if (words.length <= 4) return words;
+  const structuredPlaces = new Set(structuredSemanticWords([
+    ...(lane?.subjectTerms ?? []),
+    ...(lane?.locationTerms ?? []),
+  ], true).map((word) => word.toLocaleLowerCase("en-US")));
+  return words.filter((word, index) => index === 0 || structuredPlaces.has(word.toLocaleLowerCase("en-US")));
+}
+
+/** Convert structured semantic phrases to complete normalized content words. */
+function structuredSemanticWords(values: readonly string[] | undefined, preserveFillerWords = false): string[] {
+  if (!Array.isArray(values)) return [];
+  const words: string[] = [];
+  for (const value of values) {
+    const content = normalizedSemanticWords(String(value))
+      .filter((word) => preserveFillerWords || !QUERY_SEMANTIC_FILLER_WORDS.has(word));
+    if (content.length === 0) continue;
+    words.push(...content);
+  }
+  return [...new Set(words)];
 }
 
 function semanticRequirementsForWebSearch(
@@ -536,22 +588,25 @@ function semanticRequirementsForWebSearch(
   // Structured retrieval intent (Direction-authored, never heuristically
   // extracted): compact entity terms travel as first-class dimensions so
   // query compaction cannot silently discard candidate specificity.
-  const termWords = (value: readonly string[] | undefined): string[] =>
-    Array.isArray(value) ? value.flatMap((term) => String(term).split(/\s+/u)).map((word) => word.trim()).filter(Boolean) : [];
-  const subjectWords = termWords(lane.subjectTerms).concat(termWords(lane.locationTerms));
-  const periodWords = termWords(lane.periodTerms);
-  const factWords = termWords(lane.factTargets);
+  const subjectWords = structuredSemanticWords(lane.subjectTerms, true)
+    .concat(structuredSemanticWords(lane.locationTerms, true));
+  const geographyWords = geography === null || geography === undefined ? [] : compactGeographyWords(geography, lane);
+  const periodWords = structuredSemanticWords(lane.periodTerms);
+  const factWords = structuredSemanticWords(lane.factTargets);
   const authorityWords = historical
-    ? [...new Set(["museum", "archive", "university", ...termWords(lane.sourcePreferences)])]
+    ? [...new Set(["museum", "archive", "university", ...structuredSemanticWords(lane.sourcePreferences)])]
     : [];
   const requirements: WebSearchSemanticRequirement[] = [
     ...(subjectWords.length > 0 ? [{ dimension: "subject_entity", priority: "TIER_1_REQUIRED" as const, compactTerms: subjectWords, canonicalSource: "lane.subjectTerms + lane.locationTerms" }] : []),
-    ...(geography ? [{ dimension: "geography", priority: "TIER_1_REQUIRED" as const, compactTerms: deduplicateQueryWords([geography]).split(/\s+/u), canonicalSource: "mission.geography|mission.market" }] : []),
+    ...(geographyWords.length > 0 ? [{ dimension: "geography", priority: "TIER_1_REQUIRED" as const, compactTerms: geographyWords, canonicalSource: "mission.geography|mission.market" }] : []),
     { dimension: "subject_domain", priority: "TIER_1_REQUIRED", compactTerms: historical ? ["history"] : ["fantasy"], canonicalSource: "mission.factualMode" },
     { dimension: "concrete_discovery_class", priority: "TIER_1_REQUIRED", compactTerms: historical ? ["events", "people", "artifacts", "places"] : ["concepts", "characters", "settings"], canonicalSource: "lane purpose + factual mode" },
     { dimension: "evidence_orientation", priority: "TIER_1_REQUIRED", compactTerms: historical ? ["sources", "evidence"] : ["references", "inspiration"], canonicalSource: "mission.verificationRequirements" },
+    // Query quality makes lane intent mandatory. Its packing priority must
+    // therefore be mandatory too; otherwise earlier high-value dimensions can
+    // consume the provider limit and make a contract-valid lane uncompilable.
+    { dimension: "lane_purpose", priority: "TIER_1_REQUIRED", compactTerms: compactLaneIntent(lane).split(/\s+/u), canonicalSource: "lane.laneId + lane.purpose" },
     ...(historical ? [{ dimension: "authority_preference", priority: "TIER_2_HIGH_VALUE" as const, compactTerms: authorityWords, canonicalSource: "mission.verificationRequirements + lane.queryGuidance + lane.sourcePreferences" }] : []),
-    { dimension: "lane_purpose", priority: "TIER_2_HIGH_VALUE", compactTerms: compactLaneIntent(lane).split(/\s+/u), canonicalSource: "lane.laneId + lane.purpose" },
     ...(currentLane ? [{ dimension: "runtime_date", priority: "TIER_2_HIGH_VALUE" as const, compactTerms: [mission.currentDate], canonicalSource: "runtime currentDate" }] : []),
     ...(periodWords.length > 0 ? [{ dimension: "historical_period", priority: "TIER_2_HIGH_VALUE" as const, compactTerms: periodWords, canonicalSource: "lane.periodTerms" }] : []),
     ...(factWords.length > 0 ? [{ dimension: "fact_target", priority: "TIER_2_HIGH_VALUE" as const, compactTerms: factWords, canonicalSource: "lane.factTargets" }] : []),

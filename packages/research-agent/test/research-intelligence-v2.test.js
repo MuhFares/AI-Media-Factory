@@ -431,12 +431,12 @@ describe("Research Intelligence Direction Cycle V2", () => {
     const lane = payload.discoveryLanes[0];
     const compiled = compileDiscoveryQuery(lane.queryGuidance, payload, lane);
     const packed = packWebSearchQuery(compiled, payload, lane);
-    strictEqual(packed.providerQuery, "Cairo Egypt history events people artifacts places sources evidence museum archive university discovery");
+    strictEqual(packed.providerQuery, "Cairo Egypt history events people artifacts places sources evidence archive discovery museum university");
     ok(packed.providerQuery.length <= WEB_SEARCH_MAX_QUERY_LENGTH);
     strictEqual(evaluateDiscoveryQueryQuality(packed.providerQuery, payload, lane).passes, true);
     deepStrictEqual(
       packed.semanticRequirements.filter((item) => item.priority === "TIER_1_REQUIRED").map((item) => item.dimension),
-      ["geography", "subject_domain", "concrete_discovery_class", "evidence_orientation"],
+      ["geography", "subject_domain", "concrete_discovery_class", "evidence_orientation", "lane_purpose"],
     );
   });
 
