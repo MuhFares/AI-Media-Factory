@@ -43,9 +43,12 @@ function synthesisOutput() {
     summary: "One dated candidate with field-survey provenance.",
     candidateStories: [{
       candidateId: "candidate-1", topic: "Qanat water tunnels", factualAngle: "Ancient Persian engineering",
-      keyClaims: ["Qanat tunnels convey groundwater"], sourceIds: [1], supportingEvidenceIds: [1],
+      keyClaims: ["Qanat tunnels convey groundwater"], sourceIds: [1], supportingEvidenceIds: ["ev-probe"],
       sourceQualitySummary: "Field survey", visualPotential: "Tunnel footage", shortFormPotential: "30-second reveal",
       evidenceRisks: [], verificationStatus: "needs-verification",
+      contentOpportunityAssessment: { level: "HIGH", basis: "Evergreen discovery" },
+      factualVerification: { status: "STRONG", basis: "Institutional corroboration" },
+      recommendedForProduction: true,
     }],
     sources: [{ id: 1, title: "Qanat tunnels", url: "https://example.test/qanat", snippet: "Documented water tunnels." }],
     confidence: 0.8,

@@ -268,19 +268,16 @@ describe("synthesis contract matrix", () => {
     await rejects(agentWithSynthesis(() => out).execute({ context: {}, input: baseInput() }, signal), issueAt("candidateStories[0].topic"));
   });
 
-  it("16. empty nested factualVerification object is dropped, response still accepted", async () => {
+  it("16. empty nested factualVerification object is rejected", async () => {
     const out = baseGrounded();
     out.candidateStories[0].factualVerification = {};
-    const result = await agentWithSynthesis(() => out).execute({ context: {}, input: baseInput() }, signal);
-    strictEqual(result.output.status, "grounded");
-    strictEqual("factualVerification" in result.output.candidateStories[0], false);
+    await rejects(agentWithSynthesis(() => out).execute({ context: {}, input: baseInput() }, signal), issueAt("candidateStories[0].factualVerification"));
   });
 
-  it("17. malformed recommendation string normalizes to false, response still accepted", async () => {
+  it("17. malformed recommendation string is rejected", async () => {
     const out = baseGrounded();
     out.candidateStories[0].recommendedForProduction = "yes";
-    const result = await agentWithSynthesis(() => out).execute({ context: {}, input: baseInput() }, signal);
-    strictEqual(result.output.candidateStories[0].recommendedForProduction, false);
+    await rejects(agentWithSynthesis(() => out).execute({ context: {}, input: baseInput() }, signal), issueAt("candidateStories[0].recommendedForProduction"));
   });
 
   it("18. PARTIAL verification with recommended true normalizes per contract without rejection", async () => {

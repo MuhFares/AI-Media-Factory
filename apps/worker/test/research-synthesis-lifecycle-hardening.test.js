@@ -11,9 +11,8 @@
  * distinguished by submitted model + prompt) and web-search (canned results).
  *
  * Cases: 4 = valid Nemo synthesis CONSUMED with exact Nemo accounting;
- * Canary-09 mirror = retrieval success + insufficient synthesis -> blocked
- * with durable researchBlocked diagnostics and FAILED_AFTER_SUBMISSION
- * (submitted, never RELEASED); 1 = pre-submission failure -> RELEASED with
+ * Canary-09 mirror = retrieval success + canonical insufficient synthesis ->
+ * bounded stop with durable artifact and CONSUMED calls; 1 = pre-submission failure -> RELEASED with
  * zero Nemo transport; 2 = Nemo transport failure -> submitted failure;
  * 3 = Nemo validation failure -> FAILED_AFTER_SUBMISSION + STRUCTURAL.
  */
@@ -105,12 +104,15 @@ function synthesisGrounded(stageId) {
       factualAngle: "Two-millennia-old underground water engineering",
       keyClaims: ["Qanat tunnels convey groundwater across arid Iran"],
       sourceIds: [1, 2],
-      supportingEvidenceIds: [1, 2],
+      supportingEvidenceIds: ["evidence-fixture-1"],
       sourceQualitySummary: "Institutional survey plus reputable reference",
       visualPotential: "Tunnel cross-sections and shaft grids",
       shortFormPotential: "30-second reveal",
       evidenceRisks: ["Dating precision varies by site"],
       verificationStatus: "needs-verification",
+      contentOpportunityAssessment: { level: "MEDIUM", basis: "Evergreen discovery evidence" },
+      factualVerification: { status: "STRONG", basis: "Institutional and reputable references" },
+      recommendedForProduction: true,
     }],
     sources: FACTUAL_RESULTS.map((result, index) => ({ id: index + 1, title: result.title, url: result.url, snippet: result.snippet })),
     confidence: 0.8,
@@ -366,6 +368,16 @@ async function waitForSubmission(queue, workflowId, want, timeoutMs = 90000) {
   throw new Error(`Timed out waiting for submission ${workflowId} -> ${want}`);
 }
 
+async function waitForTerminalSubmission(queue, workflowId, timeoutMs = 90000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const submission = await queue.loadSubmissionByWorkflow(workflowId);
+    if (submission && ["bounded_stop", "failed", "completed"].includes(submission.status)) return submission;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`Timed out waiting for terminal submission ${workflowId}`);
+}
+
 function mockFetch(transports, handler) {
   const originalFetch = global.fetch;
   const originalKey = process.env.OPENROUTER_API_KEY;
@@ -463,7 +475,7 @@ test("CASE 4: valid Nemo synthesis is CONSUMED with exact Nemo accounting via ca
   }
 }, { timeout: 300000, concurrency: false });
 
-test("CANARY-09 MIRROR: retrieval success plus insufficient Nemo synthesis stays blocked with durable diagnostics (submitted, never RELEASED)", async () => {
+test("CANARY-09 MIRROR: canonical insufficient Nemo synthesis is a bounded business stop with consumed calls", async () => {
   const dbName = "amf_e2e_leg_mirror_blocked";
   const { admin, pool } = await createScratchDb(dbName);
   const transports = [];
@@ -490,42 +502,35 @@ test("CANARY-09 MIRROR: retrieval success plus insufficient Nemo synthesis stays
     });
     const runtime = await createProductionWorker({ pool, providerBoundary: makeBoundary(persistence, pool), orphanStaleMs: 2_000_000_000 });
     assert.equal(await runtime.worker.runOnce(), true);
-    await waitForSubmission(queue, workflowId, "failed");
+    const terminalSubmission = await waitForTerminalSubmission(queue, workflowId);
+    const terminalDebug = terminalSubmission.status === "bounded_stop" ? null : {
+      submission: terminalSubmission.status,
+      workflow: await persistence.loadWorkflow(workflowId),
+      provenance: await persistence.listExecutionProvenance(workflowId),
+    };
+    assert.equal(terminalSubmission.status, "bounded_stop", JSON.stringify(terminalDebug));
 
     assert.ok(transports.some((entry) => entry.leg === "DIRECTION" && entry.model === LUNA));
     assert.ok(transports.some((entry) => entry.leg === "FINAL_SYNTHESIS" && entry.model === NEMO));
 
     const jobs = (await pool.query("SELECT status,error FROM workflow_jobs WHERE workflow_id=$1 ORDER BY created_at", [workflowId])).rows;
-    assert.ok(jobs.some((job) => job.status === "failed"), "recovery job records the failed terminal state");
+    assert.ok(jobs.some((job) => job.status === "succeeded"), "bounded business stop is not a technical failure");
 
     const reservations = (await pool.query("SELECT call_kind,status,exact_model_id,idempotency_key FROM production_call_reservations WHERE workflow_id=$1 AND role='research' ORDER BY reserved_at", [workflowId])).rows;
     const synthRes = reservations.find((row) => row.call_kind === "text_agent" && row.idempotency_key.endsWith(":synthesis"));
     assert.ok(synthRes);
-    strictEqual(synthRes.status, "FAILED_AFTER_SUBMISSION", "submitted Nemo synthesis must never reconcile as RELEASED");
+    strictEqual(synthRes.status, "CONSUMED", "valid submitted synthesis remains consumed at a bounded business stop");
     strictEqual(synthRes.exact_model_id, NEMO);
 
-    const failed = researchFailed(await persistence.listExecutionProvenance(workflowId));
-    assert.ok(failed);
-    assert.ok(String(failed.configuration?.failureMessage ?? "").includes("AGENT_OUTPUT_BLOCKED:research"), "failed provenance preserves the blocked verdict");
-    const blocked = failed.configuration?.providerFailure?.researchBlocked;
-    assert.ok(blocked, "blocked Research must retain bounded evidence-gate diagnostics");
-    strictEqual(blocked.ceoEligible, false);
-    strictEqual(blocked.synthesisEligibility, "SUBMITTED");
-    strictEqual(blocked.synthesisSubmitted, true);
-    assert.ok(Array.isArray(blocked.failedGatePaths) && blocked.failedGatePaths.length > 0);
-    assert.ok(blocked.retrievalCount > 0);
-    const serializedFailure = JSON.stringify(failed.configuration.providerFailure);
-    strictEqual(serializedFailure.includes("Smithsonian survey"), false, "no raw evidence text in durable diagnostics");
-    strictEqual(serializedFailure.includes("si.edu/spotlight"), false, "no source URLs in durable diagnostics");
-
     const events = await lifecycleEventsFor(pool, workflowId);
-    const terminal = events.filter((event) => event.state === "FAILED").at(-1);
+    const terminal = events.filter((event) => event.state === "COMPLETED").at(-1);
     assert.ok(terminal);
-    assert.ok(terminal.metadata.researchBlocked, "FAILED lifecycle event carries the bounded block diagnostics");
-    strictEqual(terminal.metadata.researchBlocked.ceoEligible, false);
 
     const artifacts = await persistence.listArtifacts(workflowId);
-    assert.equal(artifacts.filter((artifact) => artifact.kind === "research_report" && artifact.status === "completed").length, 0, "blocked remains blocked: no completed report");
+    const reports = artifacts.filter((artifact) => artifact.kind === "research_report" && artifact.status === "completed");
+    assert.equal(reports.length, 1, "valid negative Research outcome is durable");
+    strictEqual(reports[0].payload.researchStatus, "INSUFFICIENT_EVIDENCE");
+    strictEqual(reports[0].payload.evidenceQuality.ceoEligible, false);
     assert.equal(artifacts.filter((artifact) => artifact.producerAgent === "ceo").length, 0, "no downstream fabrication past the gate");
     const ceoReservations = (await pool.query("SELECT * FROM production_call_reservations WHERE workflow_id=$1 AND role='ceo'", [workflowId])).rows;
     assert.equal(ceoReservations.length, 0);

@@ -50,6 +50,29 @@ function armCeoNoGoHalt(step: Step, outcome: StepOutcome, context: WorkflowConte
 }
 
 /**
+ * A structurally valid Research V2 report may end in a legitimate evidence
+ * outcome that cannot advance to CEO. Arm the existing bounded-stop contract
+ * from the completed canonical artifact; technical/model-contract failures
+ * never reach this function as completed artifacts.
+ */
+function armResearchBusinessStop(step: Step, outcome: StepOutcome, context: WorkflowContext): void {
+  if (step.id !== "research" || outcome.status !== "completed" || outcome.artifact?.kind !== "research_report") return;
+  const payload = outcome.artifact.payload as Record<string, unknown>;
+  const gate = payload.evidenceQuality as Record<string, unknown> | undefined;
+  const researchStatus = typeof payload.researchStatus === "string" ? payload.researchStatus : "";
+  if (gate?.ceoEligible !== false || !["NEEDS_VERIFICATION", "INSUFFICIENT_EVIDENCE"].includes(researchStatus)) return;
+  const data = context.data as Record<string, unknown>;
+  if (data.researchIntelligenceVersion !== "V2") return;
+  if (data.boundedExecution !== undefined && data.boundedExecution !== null) return;
+  data.boundedExecution = {
+    stopAfterStepId: step.id,
+    reason: `RESEARCH_${researchStatus}`,
+    authorization: "CANONICAL_EVIDENCE_GATE",
+    recoveryExecutionId: null,
+  };
+}
+
+/**
  * Sticky-halt predicate for redelivery/resume: a completed CEO halt marker
  * blocks resumption until Owner-authorized action clears or replaces it.
  * Non-CEO bounded markers keep legacy resume behavior.
@@ -84,6 +107,7 @@ export class DefaultStepExecutor implements StepExecutor {
     switch (step.kind) {
       case "agent": {
         const outcome = await this.agentExecutor.executeAgentStep(step, context);
+        armResearchBusinessStop(step, outcome, context);
         armCeoNoGoHalt(step, outcome, context);
         return outcome;
       }

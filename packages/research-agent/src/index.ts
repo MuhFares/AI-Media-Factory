@@ -80,6 +80,7 @@ export {
   RESEARCH_DIRECTION_REQUIRED_FIELDS,
   RESEARCH_SYNTHESIS_SEMANTIC_CLAUSES,
   normalizeRuntimeIdentityEchoes,
+  deriveResearchCandidateRecommendation,
 } from "./research-agent.js";
 export type {
   DiscoveryQueryQuality,

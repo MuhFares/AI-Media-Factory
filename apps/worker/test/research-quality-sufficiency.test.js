@@ -16,6 +16,8 @@ import {
   reclassifyResearchEvidence,
   researchStatusForSufficiency,
 } from "../dist/production-executor.js";
+import { deriveResearchCandidateRecommendation } from "@ai-media-factory/research-agent";
+import { CANARY12_SYNTHESIS, CANARY12_RETRIEVAL_RESULTS, CANARY12_TERMINAL } from "../../../packages/research-agent/test/fixtures/canary-12-evidence-gate.js";
 
 const QUIZ_5 = [
   { title: "Finding Evidence in Text Quiz - English Study Guide ...", url: "https://quizlet.com/826984233/x", snippet: "What textual evidence is typically found in informational text?", source: "quizlet.com" },
@@ -122,6 +124,73 @@ test("F: high confidence with an unsupported candidate is not USABLE", () => {
   });
   assert.equal(verdict.status, "NEEDS_VERIFICATION");
   assert.equal(verdict.ceoEligible, false);
+});
+
+test("Canary-12 persisted gate input explains and corrects the misleading recommendation reason", () => {
+  const normalized = CANARY12_SYNTHESIS.candidateStories.map((candidate) => ({
+    ...candidate,
+    recommendedForProduction: deriveResearchCandidateRecommendation(candidate, "HISTORICAL_POV"),
+  }));
+  const verdict = evaluateResearchEvidenceSufficiency({
+    retrievalResults: CANARY12_RETRIEVAL_RESULTS,
+    synthesisSources: CANARY12_SYNTHESIS.sources,
+    synthesisConfidence: CANARY12_SYNTHESIS.confidence,
+    synthesisCitations: CANARY12_SYNTHESIS.citations,
+    candidateStories: normalized,
+    synthesisStatus: CANARY12_SYNTHESIS.status,
+  });
+  assert.equal(verdict.candidateCount, CANARY12_TERMINAL.candidateCount);
+  assert.equal(verdict.viableCandidates, CANARY12_TERMINAL.viableCandidateCount);
+  assert.deepEqual(CANARY12_TERMINAL.reasons, [
+    "CANDIDATE_NOT_RECOMMENDED_FOR_PRODUCTION",
+    "CANDIDATE_NOT_RECOMMENDED_FOR_PRODUCTION",
+    "CANDIDATE_NOT_RECOMMENDED_FOR_PRODUCTION",
+  ], "frozen persisted diagnostics retain the historical misleading reason");
+  assert.deepEqual(verdict.reasons, [
+    "CANDIDATE_FACTUAL_ELIGIBILITY_BELOW_THRESHOLD",
+    "CANDIDATE_FACTUAL_ELIGIBILITY_BELOW_THRESHOLD",
+    "CANDIDATE_FACTUAL_ELIGIBILITY_BELOW_THRESHOLD",
+  ], "current production gate reports the missing factual eligibility predicate directly");
+  assert.equal(verdict.status, "NEEDS_VERIFICATION");
+  assert.equal(verdict.ceoEligible, false);
+});
+
+test("adversarial A-J candidate viability matrix stays fail-closed without contradictory reasons", () => {
+  const primary = { ...SI_QANAT, id: 1 };
+  const reputable = { ...BRITANNICA_QANAT, id: 2 };
+  const weakA = { title: "Unknown A", url: "https://unknown-a.example/x", snippet: "Claim", id: 3 };
+  const weakB = { title: "Unknown B", url: "https://unknown-b.example/y", snippet: "Claim", id: 4 };
+  const v2 = (overrides = {}) => ({
+    candidateId: "candidate-1", topic: "Qanat engineering", sourceIds: [1, 2],
+    supportingEvidenceIds: ["evidence-1"], evidenceLineageValidated: true,
+    factualVerification: { status: "STRONG", basis: "Corroborated" },
+    recommendedForProduction: true, ...overrides,
+  });
+  const verdict = (candidateStories, sources = [primary, reputable], confidence = 0.8) => evaluateResearchEvidenceSufficiency({
+    retrievalResults: sources, synthesisSources: sources, synthesisConfidence: confidence,
+    synthesisCitations: sources.map((source) => ({ sourceId: source.id, text: "citation" })), candidateStories,
+  });
+  const cases = [
+    ["A", v2(), [primary, reputable], 1, true, []],
+    ["B", v2({ sourceIds: [1] }), [primary], 0, false, ["CANDIDATE_SINGLE_DOMAIN"]],
+    ["C", v2({ recommendedForProduction: false }), [primary, reputable], 0, false, ["CANDIDATE_NOT_RECOMMENDED_FOR_PRODUCTION"]],
+    ["D", v2({ recommendedForProduction: false, sourceIds: [3, 4] }), [weakA, weakB], 0, false, ["CANDIDATE_NOT_RECOMMENDED_FOR_PRODUCTION"]],
+    ["E", { candidateId: "legacy", topic: "Legacy candidate", sourceIds: [1, 2] }, [primary, reputable], 1, true, []],
+    ["G", v2({ supportingEvidenceIds: [], evidenceLineageValidated: false }), [primary, reputable], 0, false, ["CANDIDATE_WITHOUT_VALIDATED_EVIDENCE_LINEAGE"]],
+    ["H", v2({ sourceIds: [99] }), [primary, reputable], 0, false, ["CANDIDATE_WITHOUT_EVIDENCE"]],
+    ["I", v2({ sourceIds: [3, 4] }), [weakA, weakB], 0, false, ["CANDIDATE_LOW_AUTHORITY_ONLY"]],
+    ["J", v2(), [primary, reputable], 1, true, []],
+  ];
+  for (const [name, candidate, sources, viable, eligible, reasons] of cases) {
+    const result = verdict([candidate], sources, name === "I" ? 0.99 : name === "J" ? 0.1 : 0.8);
+    assert.equal(result.viableCandidates, viable, name);
+    assert.equal(result.ceoEligible, eligible, name);
+    assert.deepEqual(result.reasons, reasons, name);
+  }
+  const mixed = verdict([v2(), v2({ candidateId: "candidate-2", recommendedForProduction: false })]);
+  assert.equal(mixed.viableCandidates, 1, "F");
+  assert.equal(mixed.ceoEligible, true, "F");
+  assert.deepEqual(mixed.reasons, ["CANDIDATE_NOT_RECOMMENDED_FOR_PRODUCTION"], "F");
 });
 
 test("G: discovery queries aim at concrete candidates, never generic fact lists", () => {

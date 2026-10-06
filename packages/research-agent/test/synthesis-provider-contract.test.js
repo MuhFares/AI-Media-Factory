@@ -159,7 +159,13 @@ describe("synthesis provider-compatibility contract", () => {
       ok(schema.required.includes(key), key);
     }
     const items = schema.properties.candidateStories.items;
-    ok(items.required.includes("candidateId") && items.required.includes("topic"));
+    for (const key of [
+      "candidateId", "topic", "factualAngle", "keyClaims", "sourceIds",
+      "supportingEvidenceIds", "sourceQualitySummary", "visualPotential",
+      "shortFormPotential", "evidenceRisks", "verificationStatus",
+      "contentOpportunityAssessment", "factualVerification",
+      "recommendedForProduction",
+    ]) ok(items.required.includes(key), `candidate.${key}`);
   });
 
   it("Part 7: captured synthesis requests carry the strict schema (positive and negative)", async () => {

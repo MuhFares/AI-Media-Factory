@@ -1146,6 +1146,19 @@ export const RESEARCH_SYNTHESIS_SEMANTIC_CLAUSES = [
   "Authority rule: never claim or request production, media, publication, upload, or generation actions in any field.",
 ] as const;
 
+/** Canonical recommendation derivation shared by synthesis parsing/replay. */
+export function deriveResearchCandidateRecommendation(
+  candidate: Readonly<Record<string, unknown>>,
+  factualMode: unknown,
+): boolean {
+  if (candidate.recommendedForProduction !== true) return false;
+  if (factualMode !== "HISTORICAL_POV") return true;
+  const factual = isJsonRecord((candidate.factualVerification ?? null) as Json)
+    ? candidate.factualVerification as JsonRecord
+    : null;
+  return factual?.status === "STRONG";
+}
+
 export class ResearchAgent extends BaseAgent {
   readonly id: AgentId = "research";
   readonly name = "Research Agent";
@@ -2019,7 +2032,15 @@ Every citation sourceId must refer to an item in sources. Do not invent sources,
         marketRelevance: { type: ["string", "null"] },
         recommendedForProduction: { type: "boolean" },
       },
-      required: ["candidateId", "topic"],
+      required: synthesis
+        ? [
+            "candidateId", "topic", "factualAngle", "keyClaims", "sourceIds",
+            "supportingEvidenceIds", "sourceQualitySummary", "visualPotential",
+            "shortFormPotential", "evidenceRisks", "verificationStatus",
+            "contentOpportunityAssessment", "factualVerification",
+            "recommendedForProduction",
+          ]
+        : ["candidateId", "topic"],
     };
     const visualContract = {
       type: ["object", "null"],
@@ -2391,6 +2412,51 @@ ${RESEARCH_SYNTHESIS_SEMANTIC_CLAUSES.join(" ")}`;
           diagnosticsTruncated: false,
         });
       }
+      // The final-synthesis prompt and V2 business gate both treat these as
+      // the canonical candidate eligibility contract. Silently dropping a
+      // missing field here used to turn a model-authored `recommended=true`
+      // into a locally-derived `false`, producing contradictory diagnostics.
+      // Reject the incomplete positive candidate at the contract boundary.
+      const requiredCandidateFields: ReadonlyArray<readonly [string, (value: unknown) => boolean, string]> = [
+        ["factualAngle", (value) => typeof value === "string", "string"],
+        ["keyClaims", (value) => Array.isArray(value) && value.every((entry) => typeof entry === "string"), "array of strings"],
+        ["sourceIds", (value) => Array.isArray(value) && value.every((entry) => typeof entry === "number"), "array of numbers"],
+        ["supportingEvidenceIds", (value) => Array.isArray(value) && value.every((entry) => typeof entry === "string"), "array of strings"],
+        ["sourceQualitySummary", (value) => typeof value === "string", "string"],
+        ["visualPotential", (value) => typeof value === "string", "string"],
+        ["shortFormPotential", (value) => typeof value === "string", "string"],
+        ["evidenceRisks", (value) => Array.isArray(value) && value.every((entry) => typeof entry === "string"), "array of strings"],
+        ["verificationStatus", (value) => typeof value === "string", "string"],
+        ["recommendedForProduction", (value) => typeof value === "boolean", "boolean"],
+      ];
+
+      for (const [field, valid, expected] of requiredCandidateFields) {
+        if (!valid(candidate[field])) {
+          throw new ResearchStructuralValidationError({
+            validationKind: "STRUCTURAL",
+            issues: [{ path: `candidateStories[${index}].${field}`, code: candidate[field] === undefined ? "missing_required" : "wrong_type", expected }],
+            shape: { topLevelKeys: [], strategyFindingKeys: [], truncated: false }, diagnosticsTruncated: false,
+          });
+        }
+      }
+      const opportunity = isJsonRecord((candidate.contentOpportunityAssessment ?? null) as Json)
+        ? candidate.contentOpportunityAssessment as JsonRecord : null;
+      if (opportunity === null || !["HIGH", "MEDIUM", "LOW"].includes(String(opportunity.level)) || typeof opportunity.basis !== "string") {
+        throw new ResearchStructuralValidationError({
+          validationKind: "STRUCTURAL",
+          issues: [{ path: `candidateStories[${index}].contentOpportunityAssessment`, code: candidate.contentOpportunityAssessment === undefined ? "missing_required" : "wrong_type", expected: "{level:HIGH|MEDIUM|LOW,basis:string}" }],
+          shape: { topLevelKeys: [], strategyFindingKeys: [], truncated: false }, diagnosticsTruncated: false,
+        });
+      }
+      const factualVerification = isJsonRecord((candidate.factualVerification ?? null) as Json)
+        ? candidate.factualVerification as JsonRecord : null;
+      if (factualVerification === null || !["STRONG", "PARTIAL", "INCOMPLETE"].includes(String(factualVerification.status)) || typeof factualVerification.basis !== "string") {
+        throw new ResearchStructuralValidationError({
+          validationKind: "STRUCTURAL",
+          issues: [{ path: `candidateStories[${index}].factualVerification`, code: candidate.factualVerification === undefined ? "missing_required" : "wrong_type", expected: "{status:STRONG|PARTIAL|INCOMPLETE,basis:string}" }],
+          shape: { topLevelKeys: [], strategyFindingKeys: [], truncated: false }, diagnosticsTruncated: false,
+        });
+      }
       const candidateSourceIds = Array.isArray(candidate.sourceIds) ? candidate.sourceIds : [];
       const knownSourceIds = new Set(report.sources.map((source) => source.id));
       if (candidateSourceIds.some((id) => typeof id !== "number" || !knownSourceIds.has(id))) {
@@ -2480,7 +2546,7 @@ ${RESEARCH_SYNTHESIS_SEMANTIC_CLAUSES.join(" ")}`;
         const carriesEligibilityContract = input.researchObjective !== undefined
           || Object.prototype.hasOwnProperty.call(candidate, "recommendedForProduction")
           || factual !== undefined || opportunity !== undefined;
-        const recommended = candidate.recommendedForProduction === true && (!historical || factual?.status === "STRONG");
+        const recommended = deriveResearchCandidateRecommendation(candidate, historical ? "HISTORICAL_POV" : input.researchObjective?.factualMode);
         return {
           candidateId: String(candidate.candidateId),
           topic: String(candidate.topic),

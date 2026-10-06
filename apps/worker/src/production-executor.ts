@@ -2537,6 +2537,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
     let productionReservations: ProductionCallReservation[] = [];
     let productionSubmissionStarted = false;
     let budgetReconciliationFailure: string | null = null;
+    let researchOutputForFailureDiagnostics: Json | null = null;
     try {
       // PREPARING is explicitly pre-submission.  It gives failures in chain
       // loading/input assembly a durable identity without making restart
@@ -2605,6 +2606,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
               finishReason: (execution.response as unknown as { finishReason?: unknown }).finishReason ?? "unknown",
             },
           } as unknown as Json;
+      if (step.agent === "research") researchOutputForFailureDiagnostics = output;
       const modelBReview = step.agent === "review" && step.id === "review";
       const reviewBusinessPayload = modelBReview ? deepFreezeJson(structuredClone(normalizedOutput)) : null;
       const status = modelBReview ? "completed" : artifactStatusFor(step.agent, output, context.data, step.id);
@@ -2683,6 +2685,15 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
         ...(modelBReview ? { reviewBusinessStatus: (reviewBusinessPayload as unknown as ReviewReport).status, reviewExecutionId: lifecycle?.executionId } : {}) };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (step.agent === "research" && researchOutputForFailureDiagnostics !== null) {
+        const diagnosticError = error as Error & { diagnostics?: Record<string, unknown> };
+        if (typeof safeRecord(diagnosticError.diagnostics).researchBlocked !== "object") {
+          diagnosticError.diagnostics = {
+            ...safeRecord(diagnosticError.diagnostics),
+            researchBlocked: buildResearchBlockedDiagnostics(researchOutputForFailureDiagnostics, context.data, step.id),
+          };
+        }
+      }
       if (productionReservations.length > 0) {
         const failedUsage=safeRecord(safeRecord(lifecycle?.lastProviderResponse).usage);
         const failedCalculableCost=typeof failedUsage.cost==="number"?failedUsage.cost:undefined;
@@ -4440,12 +4451,10 @@ function artifactStatusFor(agent: string, output: Json, contextData?: Readonly<R
       const executions = Array.isArray(record.capabilityExecutions) ? record.capabilityExecutions : [];
       const search = executions.find((item) => safeRecord(item).capabilityId === "web.search");
       if (search === undefined) {
-        const bounded = safeRecord(contextData?.boundedExecution ?? contextData?.boundedStop);
         const planning = safeRecord(record.retrievalPlanning);
         const gate = safeRecord(record.evidenceQuality);
         const legitimateNoCapability = contextData?.researchIntelligenceVersion === "V2"
           && typeof stepId === "string"
-          && bounded.stopAfterStepId === stepId
           && planning.status === "NO_SUPPORTED_CAPABILITY"
           && Array.isArray(record.retrievalPlan)
           && record.retrievalPlan.length === 0
@@ -4458,19 +4467,16 @@ function artifactStatusFor(agent: string, output: Json, contextData?: Readonly<R
       if (searchStatus !== "success") return "blocked";
       const gate = safeRecord(record.evidenceQuality);
       if (gate.status === "NEEDS_RESEARCH_RETRY") return "blocked";
-      // V2 bounded Research is allowed to complete honestly with no eligible
+      // V2 Research is allowed to complete honestly with no eligible
       // candidate.  Completion here means the requested intelligence cycle
       // produced a durable report; it does not make that report CEO-eligible.
-      // Limit this semantic to an explicit V2 bounded stop at this Research
-      // step so historical V1 and unbounded downstream behavior remain
-      // fail-closed.
-      const bounded = safeRecord(contextData?.boundedExecution ?? contextData?.boundedStop);
-      const honestV2BoundedStop = contextData?.researchIntelligenceVersion === "V2"
+      // The workflow-engine arms the bounded stop from this completed artifact
+      // on the original live context (routing uses an executor-local clone).
+      const honestV2BusinessStop = contextData?.researchIntelligenceVersion === "V2"
         && typeof stepId === "string"
-        && bounded.stopAfterStepId === stepId
-        && record.researchStatus === "INSUFFICIENT_EVIDENCE"
+        && (record.researchStatus === "INSUFFICIENT_EVIDENCE" || record.researchStatus === "NEEDS_VERIFICATION")
         && gate.ceoEligible === false;
-      if (honestV2BoundedStop) return "completed";
+      if (honestV2BusinessStop) return "completed";
       // Business sufficiency: a structurally valid report is still blocked
       // unless the evidence is CEO-eligible (viable candidates above the
       // authority threshold). Missing sufficiency data fails closed.
@@ -4815,8 +4821,8 @@ export function evaluateResearchEvidenceSufficiency(input: {
     const hasV2Eligibility = Object.prototype.hasOwnProperty.call(record, "recommendedForProduction")
       || Object.keys(factual).length > 0;
     if (hasV2Eligibility) {
-      if (record.recommendedForProduction !== true) { reasons.push("CANDIDATE_NOT_RECOMMENDED_FOR_PRODUCTION"); continue; }
       if (factual.status !== "STRONG") { reasons.push("CANDIDATE_FACTUAL_ELIGIBILITY_BELOW_THRESHOLD"); continue; }
+      if (record.recommendedForProduction !== true) { reasons.push("CANDIDATE_NOT_RECOMMENDED_FOR_PRODUCTION"); continue; }
       if (evidenceIds.length === 0 || record.evidenceLineageValidated !== true) { reasons.push("CANDIDATE_WITHOUT_VALIDATED_EVIDENCE_LINEAGE"); continue; }
     }
     const linkedSources = linkedIds.map((id) => sourceById.get(id)).filter((source): source is unknown => source !== undefined);
