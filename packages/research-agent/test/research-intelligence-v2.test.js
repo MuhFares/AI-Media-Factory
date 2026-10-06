@@ -46,8 +46,8 @@ function agentFor(finalReport, calls, capabilityCalls) {
     return { output: text.includes("Research Direction") ? mission(finalReport.metadata.agentVersion.includes("ORIGINAL_FANTASY") ? "ORIGINAL_FANTASY" : "HISTORICAL_POV") : finalReport, raw: "{}", usage: { inputTokens: 10, outputTokens: 10, costUsd: .001 }, model: "fixture", provider: "fixture", latencyMs: 1 };
   }, capabilityExecution: { executeCapability: async (request) => {
     capabilityCalls.push(request);
-    const verification = String(request.requestId).includes(":verify-");
-    return { status: "success", capabilityId: "web.search", output: { providerId: "fixture", results: [{ id: verification ? "v1" : "d1", title: "Documented object", url: verification ? "https://university.example/object" : "https://museum.example/object", snippet: "Documented object.", source: verification ? "university.example" : "museum.example" }] } };
+    const verification = String(request.requestId).includes(":verification:");
+    return { status: "success", resultId: `result-${request.requestId}`, idempotencyKey: request.requestId, capabilityId: "web.search", output: { providerId: "fixture", results: [{ id: verification ? "v1" : "d1", title: "Documented object", url: verification ? "https://university.example/object" : "https://museum.example/object", snippet: "Documented object.", source: verification ? "university.example" : "museum.example" }] }, evidence: { evidenceId: "d1", succeeded: true, providerId: "fixture", executedAt: "2026-09-25T00:00:00.000Z" } };
   } } });
 }
 
@@ -57,12 +57,45 @@ function agentWithDirection(directionPayload, calls = [], capabilityCalls = [], 
     return { output: text.includes("Research Direction") ? directionPayload : report({ factual: "STRONG" }), raw: "{}", usage: { inputTokens: 1, outputTokens: 1, costUsd: 0 }, model: "fixture", provider: "fixture", latencyMs: 1 };
   }, ...extraDeps, capabilityExecution: { executeCapability: async (request) => {
     capabilityCalls.push(request);
-    return { status: "success", resultId: `result-${request.requestId}`, capabilityId: request.capabilityId, output: { providerId: "fixture", results: [] } };
+    return { status: "success", resultId: `result-${request.requestId}`, idempotencyKey: request.requestId, capabilityId: request.capabilityId, output: { providerId: "fixture", results: [] }, evidence: { evidenceId: "d1", succeeded: true, providerId: "fixture", executedAt: "2026-09-25T00:00:00.000Z" } };
   } } });
 }
 
 describe("Research Intelligence Direction Cycle V2", () => {
   const planScope = { workflowId: "wf-v2", correlationId: "corr-v2", taskId: task.id, recoverySuffix: ":recovery:test" };
+
+  it("Canary-14 regression: rejects model-authored evidence ids absent from governed retrieval", async () => {
+    const invalid = report({ factual: "STRONG", recommended: true });
+    invalid.candidateStories[0].supportingEvidenceIds = ["evidence-1", "evidence-2"];
+    await rejects(
+      agentFor(invalid, [], []).execute({ context, input: input() }, signal),
+      (error) => error?.diagnostics?.issues?.some((issue) => issue.path === "candidateStories[0].supportingEvidenceIds"),
+    );
+  });
+
+  it("lineage contract rejects missing, duplicate, URL, and mixed canonical/noncanonical evidence identities", async () => {
+    const cases = [
+      [],
+      ["d1", "d1"],
+      ["https://museum.example/object"],
+      ["d1", "evidence-does-not-exist"],
+    ];
+    for (const supportingEvidenceIds of cases) {
+      const invalid = report({ factual: "STRONG", recommended: true });
+      invalid.candidateStories[0].supportingEvidenceIds = supportingEvidenceIds;
+      await rejects(
+        agentFor(invalid, [], []).execute({ context, input: input() }, signal),
+        (error) => error?.diagnostics?.issues?.some((issue) => issue.path === "candidateStories[0].supportingEvidenceIds"),
+      );
+    }
+  });
+
+  it("lineage contract accepts the exact governed evidence identity", async () => {
+    const valid = report({ factual: "STRONG", recommended: true });
+    valid.candidateStories[0].supportingEvidenceIds = ["d1"];
+    const result = await agentFor(valid, [], []).execute({ context, input: input() }, signal);
+    deepStrictEqual(result.output.candidateStories[0].supportingEvidenceIds, ["d1"]);
+  });
 
   it("capability identity A-F is deterministic for replay and unique across lane, query, attempt, and recovery", () => {
     const base = { workflowId: "wf-1", executionScopeId: "recovery-1", taskId: "research", capabilityId: "web.search", role: "DISCOVERY", laneId: "historical", queryOrdinal: 1, attemptOrdinal: 1 };

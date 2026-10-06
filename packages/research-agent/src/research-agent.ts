@@ -2273,8 +2273,13 @@ Every citation sourceId must refer to an item in sources. Do not invent sources,
     const prompt = this.buildFinalSynthesisPrompt(input, mission, opportunities, verificationPlans, discoveryExecutions, socialEvidence, verificationExecutions);
     const request = this.buildExecutionRequest(prompt, "FINAL_SYNTHESIS");
     const response = await this.runExecution(context, request, signal);
+    const availableEvidenceIds = new Set(
+      [...discoveryExecutions, ...verificationExecutions]
+        .map((item) => safeRecord(safeRecord(item as Json).evidence).evidenceId)
+        .filter((id): id is string => typeof id === "string" && id.trim().length > 0),
+    );
     return {
-      report: this.parseSynthesisResponse(response.output, input),
+      report: this.parseSynthesisResponse(response.output, input, availableEvidenceIds),
       response,
     };
   }
@@ -2296,6 +2301,17 @@ Every citation sourceId must refer to an item in sources. Do not invent sources,
       .map((item) => safeRecord(item as Json))
       .filter((execution) => execution.status === "success")
       .map((execution) => safeRecord(execution.output));
+    const evidenceRegistry = [...discoveryExecutions, ...verificationExecutions]
+      .map((item) => {
+        const execution = safeRecord(item as Json);
+        const evidence = safeRecord(execution.evidence);
+        return {
+          evidenceId: typeof evidence.evidenceId === "string" ? evidence.evidenceId : null,
+          resultId: typeof execution.resultId === "string" ? execution.resultId : null,
+          idempotencyKey: typeof execution.idempotencyKey === "string" ? execution.idempotencyKey : null,
+        };
+      })
+      .filter((entry) => entry.evidenceId !== null);
     return `${this.researchConfig.systemPrompt}
 
 Final research synthesis (contract amf-research-synthesis-v1) for research task ${task.id}.
@@ -2313,6 +2329,8 @@ CANDIDATE OPPORTUNITIES (from discovery evidence):
 ${JSON.stringify(opportunities).slice(0, 3000)}
 VERIFICATION PLANS:
 ${JSON.stringify(verificationPlans).slice(0, 2000)}
+CANONICAL EVIDENCE ID REGISTRY (the ONLY values permitted in candidateStories[].supportingEvidenceIds; copy evidenceId byte-for-byte, never abbreviate, renumber, or invent aliases):
+${JSON.stringify(evidenceRegistry).slice(0, 4000)}
 VERIFICATION EVIDENCE (per-candidate corroboration results):
 ${JSON.stringify(verificationExecutions.map((item) => safeRecord(item as Json))).slice(0, 4000)}
 Return one JSON ResearchReport with: reportId (UUID); taskId (exact echo); stage (exact echo); taskDescription; summary; candidateStories (array, possibly empty when evidence is insufficient — an empty list is honest, never a failure — each entry {candidateId:string, topic:string, factualAngle:string, keyClaims:string[], sourceIds:number[], supportingEvidenceIds:string[] (stable evidence IDs copied exactly from the supplied retrieval evidence; never source IDs or capability-result IDs), sourceQualitySummary:string, visualPotential:string, shortFormPotential:string, trendEvidence:[{signal:string, observedAt:string|null, source:string}] (ONLY from social evidence above, with provenance; omit when none), evergreenEvidence:string[], marketRelevance:string|null, evidenceRisks:string[], verificationStatus:string, contentOpportunityAssessment:{level:"HIGH"|"MEDIUM"|"LOW", basis:string} (opportunity is SEPARATE from factual verification), factualVerification:{status:"STRONG"|"PARTIAL"|"INCOMPLETE", basis:string}, recommendedForProduction:boolean}); sources (array of {id:number,title:string,url:string,snippet:string} built ONLY from DISCOVERY/VERIFICATION evidence above); confidence (number 0..1 reflecting evidence quality, never inflated by retrieval count alone); citations (array of {sourceId:number,text:string} — every sourceId must equal a sources.id); evidenceRisks (array of strings); status (string: "grounded" when candidates are supported, "insufficient_evidence" otherwise); metadata {createdAt:string,agentVersion:string}.
@@ -2356,7 +2374,7 @@ ${RESEARCH_SYNTHESIS_SEMANTIC_CLAUSES.join(" ")}`;
    * base report rules plus synthesis extras. Runs only when the caller set an
    * explicit synthesisContract; legacy/strategy inputs keep prior behavior.
    */
-  private parseSynthesisResponse(output: Json, input: ResearchAgentInput): ResearchReport {
+  private parseSynthesisResponse(output: Json, input: ResearchAgentInput, availableEvidenceIds?: ReadonlySet<string>): ResearchReport {
     const report = this.parseResearchResponse(output, input);
     const record = isJsonRecord(output) ? output : null;
     if (record === null) throw new ResearchStructuralValidationError(diagnoseResearchStructure(output, input));
@@ -2465,6 +2483,18 @@ ${RESEARCH_SYNTHESIS_SEMANTIC_CLAUSES.join(" ")}`;
           issues: [{ path: `candidateStories[${index}].sourceIds`, code: "value_mismatch", expected: "ids from sources" }],
           shape: { topLevelKeys: [], strategyFindingKeys: [], truncated: false }, diagnosticsTruncated: false,
         });
+      }
+      if (availableEvidenceIds !== undefined) {
+        const supportingIds = candidate.supportingEvidenceIds as string[];
+        if ((record.status === "grounded" && supportingIds.length === 0)
+          || new Set(supportingIds).size !== supportingIds.length
+          || supportingIds.some((id) => !availableEvidenceIds.has(id))) {
+          throw new ResearchStructuralValidationError({
+            validationKind: "STRUCTURAL",
+            issues: [{ path: `candidateStories[${index}].supportingEvidenceIds`, code: "value_mismatch", expected: "unique evidenceId values from the canonical evidence registry" }],
+            shape: { topLevelKeys: [], strategyFindingKeys: [], truncated: false }, diagnosticsTruncated: false,
+          });
+        }
       }
     }
     if (!Array.isArray(record.evidenceRisks) || !record.evidenceRisks.every((risk): risk is string => typeof risk === "string")) {

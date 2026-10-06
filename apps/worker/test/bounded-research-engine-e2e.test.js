@@ -644,7 +644,15 @@ test("V2 direction through verification reaches durable bounded stop with CEO at
       const direction = body.includes("Research Direction");
       const final = body.includes("Final research synthesis");
       transports.push({ direction, final, model: submitted.model });
-      return sse(RESEARCH_MODEL, direction ? v2Mission(researchStep.id) : v2Grounded(researchStep.id), direction ? PLAN_COST : SYNTHESIS_COST);
+      const payload = direction ? v2Mission(researchStep.id) : v2Grounded(researchStep.id);
+      if (final) {
+        const prompt = submitted.messages.map((message) => String(message.content ?? "")).join("\n");
+        const registry = prompt.match(/CANONICAL EVIDENCE ID REGISTRY[^\n]*:\n(\[[\s\S]*?\])\nVERIFICATION EVIDENCE/u);
+        const entries = registry === null ? [] : JSON.parse(registry[1]);
+        const verification = entries.find((entry) => String(entry.resultId).includes(":verification:"));
+        payload.candidateStories[0].supportingEvidenceIds = verification === undefined ? [] : [verification.evidenceId];
+      }
+      return sse(RESEARCH_MODEL, payload, direction ? PLAN_COST : SYNTHESIS_COST);
     };
     const runtime = await createProductionWorker({ pool, providerBoundary: makeBoundary(persistence, pool), orphanStaleMs: 2_000_000_000 });
     assert.equal(await runtime.worker.runOnce(), true);
