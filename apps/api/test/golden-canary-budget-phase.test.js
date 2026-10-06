@@ -17,6 +17,7 @@ process.env.VOICETUT_TTS_ENDPOINT_ID = "fixture-voice";
 const AUTH = { Authorization: "Bearer test-owner-token" };
 const DATABASE_URL = process.env.TEST_DATABASE_URL ?? (() => { if (!process.env.DATABASE_URL) return "postgresql://postgres@127.0.0.1:5432/ai_media_factory_test"; const u = new URL(process.env.DATABASE_URL); u.pathname = "/ai_media_factory_test"; return u.toString(); })();
 const CANARY_PHASE = "MORROWAY_GOLDEN_CANARY_01";
+const SCOPED_CANARY_PHASE = "MORROWAY_GOLDEN_CANARY_SCOPED_TEST";
 const CYCLE_PHASE = "MORROWAY_PRODUCTION_CYCLE_01_PRE_MEDIA";
 
 let pool, server, base, persistence, queue, budgets;
@@ -60,7 +61,8 @@ after(async () => {
     if (createdIds.workflows.length) await pool.query(`DELETE FROM workflow_jobs WHERE workflow_id = ANY($1::text[])`, [createdIds.workflows]);
     if (createdIds.workflows.length) await pool.query(`DELETE FROM workflow_submissions WHERE workflow_id = ANY($1::text[])`, [createdIds.workflows]);
     if (createdIds.contents.length) await pool.query(`DELETE FROM content_items WHERE content_id = ANY($1::text[])`, [createdIds.contents]);
-    await pool.query(`DELETE FROM production_phase_call_budgets WHERE project_id='morroway' AND phase=$1`, [CANARY_PHASE]);
+    await pool.query(`DELETE FROM production_phase_call_budgets WHERE project_id='morroway' AND phase=ANY($1::text[])`, [[CANARY_PHASE,SCOPED_CANARY_PHASE]]);
+    await pool.query(`DELETE FROM owner_control_audit_events WHERE project_id='morroway' AND subject_id LIKE $1`, [`${SCOPED_CANARY_PHASE}%`]);
     await pool.query(`DELETE FROM amf_worker_presence WHERE worker_instance_id='canary-phase-worker'`);
     await pool.end();
   }
@@ -101,6 +103,20 @@ test("B+C+P. explicit Golden Canary phase resolves, preflight uses it and report
   assert.equal(sub.commandContext.budgetPhase, CANARY_PHASE);
   assert.equal(sub.commandContext.budgetPhaseExplicit, true);
   assert.equal(sub.commandContext.researchIntelligenceVersion, "V2");
+});
+
+test("canonical Golden Canary envelope builder produces a preflight-ready split authority matrix", async () => {
+  await new OwnerAutonomyStore(pool).createGoldenCanaryBudgetEnvelope({projectId:"morroway",phase:SCOPED_CANARY_PHASE,actor:"owner-test",reason:"provider-free canonical envelope fixture"});
+  const content=await createContent("canary-phase-scoped",briefFor({budgetPhase:SCOPED_CANARY_PHASE}));
+  const pf=await req(`/control/content/${content.contentId}/preflight`);
+  assert.equal(pf.status,200);
+  assert.equal(pf.body.preflight.ready,true);
+  assert.deepEqual(pf.body.preflight.callEnvelope,{research:4,research_text_agent:2,text_agent:8,image_generation:1});
+  const started=await req(`/control/content/${content.contentId}/start-production`,{method:"POST",body:"{}"});
+  assert.equal(started.status,201);
+  createdIds.workflows.push(started.body.workflowId);
+  const submission=await queue.loadSubmissionByWorkflow(started.body.workflowId);
+  assert.equal(submission.commandContext.budgetPhase,SCOPED_CANARY_PHASE);
 });
 
 test("G. duplicate start-production reuses the same bound workflow", async () => {

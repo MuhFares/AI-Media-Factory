@@ -88,6 +88,30 @@ test("production reservation persists the nested canonical price snapshot and fa
   await assert.rejects(() => executor.reserveProductionCalls({ id: "orchestrator", agent: "orchestrator" }, missing), /PRODUCTION_PRICE_SNAPSHOT_REQUIRED/);
 });
 
+test("Research V2 selects isolated scoped Research text capacity when the envelope provides it", async () => {
+  const seen=[];
+  const budget={
+    async budgets(){return[
+      {callKind:"research",remaining:4},
+      {callKind:"research_text_agent",remaining:2},
+      {callKind:"text_agent",remaining:8},
+    ];},
+    async reserve(input){seen.push(input);return{reservationId:`reservation-${seen.length}`,callKind:input.callKind,idempotencyKey:input.idempotencyKey};},
+    async reconcile(){},
+  };
+  const executor=createProductionAgentExecutor({productionCallBudget:budget});
+  await executor.reserveProductionCalls({id:"research",agent:"research"},{
+    workflowId:"wf-split-envelope",correlationId:"corr-split-envelope",
+    data:{projectId:"morroway",productionPhase:"PRE_MEDIA_PHASE",budgetPhase:"MORROWAY_GOLDEN_CANARY_TEST",researchIntelligenceVersion:"V2",
+      canonicalRouting:{canonicalRouting:{routingVersionId:"route",priceSnapshotId:"price-direction"}},
+      controlAgentOverrides:{research:{model:"openai/gpt-6-luna"},"research-synthesis":{model:"mistralai/mistral-nemo",canonicalRouting:{routingVersionId:"route",priceSnapshotId:"price-synthesis"}}}},
+  });
+  assert.deepEqual(seen.map((entry)=>[entry.callKind,entry.callLeg]),[
+    ["research","RETRIEVAL"],["research","RETRIEVAL"],["research","RETRIEVAL"],["research","RETRIEVAL"],
+    ["research_text_agent","DIRECTION"],["research_text_agent","FINAL_SYNTHESIS"],
+  ]);
+});
+
 test("provider-free real workflow path retains project context and reaches the Owner pre-media gate", async () => {
   const persistence = new MemoryPersistence();
   const observed=[];

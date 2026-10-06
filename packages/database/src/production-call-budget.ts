@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 
-export type ProductionCallKind = "research" | "text_agent";
+export type ProductionCallKind = "research" | "text_agent" | "research_text_agent";
 export interface ProductionCallReservation {
   reservationId:string; idempotencyKey:string; projectId:string; workflowId:string;
   phase:string; stage:string; role:string; callKind:ProductionCallKind; status:string;
@@ -57,7 +57,7 @@ export interface TransportOvercountRepairInput {
 function repairCallLeg(row:{role:unknown;call_kind:unknown;idempotency_key:unknown}):"DIRECTION"|"FINAL_SYNTHESIS"|"RETRIEVAL"|null{
   if(row.role!=="research"||typeof row.idempotency_key!=="string")return null;
   if(row.call_kind==="research"&&/:retrieval:\d+$/.test(row.idempotency_key))return "RETRIEVAL";
-  if(row.call_kind!=="text_agent")return null;
+  if(row.call_kind!=="text_agent"&&row.call_kind!=="research_text_agent")return null;
   return row.idempotency_key.endsWith(":synthesis")?"FINAL_SYNTHESIS":"DIRECTION";
 }
 

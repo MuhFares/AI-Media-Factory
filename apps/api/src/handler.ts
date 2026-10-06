@@ -18,7 +18,7 @@ import path from "node:path";
 import { createHash, timingSafeEqual, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { PostgresPersistence, PostgresQueue, ControlPlaneStore, OwnerDecision, PostgresRevisionDispatcher, PostgresReviewResumeDispatcher, PostgresMediaResumeDispatcher, StrategicStore, StrategicEntityType, LifecycleStore, LearningLoopStore, ContentStore, SubjectStore, ChannelStore, AutomationStore, ModelIntelligenceStore, ModelBenchmarkRuntimeStore, ProductionModelRoutingStore, ProductionCallBudgetStore, OwnerAutonomyStore, WanSupervisedExecutionStore } from "@ai-media-factory/database";
-import { ownerOnboarding, ownerRouting, ownerRoutingActivate, ownerBudgetSet, ownerNextCycleList, ownerNextCycleDecide, ownerAudit, ownerOperationMatrix, ownerHealth, ownerWorkerControl, ownerOpenRouterEgressProbe, ownerCredentialHealthList, ownerCredentialHealthVerify, ownerWanSupervisedList, ownerWanSingleSceneGenerate, ownerWanAttachProviderJob } from "./owner-autonomy-api.js";
+import { ownerOnboarding, ownerRouting, ownerRoutingActivate, ownerBudgetSet, ownerGoldenCanaryBudgetEnvelope, ownerNextCycleList, ownerNextCycleDecide, ownerAudit, ownerOperationMatrix, ownerHealth, ownerWorkerControl, ownerOpenRouterEgressProbe, ownerCredentialHealthList, ownerCredentialHealthVerify, ownerWanSupervisedList, ownerWanSingleSceneGenerate, ownerWanAttachProviderJob } from "./owner-autonomy-api.js";
 import type { CredentialHealthVerifier, WorkerDiagnosticClient } from "./owner-autonomy-api.js";
 import {
   automationPolicyGet, automationPolicySet, automationStatus, automationOverview,
@@ -360,6 +360,7 @@ export function createWorkflowApiHandler(deps: WorkflowApiDeps): (req: IncomingM
       if (path === "/control/owner/routing" && method === "GET") return await ownerRouting(deps, res, url);
       if (path === "/control/owner/routing/activate" && method === "POST") return await ownerRoutingActivate(deps, req, res);
       if (path === "/control/owner/budgets" && method === "POST") return await ownerBudgetSet(deps, req, res);
+      if (path === "/control/owner/golden-canary-envelope" && method === "POST") return await ownerGoldenCanaryBudgetEnvelope(deps, req, res);
       if (path === "/control/owner/next-cycle" && method === "GET") return await ownerNextCycleList(deps, res, url);
       const ownerNextCycleMatch = path.match(/^\/control\/owner\/next-cycle\/([^/]+)\/decision$/);
       if (ownerNextCycleMatch && method === "POST") return await ownerNextCycleDecide(deps, req, res, decodeURIComponent(ownerNextCycleMatch[1]));
@@ -1164,7 +1165,11 @@ async function contentLink(deps: WorkflowApiDeps, req: IncomingMessage, res: Ser
 const PILOT_BUDGETS: Readonly<Record<string, number>> = { research:1, text_agent:5, image_generation:3, video_generation:3, voice_generation:1, private_upload:1 };
 const MORROWAY_CYCLE_01 = "MORROWAY_PRODUCTION_CYCLE_01";
 const MORROWAY_CYCLE_01_BUDGET_PHASE = "MORROWAY_PRODUCTION_CYCLE_01_PRE_MEDIA";
-const CYCLE_01_CALL_ENVELOPE = { research:4, text_agent:10, image_generation:1 } as const;
+const LEGACY_CYCLE_01_CALL_ENVELOPE = { research:4, text_agent:10, image_generation:1 } as const;
+const SCOPED_CYCLE_01_CALL_ENVELOPE = { research:4, research_text_agent:2, text_agent:8, image_generation:1 } as const;
+function cycleCallEnvelope(rows:ReadonlyArray<{callKind:string}>):Readonly<Record<string,number>>{
+  return rows.some((row)=>row.callKind==="research_text_agent")?SCOPED_CYCLE_01_CALL_ENVELOPE:LEGACY_CYCLE_01_CALL_ENVELOPE;
+}
 function preMediaBudgetPhase(brief:Record<string,unknown>):string{return brief.productionCycle===MORROWAY_CYCLE_01?MORROWAY_CYCLE_01_BUDGET_PHASE:"PRE_MEDIA_PHASE"}
 // Canonical explicit budget-phase identity (Golden Canary wiring).
 // An Owner may persist `budgetPhase` on the content production brief. When
@@ -1189,7 +1194,7 @@ async function resolveBudgetPhase(deps:WorkflowApiDeps,projectId:string,brief:Re
   if(!deps.productionCallBudgets)return { ok:false, error:"BUDGET_STORE_UNAVAILABLE" };
   const rows=await deps.productionCallBudgets.budgets(projectId,phase);
   const byKind=new Map(rows.map(r=>[r.callKind,r]));
-  for(const [kind,needed] of Object.entries(CYCLE_01_CALL_ENVELOPE)){
+  for(const [kind,needed] of Object.entries(cycleCallEnvelope(rows))){
     const b=byKind.get(kind);
     if(!b||!b.active||b.limit<needed||b.maxRetries!==0)return { ok:false, error:"BUDGET_PHASE_UNAUTHORIZED" };
   }
@@ -1225,8 +1230,8 @@ async function pilotPreflight(deps:WorkflowApiDeps,item:{contentId:string;projec
   const resolution=await resolveBudgetPhase(deps,item.projectId,item.productionBrief);
   const budgetPhase=resolution.ok?resolution.phase:preMediaBudgetPhase(item.productionBrief);
   const cycleClass=resolution.ok?resolution.cycleClass:budgetPhase===MORROWAY_CYCLE_01_BUDGET_PHASE;
-  const envelope=cycleClass?CYCLE_01_CALL_ENVELOPE:{research:1,text_agent:10};
   const budgets=deps.productionCallBudgets?await deps.productionCallBudgets.budgets(item.projectId,budgetPhase):[];
+  const envelope=cycleClass?cycleCallEnvelope(budgets):{research:1,text_agent:10};
   const budgetBy=new Map(budgets.map(b=>[b.callKind,b]));
   const budgetErrors=[] as string[]; if(!resolution.ok)budgetErrors.push(resolution.error); else for(const [kind,needed] of Object.entries(envelope)){const b=budgetBy.get(kind);if(!b)budgetErrors.push(`BUDGET_${kind.toUpperCase()}_MISSING`);else if(!b.active||b.limit<needed)budgetErrors.push(`BUDGET_${kind.toUpperCase()}_BELOW_PHASE_1`);else if(b.remaining<needed)budgetErrors.push(`BUDGET_${kind.toUpperCase()}_EXHAUSTED`);else if(b.maxRetries!==0)budgetErrors.push(`BUDGET_${kind.toUpperCase()}_RETRIES_NOT_ZERO`);}
   const imageProvider={provider:"runpod-zimage",model:process.env.RUNPOD_ZIMAGE_MODEL_ID?.trim()||"z-image",configured:Boolean(process.env.RUNPOD_API_KEY?.trim()&&process.env.RUNPOD_ZIMAGE_ENDPOINT_ID?.trim()),healthState:"CONFIGURED_NOT_CALLED"};

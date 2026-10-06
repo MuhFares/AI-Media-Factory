@@ -2267,7 +2267,7 @@ function synthesizeQa(input: JsonRecord): Json {
  * null and can spend unrestricted legacy capacity only. Never invent values
  * for agents without a canonical leg.
  */
-export function researchReservationCallLeg(agent: string, callKind: "research" | "text_agent", keySuffix: string): string | null {
+export function researchReservationCallLeg(agent: string, callKind: "research" | "text_agent" | "research_text_agent", keySuffix: string): string | null {
   if (agent !== "research") return null;
   if (callKind === "research") return "RETRIEVAL";
   return keySuffix === ":synthesis" ? "FINAL_SYNTHESIS" : "DIRECTION";
@@ -2752,9 +2752,11 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
     const researchV2 = step.agent === "research" && data.researchIntelligenceVersion === "V2";
     let effectiveRetrievalEnvelope: number | null = null;
     let researchReservations: Array<{ callKind: "research"; keySuffix: string }>;
+    let researchTextCallKind: "text_agent" | "research_text_agent" = "text_agent";
     if (researchV2) {
       const budgets = await this.productionCallBudget.budgets(projectId, budgetPhase);
       const researchBudget = budgets.find((b) => b.callKind === "research");
+      if (budgets.some((b) => b.callKind === "research_text_agent")) researchTextCallKind = "research_text_agent";
       const remainingCapacity = researchBudget !== undefined ? Math.max(0, researchBudget.remaining) : 0;
       effectiveRetrievalEnvelope = Math.min(
         MAX_V2_RESEARCH_RETRIEVAL_CALLS,
@@ -2771,8 +2773,8 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
       researchReservations = [];
     }
     const directionReuse = step.agent === "research" && safeRecord(data.researchDirectionReuse).mission !== undefined;
-    const reservationSpecs: Array<{ callKind: "research" | "text_agent"; keySuffix: string }> = step.agent === "research"
-      ? [...researchReservations, ...(directionReuse ? [] : [{ callKind: "text_agent" as const, keySuffix: "" }]), { callKind: "text_agent", keySuffix: ":synthesis" }]
+    const reservationSpecs: Array<{ callKind: "research" | "text_agent" | "research_text_agent"; keySuffix: string }> = step.agent === "research"
+      ? [...researchReservations, ...(directionReuse ? [] : [{ callKind: researchTextCallKind, keySuffix: "" }]), { callKind: researchTextCallKind, keySuffix: ":synthesis" }]
       : [{ callKind: "text_agent", keySuffix: "" }];
     const reservations: ProductionCallReservation[] = [];
     // Per-leg synthesis accounting: the :synthesis reservation carries the
@@ -2782,7 +2784,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
     const synthesisRoute = step.agent === "research" ? researchSynthesisRoute(safeRecord(data.controlAgentOverrides)) : null;
     try {
       for (const spec of reservationSpecs) {
-        const isSynthesisLeg = synthesisRoute !== null && spec.callKind === "text_agent" && spec.keySuffix === ":synthesis";
+        const isSynthesisLeg = synthesisRoute !== null && spec.callKind !== "research" && spec.keySuffix === ":synthesis";
         reservations.push(await this.productionCallBudget.reserve({
           projectId, workflowId: context.workflowId, phase: budgetPhase, stage: step.id, role: step.agent, callKind: spec.callKind,
           callLeg: researchReservationCallLeg(step.agent, spec.callKind, spec.keySuffix),
@@ -2802,7 +2804,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
 
   private async reconcileProductionCalls(reservations: ProductionCallReservation[], submitted: boolean, success: boolean, calculableCostUsd?: number, providerBilledCostUsd?: number): Promise<void> {
     if (this.productionCallBudget === undefined) return;
-    for (const reservation of reservations) await this.productionCallBudget.reconcile({ reservationId: reservation.reservationId, providerSubmissionStarted: submitted, success, calculableCostUsd: reservation.callKind === "text_agent" ? calculableCostUsd : undefined, providerBilledCostUsd, provenance: { reconciledBy: "production-executor", costSemantics: providerBilledCostUsd === undefined ? "PROVIDER_BILLED_UNKNOWN" : "PROVIDER_BILLED_KNOWN" } });
+    for (const reservation of reservations) await this.productionCallBudget.reconcile({ reservationId: reservation.reservationId, providerSubmissionStarted: submitted, success, calculableCostUsd: reservation.callKind === "research" ? undefined : calculableCostUsd, providerBilledCostUsd, provenance: { reconciledBy: "production-executor", costSemantics: providerBilledCostUsd === undefined ? "PROVIDER_BILLED_UNKNOWN" : "PROVIDER_BILLED_KNOWN" } });
   }
 
   /**
@@ -2840,7 +2842,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
       try {
         const events = await this.persistence.listExecutionLifecycleEvents(input.lifecycleExecutionId);
         const researchReservations = input.reservations.filter((reservation) => reservation.callKind === "research");
-        const textReservations = input.reservations.filter((reservation) => reservation.callKind === "text_agent");
+        const textReservations = input.reservations.filter((reservation) => reservation.callKind !== "research");
         const planReservation = textReservations.find((reservation) => !reservation.idempotencyKey.endsWith(":synthesis"));
         const synthesisReservation = textReservations.find((reservation) => reservation.idempotencyKey.endsWith(":synthesis"));
         const started = (reservation: ProductionCallReservation | undefined): boolean => reservation !== undefined && ["TRANSPORT_STARTED", "TRANSPORT_COMPLETED", "TRANSPORT_FAILED_AFTER_START"].includes(deriveCallTransportState(reservation, events));
@@ -2867,7 +2869,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
     if (input.output === null && planSubmitted && planCost === undefined) planCost = input.failedCalculableCost;
     if (input.output === null && !planSubmitted && synthesisSubmitted && synthesisCost === undefined) synthesisCost = input.failedCalculableCost;
     const researchReservations = input.reservations.filter((reservation) => reservation.callKind === "research");
-    const textReservations = input.reservations.filter((reservation) => reservation.callKind === "text_agent");
+    const textReservations = input.reservations.filter((reservation) => reservation.callKind !== "research");
     for (const [index, researchRes] of researchReservations.entries()) {
       const execution = executions[index] === undefined ? null : safeRecord(executions[index]);
       const executionStatus = execution?.status;
@@ -3977,7 +3979,7 @@ export class ProductionAgentExecutor implements AgentExecutorPort {
       }
       transportCount += 1;
       const callLeg = request.callIdentity?.callLeg ?? (transportCount === 1 ? "PRIMARY" : `CALL_${transportCount}`);
-      const textReservations = reservations.filter((reservation) => reservation.callKind === "text_agent");
+      const textReservations = reservations.filter((reservation) => reservation.callKind !== "research");
       const reservation = callLeg === "FINAL_SYNTHESIS" ? textReservations.at(-1) : textReservations[0];
       const attribution = { callLeg, reservationId: reservation?.reservationId, idempotencyKey: reservation?.idempotencyKey };
       let claimed = await this.persistence.claimReadyExecutionProvenance(lifecycle.executionId, { maxTokens: request.maxOutputTokens, ...attribution });

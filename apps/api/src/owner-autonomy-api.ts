@@ -85,6 +85,13 @@ export async function ownerBudgetSet(deps:OwnerAutonomyApiDeps,req:IncomingMessa
   try { send(res,200,await store(deps).setBudget({projectId:b.projectId,phase:b.phase,callKind:b.callKind,limit:b.limit,maxRetries:typeof b.maxRetries==="number"?b.maxRetries:0,reason:b.reason,actor:typeof b.actor==="string"?b.actor:"owner"})); } catch(e) { send(res,errorStatus(e),{error:errorText(e)}); }
 }
 
+export async function ownerGoldenCanaryBudgetEnvelope(deps:OwnerAutonomyApiDeps,req:IncomingMessage,res:ServerResponse) {
+  const b=await body(req);
+  if(typeof b.projectId!=="string"||typeof b.phase!=="string"||typeof b.reason!=="string")return send(res,400,{error:"projectId, phase and reason are required"});
+  try { send(res,201,await store(deps).createGoldenCanaryBudgetEnvelope({projectId:b.projectId,phase:b.phase,reason:b.reason,actor:typeof b.actor==="string"?b.actor:"owner"})); }
+  catch(e) { send(res,errorStatus(e),{error:errorText(e)}); }
+}
+
 export async function ownerNextCycleList(deps:OwnerAutonomyApiDeps,res:ServerResponse,url:URL) {
   const projectId=url.searchParams.get("projectId"); if(!projectId)return send(res,400,{error:"projectId is required"});
   try { send(res,200,{projectId,proposals:await store(deps).nextCycle(projectId)}); } catch(e) { send(res,errorStatus(e),{error:errorText(e)}); }

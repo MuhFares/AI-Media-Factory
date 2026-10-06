@@ -39,6 +39,16 @@ export interface SafeCredentialHealthResult {
   transportLedger?: CredentialHealthTransportEvent[];
 }
 
+export const GOLDEN_CANARY_PRE_MEDIA_BUDGET_ENVELOPE = [
+  { callKind: "research", limit: 4, allowedCallLegs: ["RETRIEVAL"] },
+  { callKind: "research_text_agent", limit: 2, allowedCallLegs: ["DIRECTION", "FINAL_SYNTHESIS"] },
+  { callKind: "text_agent", limit: 8, allowedCallLegs: null },
+  { callKind: "image_generation", limit: 1, allowedCallLegs: [] },
+  { callKind: "wan_generation", limit: 0, allowedCallLegs: [] },
+  { callKind: "public_publish", limit: 0, allowedCallLegs: [] },
+  { callKind: "private_publish", limit: 0, allowedCallLegs: [] },
+] as const;
+
 const json = (value: unknown): Record<string, unknown> => {
   if (typeof value === "string") {
     try { return json(JSON.parse(value)); } catch { return {}; }
@@ -94,6 +104,43 @@ export class OwnerAutonomyStore {
     return this.audit(input);
   }
 
+  /**
+   * Atomically constructs the canonical one-workflow Golden Canary envelope.
+   * Research text legs use their own scoped capacity; stages without a
+   * canonical call-leg identity use the separate unrestricted text capacity.
+   */
+  async createGoldenCanaryBudgetEnvelope(input: { projectId:string; phase:string; actor:string; reason:string }) {
+    if (!/^MORROWAY_GOLDEN_CANARY_[A-Z0-9_]{1,80}$/.test(input.phase)) throw new Error("GOLDEN_CANARY_PHASE_INVALID");
+    if (!input.reason.trim()) throw new Error("OWNER_REASON_REQUIRED");
+    const c = await this.pool.connect();
+    try {
+      await c.query("BEGIN");
+      await this.project(input.projectId, c);
+      const existing = await c.query(`SELECT call_kind FROM production_phase_call_budgets WHERE project_id=$1 AND phase=$2 FOR UPDATE`, [input.projectId,input.phase]);
+      if (existing.rowCount) throw new Error("GOLDEN_CANARY_ENVELOPE_ALREADY_EXISTS");
+      const now = new Date().toISOString();
+      for (const spec of GOLDEN_CANARY_PRE_MEDIA_BUDGET_ENVELOPE) {
+        await c.query(
+          `INSERT INTO production_phase_call_budgets(project_id,phase,call_kind,limit_count,reserved_count,consumed_count,max_retries,active,updated_at,allowed_call_legs)
+           VALUES($1,$2,$3,$4,0,0,0,TRUE,$5,$6)`,
+          [input.projectId,input.phase,spec.callKind,spec.limit,now,spec.allowedCallLegs===null?null:JSON.stringify(spec.allowedCallLegs)],
+        );
+        await this.audit({projectId:input.projectId,action:"BUDGET_SET",subjectType:"production_budget",subjectId:`${input.phase}:${spec.callKind}`,actor:input.actor,reason:input.reason,after:{phase:input.phase,callKind:spec.callKind,limit:spec.limit,maxRetries:0,allowedCallLegs:spec.allowedCallLegs},metadata:{executionAuthorityGranted:false}},c);
+      }
+      const authorization = await this.audit({
+        projectId:input.projectId,action:"AUTHORIZE_GOLDEN_CANARY_BUDGET",subjectType:"production_budget_phase",subjectId:input.phase,
+        actor:input.actor,reason:input.reason,
+        after:{phase:input.phase,maxRetries:0,maxEndpoint:"AWAITING_APPROVAL",maxWorkflows:1,budgetMatrix:GOLDEN_CANARY_PRE_MEDIA_BUDGET_ENVELOPE,mediaAuthority:"NOT_GRANTED",publicationAuthority:"NOT_GRANTED"},
+        metadata:{authorizationScope:"ONE_FRESH_WORKFLOW",executionAuthorityGranted:true},
+      },c);
+      await c.query("COMMIT");
+      return { phase:input.phase, budgets:GOLDEN_CANARY_PRE_MEDIA_BUDGET_ENVELOPE, authorization:{...authorization,action:"AUTHORIZE_GOLDEN_CANARY_BUDGET" as const} };
+    } catch(error) {
+      await c.query("ROLLBACK");
+      throw error;
+    } finally { c.release(); }
+  }
+
   async onboarding(projectId: string) {
     const project = await this.project(projectId);
     const channels = await this.pool.query(`SELECT channel_id,platform,external_channel_id,status FROM channels WHERE project_id=$1 ORDER BY created_at`, [projectId]);
@@ -125,17 +172,22 @@ export class OwnerAutonomyStore {
     };
     const cycleBudgets=new Map(budgets.rows.filter((r:any)=>r.phase==="MORROWAY_PRODUCTION_CYCLE_01_PRE_MEDIA").map((r:any)=>[r.call_kind,r]));
     const cycleBudgetReady=(kind:string,needed:number)=>{const r:any=cycleBudgets.get(kind);return r?.active===true&&Number(r.limit_count)-Number(r.reserved_count)-Number(r.consumed_count)>=needed&&Number(r.max_retries)===0};
-    const contentPremediaBudgetReady=cycleBudgetReady("research",4)&&cycleBudgetReady("text_agent",10)&&cycleBudgetReady("image_generation",1);
+    const splitCycleBudget=cycleBudgets.has("research_text_agent");
+    const contentPremediaBudgetReady=cycleBudgetReady("research",4)
+      &&(splitCycleBudget?(cycleBudgetReady("research_text_agent",2)&&cycleBudgetReady("text_agent",8)):cycleBudgetReady("text_agent",10))
+      &&cycleBudgetReady("image_generation",1);
     // Generic per-phase readiness over every Owner-authorized budget envelope
     // present for the project (legacy phases plus explicit canary/cycle
     // phases). Each phase is evaluated against the canonical pre-media
     // minimums; this map is additive and never alters the legacy capability
     // fields below.
-    const phaseNeeds:ReadonlyArray<readonly [string,number]>=[["research",4],["text_agent",10],["image_generation",1]];
     const byPhase=new Map<string,any[]>();
     for(const r of budgets.rows as any[]){const list=byPhase.get(r.phase)??[];list.push(r);byPhase.set(r.phase,list);}
     const budgetPhaseReadiness=[...byPhase.entries()].map(([phase,rows])=>{
       const byKind=new Map(rows.map((r:any)=>[r.call_kind,r]));
+      const phaseNeeds:ReadonlyArray<readonly [string,number]>=byKind.has("research_text_agent")
+        ?[["research",4],["research_text_agent",2],["text_agent",8],["image_generation",1]]
+        :[["research",4],["text_agent",10],["image_generation",1]];
       const reasons:string[]=[];
       for(const [kind,needed] of phaseNeeds){
         const r:any=byKind.get(kind);

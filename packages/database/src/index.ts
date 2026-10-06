@@ -129,7 +129,7 @@ export type { ProductionCallKind, ProductionCallReservation, ProductionCallRepai
 export { WanSupervisedExecutionStore, WAN_SUPERVISED_STATES } from "./wan-supervised-execution.js";
 export type { WanSupervisedState, WanSupervisedExecutionRecord, AuthorizeWanSingleSceneInput } from "./wan-supervised-execution.js";
 export { WAN_SUPERVISED_EXECUTION_MIGRATION_ID, WAN_SUPERVISED_EXECUTION_DDL, applyWanSupervisedExecutionMigration } from "./wan-supervised-execution-migration.js";
-export { OwnerAutonomyStore, PROGRAM_05_NORMAL_OPERATIONS, PROGRAM_05_BREAK_GLASS_OPERATIONS } from "./owner-autonomy.js";
+export { OwnerAutonomyStore, PROGRAM_05_NORMAL_OPERATIONS, PROGRAM_05_BREAK_GLASS_OPERATIONS, GOLDEN_CANARY_PRE_MEDIA_BUDGET_ENVELOPE } from "./owner-autonomy.js";
 export type { NextCycleOwnerDecision, CredentialHealthAction, CredentialHealthState, CredentialHealthTransportEvent, SafeCredentialHealthResult } from "./owner-autonomy.js";
 export type { BenchmarkAuthorization } from "./model-benchmark-runtime.js";
 export { ControlPlaneStore } from "./control-plane.js";

@@ -1123,6 +1123,12 @@ class OwnerBudgetRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=2000)
 
 
+class OwnerGoldenCanaryEnvelopeRequest(BaseModel):
+    project_id: str
+    phase: str = Field(pattern="^MORROWAY_GOLDEN_CANARY_[A-Z0-9_]{1,80}$")
+    reason: str = Field(min_length=1, max_length=2000)
+
+
 class OwnerRoutingActivationRequest(BaseModel):
     project_id: str
     routing_version_id: str = Field(min_length=1, max_length=300)
@@ -1187,6 +1193,14 @@ def owner_budget_set(request: OwnerBudgetRequest) -> dict[str, Any]:
         "callKind": request.call_kind, "limit": request.limit,
         "maxRetries": request.max_retries, "reason": request.reason,
         "actor": "owner-ui"})
+
+
+@app.post("/api/owner/golden-canary-envelope")
+def owner_golden_canary_envelope(request: OwnerGoldenCanaryEnvelopeRequest) -> dict[str, Any]:
+    """Atomically create one scoped, no-retry pre-media Canary envelope."""
+    return _runtime_request("/control/owner/golden-canary-envelope", "POST", {
+        "projectId": request.project_id, "phase": request.phase,
+        "reason": request.reason, "actor": "owner-ui"})
 
 
 @app.post("/api/owner/routing/activate")

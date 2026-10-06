@@ -10,10 +10,12 @@ test("research retrieval legs map to RETRIEVAL", () => {
 
 test("research synthesis leg maps to FINAL_SYNTHESIS", () => {
   assert.equal(researchReservationCallLeg("research", "text_agent", ":synthesis"), "FINAL_SYNTHESIS");
+  assert.equal(researchReservationCallLeg("research", "research_text_agent", ":synthesis"), "FINAL_SYNTHESIS");
 });
 
 test("research planning text leg maps to DIRECTION", () => {
   assert.equal(researchReservationCallLeg("research", "text_agent", ""), "DIRECTION");
+  assert.equal(researchReservationCallLeg("research", "research_text_agent", ""), "DIRECTION");
 });
 
 test("non-research agents carry no canonical leg", () => {
